@@ -225,13 +225,13 @@ def test_delegate_uses_child_agent(tmp_path):
     assert "delegate_result" in tool_events[0]["content"]
 
 
-def test_patch_file_replaces_exact_match(tmp_path):
+def test_edit_file_replaces_exact_match(tmp_path):
     file_path = tmp_path / "sample.txt"
     file_path.write_text("hello world\n", encoding="utf-8")
     agent = build_agent(tmp_path, [])
 
     result = agent.run_tool(
-        "patch_file",
+        "edit_file",
         {
             "path": "sample.txt",
             "old_text": "world",
@@ -239,7 +239,7 @@ def test_patch_file_replaces_exact_match(tmp_path):
         },
     )
 
-    assert result == "patched sample.txt"
+    assert result == "edited sample.txt"
     assert file_path.read_text(encoding="utf-8") == "hello agent\n"
 
 

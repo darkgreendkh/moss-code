@@ -410,13 +410,13 @@ class Moss:
         canonical_path = self.memory.canonical_path(path)
         # 不是所有工具结果都进入工作记忆。
         # 读文件会生成摘要；写文件/patch 会让旧摘要失效，因为它们可能过期了。
-        if name in {"read_file", "write_file", "patch_file"}:
+        if name in {"read_file", "write_file", "edit_file"}:
             self.memory.remember_file(canonical_path)
         if name == "read_file":
             summary = memorylib.summarize_read_result(result)
             self.memory.set_file_summary(canonical_path, summary)
             self.memory.append_note(summary, tags=(canonical_path,), source=canonical_path)
-        elif name in {"write_file", "patch_file"}:
+        elif name in {"write_file", "edit_file"}:
             self.memory.invalidate_file_summary(canonical_path)
 
     def note_tool(self, name, args, result):
@@ -613,8 +613,8 @@ class Moss:
     def tool_read_file(self, args):
         return toolkit.tool_read_file(self.tool_context(), args)
 
-    def tool_search(self, args):
-        return toolkit.tool_search(self.tool_context(), args)
+    def tool_search_text(self, args):
+        return toolkit.tool_search_text(self.tool_context(), args)
 
     def tool_run_shell(self, args):
         return toolkit.tool_run_shell(self.tool_context(), args)
@@ -622,8 +622,8 @@ class Moss:
     def tool_write_file(self, args):
         return toolkit.tool_write_file(self.tool_context(), args)
 
-    def tool_patch_file(self, args):
-        return toolkit.tool_patch_file(self.tool_context(), args)
+    def tool_edit_file(self, args):
+        return toolkit.tool_edit_file(self.tool_context(), args)
 
     def tool_delegate(self, args):
         return toolkit.tool_delegate(self.tool_context(), args)

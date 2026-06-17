@@ -22,7 +22,7 @@ BASE_TOOL_SPECS = {
         "risky": False,
         "description": "Read a UTF-8 file by line range.",
     },
-    "search": {
+    "search_text": {
         "schema": {"pattern": "str", "path": "str='.'"},
         "risky": False,
         "description": "Search the workspace with rg or a simple fallback.",
@@ -37,7 +37,7 @@ BASE_TOOL_SPECS = {
         "risky": True,
         "description": "Write a text file.",
     },
-    "patch_file": {
+    "edit_file": {
         "schema": {"path": "str", "old_text": "str", "new_text": "str"},
         "risky": True,
         "description": "Replace one exact text block in a file.",
@@ -57,10 +57,10 @@ def legal_tool_names():
 TOOL_EXAMPLES = {
     "list_files": '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
     "read_file": '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":80}}</tool>',
-    "search": '<tool>{"name":"search","args":{"pattern":"binary_search","path":"."}}</tool>',
+    "search_text": '<tool>{"name":"search_text","args":{"pattern":"binary_search","path":"."}}</tool>',
     "run_shell": '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":20}}</tool>',
     "write_file": '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
-    "patch_file": '<tool name="patch_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
+    "edit_file": '<tool name="edit_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
     "delegate": '<tool>{"name":"delegate","args":{"task":"inspect README.md","max_steps":3}}</tool>',
 }
 
@@ -102,7 +102,7 @@ def validate_tool(context, name, args):
             raise ValueError("invalid line range")
         return
 
-    if name == "search":
+    if name == "search_text":
         pattern = str(args.get("pattern", "")).strip()
         if not pattern:
             raise ValueError("pattern must not be empty")
@@ -126,8 +126,8 @@ def validate_tool(context, name, args):
             raise ValueError("missing content")
         return
 
-    if name == "patch_file":
-        # patch_file 故意做得很严格：old_text 必须精确命中且只能出现一次，
+    if name == "edit_file":
+        # edit_file 故意做得很严格：old_text 必须精确命中且只能出现一次，
         # 这样修改行为才是确定的，失败原因也更容易解释。
         path = context.path(args["path"])
         if not path.is_file():
@@ -180,7 +180,7 @@ def tool_read_file(context, args):
     return f"# {path.relative_to(context.root)}\n{body}"
 
 
-def tool_search(context, args):
+def tool_search_text(context, args):
     pattern = str(args.get("pattern", "")).strip()
     if not pattern:
         raise ValueError("pattern must not be empty")
@@ -247,7 +247,7 @@ def tool_write_file(context, args):
     return f"wrote {path.relative_to(context.root)} ({len(content)} chars)"
 
 
-def tool_patch_file(context, args):
+def tool_edit_file(context, args):
     path = context.path(args["path"])
     if not path.is_file():
         raise ValueError("path is not a file")
@@ -261,7 +261,7 @@ def tool_patch_file(context, args):
     if count != 1:
         raise ValueError(f"old_text must occur exactly once, found {count}")
     path.write_text(text.replace(old_text, str(args["new_text"]), 1), encoding="utf-8")
-    return f"patched {path.relative_to(context.root)}"
+    return f"edited {path.relative_to(context.root)}"
 
 
 def tool_delegate(context, args):
@@ -276,8 +276,8 @@ def tool_delegate(context, args):
 _TOOL_RUNNERS = {
     "list_files": tool_list_files,
     "read_file": tool_read_file,
-    "search": tool_search,
+    "search_text": tool_search_text,
     "run_shell": tool_run_shell,
     "write_file": tool_write_file,
-    "patch_file": tool_patch_file,
+    "edit_file": tool_edit_file,
 }
