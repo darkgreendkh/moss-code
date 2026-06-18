@@ -22,16 +22,6 @@ BASE_TOOL_SPECS = {
         "risky": False,
         "description": "Read a UTF-8 file by line range.",
     },
-    "search_text": {
-        "schema": {"pattern": "str", "path": "str='.'"},
-        "risky": False,
-        "description": "Search the workspace with rg or a simple fallback.",
-    },
-    "run_shell": {
-        "schema": {"command": "str", "timeout": "int=20"},
-        "risky": True,
-        "description": "Run a shell command in the repo root.",
-    },
     "write_file": {
         "schema": {"path": "str", "content": "str"},
         "risky": True,
@@ -42,6 +32,16 @@ BASE_TOOL_SPECS = {
         "risky": True,
         "description": "Replace one exact text block in a file.",
     },
+    "search_text": {
+        "schema": {"pattern": "str", "path": "str='.'"},
+        "risky": False,
+        "description": "Search the workspace with rg or a simple fallback.",
+    },
+    "run_shell": {
+        "schema": {"command": "str", "timeout": "int=20"},
+        "risky": True,
+        "description": "Run a shell command in the repo root.",
+    }
 }
 
 DELEGATE_TOOL_SPEC = {
