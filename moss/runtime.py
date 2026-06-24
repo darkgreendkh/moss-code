@@ -335,7 +335,10 @@ class Moss:
                 "workspace_docs": len(self.workspace.project_docs),
                 "recent_commits": len(self.workspace.recent_commits),
                 "prefix_hash": self.prefix_state.hash,
-                "prompt_cache_key": self.prefix_state.hash,
+                "prefix_stable_hash": self.prefix_state.stable_hash,
+                # 缓存路由键用稳定头的 hash，而不是整段 prefix 的 hash：
+                # 这样 agent 自己改文件导致的 workspace 抖动不会让缓存键每轮失效。
+                "prompt_cache_key": self.prefix_state.stable_hash,
                 "workspace_fingerprint": self.prefix_state.workspace_fingerprint,
                 "tool_signature": self.prefix_state.tool_signature,
                 "skill_signature": self.prefix_state.skill_signature,

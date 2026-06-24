@@ -1668,7 +1668,10 @@ def test_agent_records_model_cache_metadata_in_last_prompt_metadata(tmp_path):
     assert agent.last_prompt_metadata["cached_tokens"] == 512
     assert agent.last_prompt_metadata["cache_hit"] is True
     assert agent.last_prompt_metadata["prefix_hash"]
-    assert agent.last_prompt_metadata["prompt_cache_key"] == agent.last_prompt_metadata["prefix_hash"]
+    # 缓存键现在是「稳定头」的 hash，而不是整段 prefix 的 hash；
+    # workspace 段非空，所以两者必然不同——这正是缓存键不随 workspace 抖动的保证。
+    assert agent.last_prompt_metadata["prompt_cache_key"] == agent.last_prompt_metadata["prefix_stable_hash"]
+    assert agent.last_prompt_metadata["prompt_cache_key"] != agent.last_prompt_metadata["prefix_hash"]
 
 
 def test_recent_transcript_entries_stay_richer_than_older_ones(tmp_path):

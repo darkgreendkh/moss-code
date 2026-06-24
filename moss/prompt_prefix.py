@@ -14,6 +14,11 @@ class PromptPrefix:
     # 这样 runtime 才能明确判断 prefix 是否可以复用。
     text: str
     hash: str
+    # stable_hash 只覆盖「稳定头」（身份/规则/Tools/Skills/示例），不含 workspace 段。
+    # prompt_cache_key 用它而不是 hash：否则 agent 自己每次 write_file/edit_file
+    # 都会改 `git status` -> workspace 段变 -> 整段 hash 变 -> 缓存路由键每轮抖动，
+    # 恰好在「多步编辑」这个最该命中缓存的场景里把缓存打散。
+    stable_hash: str
     workspace_fingerprint: str
     tool_signature: str
     skill_signature: str
@@ -66,9 +71,9 @@ def build_prompt_prefix(workspace, tools, skills=None, built_at=None):
             "<final>Done.</final>",
         ]
     )
-    # prefix 可以理解成 agent 的“工作手册”：
-    # 它是谁、工具怎么调用、当前仓库是什么状态，都写在这里。
-    text = textwrap.dedent(
+    # 稳定头：agent 的“工作手册”——它是谁、有哪些工具/技能、怎么调用。
+    # 这一段在一次任务内不随 agent 自己的文件改动而变，所以适合做缓存键。
+    head = textwrap.dedent(
         f"""\
         You are moss, a small local coding agent working inside a local repository.
 
@@ -95,14 +100,16 @@ def build_prompt_prefix(workspace, tools, skills=None, built_at=None):
 
         Valid response examples:
         {examples}
-
-        {workspace.text()}
         """
     ).strip()
+    # 易变尾：workspace 快照（含 git status / recent_commits），每轮可能变。
+    # 拼在稳定头之后，整段 text == 改动前逐字节一致（旧模板里 workspace 也在最后）。
+    text = f"{head}\n\n{workspace.text()}"
     signature = tool_signature(tools)
     return PromptPrefix(
         text=text,
         hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        stable_hash=hashlib.sha256(head.encode("utf-8")).hexdigest(),
         workspace_fingerprint=workspace.fingerprint(),
         tool_signature=signature,
         skill_signature=skill_signature(skills),

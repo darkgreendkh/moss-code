@@ -3,6 +3,20 @@ from moss.tools import build_tool_registry
 from moss.workspace import WorkspaceContext
 
 
+def _workspace(status, **overrides):
+    fields = dict(
+        cwd="/repo",
+        repo_root="/repo",
+        branch="main",
+        default_branch="main",
+        status=status,
+        recent_commits=["abc init"],
+        project_docs={},
+    )
+    fields.update(overrides)
+    return WorkspaceContext(**fields)
+
+
 class _Agent:
     depth = 0
     max_depth = 1
@@ -51,3 +65,20 @@ def test_build_prompt_prefix_lists_skills_under_tools(tmp_path):
     assert "- explain: Use when explaining." in prefix.text
     assert prefix.text.index("Tools:") < prefix.text.index("Skills:") < prefix.text.index("Valid response examples:")
     assert prefix.skill_signature
+
+
+def test_stable_hash_is_invariant_to_workspace_status_changes(tmp_path):
+    tools = build_tool_registry(_Agent(tmp_path))
+
+    clean = build_prompt_prefix(workspace=_workspace("clean"), tools=tools)
+    dirty = build_prompt_prefix(workspace=_workspace(" M moss/runtime.py"), tools=tools)
+
+    # workspace 段（git status）变了 -> 整段 prefix 文本与 hash 必然变，
+    # 这样 prompt 仍会反映最新仓库状态。
+    assert clean.text != dirty.text
+    assert clean.hash != dirty.hash
+    # 但「稳定头」没变 -> stable_hash 不变 -> prompt_cache_key 不会随 agent
+    # 自己的文件改动每轮抖动。这是 change 2 的核心保证。
+    assert clean.stable_hash
+    assert clean.stable_hash == dirty.stable_hash
+    assert clean.stable_hash != clean.hash
