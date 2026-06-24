@@ -562,9 +562,11 @@ def render_memory_text(state, workspace_root=None):
     state = normalize_memory_state(state, workspace_root)
     # 这里渲染的是给模型看的紧凑“仪表盘”，不是完整回放。
     # 笔记正文默认不展开，只有在相关召回时才按需拿出来。
+    # task_summary 故意不在这里渲染：它在一次 run 内等同于 prompt 末尾的
+    # current_request，重复进 prompt 没有信息增益。它仍作为内部状态保留，
+    # 供 is_effectively_empty / state["task"] 等使用。
     lines = [
         "Memory:",
-        f"- task: {state['working']['task_summary'] or '-'}",
         f"- recent_files: {', '.join(state['working']['recent_files']) or '-'}",
     ]
 
