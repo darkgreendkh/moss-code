@@ -50,9 +50,15 @@ DELEGATE_TOOL_SPEC = {
     "description": "Ask a bounded read-only child agent to investigate.",
 }
 
+USE_SKILL_TOOL_SPEC = {
+    "schema": {"name": "str"},
+    "risky": False,
+    "description": "Load a skill's instructions by name before doing the work it describes.",
+}
+
 
 def legal_tool_names():
-    return set(BASE_TOOL_SPECS) | {"delegate"}
+    return set(BASE_TOOL_SPECS) | {"delegate", "use_skill"}
 
 TOOL_EXAMPLES = {
     "list_files": '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
@@ -62,7 +68,15 @@ TOOL_EXAMPLES = {
     "write_file": '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
     "edit_file": '<tool name="edit_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
     "delegate": '<tool>{"name":"delegate","args":{"task":"inspect README.md","max_steps":3}}</tool>',
+    "use_skill": '<tool>{"name":"use_skill","args":{"name":"some-skill"}}</tool>',
 }
+
+
+def _context_skills(context):
+    provider = getattr(context, "skills", None)
+    if provider is None:
+        return {}
+    return provider() or {}
 
 
 def build_tool_registry(context):
@@ -76,6 +90,9 @@ def build_tool_registry(context):
     # 就连 delegate 这个工具都不再暴露给模型。
     if context.depth < context.max_depth:
         tools["delegate"] = {**DELEGATE_TOOL_SPEC, "run": partial(tool_delegate, context)}
+    # 只有真的存在 skill 时才暴露 use_skill，避免给模型一个无处可用的工具。
+    if _context_skills(context):
+        tools["use_skill"] = {**USE_SKILL_TOOL_SPEC, "run": partial(tool_use_skill, context)}
     return tools
 
 
@@ -149,6 +166,14 @@ def validate_tool(context, name, args):
             raise ValueError("task must not be empty")
         if context.depth >= context.max_depth:
             raise ValueError("delegate depth exceeded")
+        return
+
+    if name == "use_skill":
+        skill_name = str(args.get("name", "")).strip()
+        if not skill_name:
+            raise ValueError("name must not be empty")
+        if skill_name not in _context_skills(context):
+            raise ValueError(f"unknown skill: {skill_name}")
         return
 
 
@@ -271,6 +296,16 @@ def tool_delegate(context, args):
     if not task:
         raise ValueError("task must not be empty")
     return context.spawn_delegate(args)
+
+
+def tool_use_skill(context, args):
+    skill_name = str(args.get("name", "")).strip()
+    if not skill_name:
+        raise ValueError("name must not be empty")
+    skill = _context_skills(context).get(skill_name)
+    if not skill:
+        raise ValueError(f"unknown skill: {skill_name}")
+    return skill.get("body", "") or "(skill has no instructions)"
 
 
 _TOOL_RUNNERS = {

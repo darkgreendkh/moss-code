@@ -13,9 +13,13 @@ class ToolContext:
     depth: int
     max_depth: int
     spawn_delegate: Callable[[dict], str]
+    skills_provider: Callable[[], dict] = lambda: {}
 
     def path(self, raw_path):
         return self.path_resolver(str(raw_path))
 
     def shell_env(self):
         return self.shell_env_provider()
+
+    def skills(self):
+        return self.skills_provider() or {}

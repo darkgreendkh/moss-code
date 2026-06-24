@@ -16,6 +16,7 @@ class PromptPrefix:
     hash: str
     workspace_fingerprint: str
     tool_signature: str
+    skill_signature: str
     built_at: str
 
 
@@ -34,13 +35,27 @@ def tool_signature(tools):
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def build_prompt_prefix(workspace, tools, built_at=None):
+def skill_signature(skills):
+    # 只对会进入 prefix 的字段（name + description）做指纹，
+    # 这样 skill 的增删改名都会改变整段 prefix 的 hash，从而正确触发重建。
+    payload = []
+    for name in sorted(skills or {}):
+        skill = skills[name]
+        payload.append({"name": name, "description": skill.get("description", "")})
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def build_prompt_prefix(workspace, tools, skills=None, built_at=None):
     tool_lines = []
     for name, tool in tools.items():
         fields = ", ".join(f"{key}: {value}" for key, value in tool["schema"].items())
         risk = "approval required" if tool["risky"] else "safe"
         tool_lines.append(f"- {name}({fields}) [{risk}] {tool['description']}")
     tool_text = "\n".join(tool_lines)
+    skills = skills or {}
+    skill_lines = [f"- {name}: {skill.get('description', '')}".rstrip() for name, skill in skills.items()]
+    # skill 列在 Tools 下面；没有 skill 时整段省略，保证无 skill 时的 prefix 与改动前逐字节一致。
+    skills_section = ("\n\nSkills:\n" + "\n".join(skill_lines)) if skill_lines else ""
     examples = "\n".join(
         [
             '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
@@ -76,7 +91,7 @@ def build_prompt_prefix(workspace, tools, built_at=None):
         - Required tool arguments must not be empty. Do not call read_file, write_file, edit_file, run_shell, or delegate with args={{}}.
 
         Tools:
-        {tool_text}
+        {tool_text}{skills_section}
 
         Valid response examples:
         {examples}
@@ -90,5 +105,6 @@ def build_prompt_prefix(workspace, tools, built_at=None):
         hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         workspace_fingerprint=workspace.fingerprint(),
         tool_signature=signature,
+        skill_signature=skill_signature(skills),
         built_at=built_at or now(),
     )

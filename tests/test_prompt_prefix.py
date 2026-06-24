@@ -32,7 +32,22 @@ def test_build_prompt_prefix_renders_tools_and_workspace_metadata(tmp_path):
     assert "Tools:" in prefix.text
     assert "- read_file(" in prefix.text
     assert "Workspace:" in prefix.text
+    assert "Skills:" not in prefix.text
     assert prefix.hash
     assert prefix.workspace_fingerprint == workspace.fingerprint()
     assert prefix.tool_signature == tool_signature(tools)
     assert prefix.built_at == "2026-06-02T00:00:00+08:00"
+
+
+def test_build_prompt_prefix_lists_skills_under_tools(tmp_path):
+    (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
+    workspace = WorkspaceContext.build(tmp_path)
+    tools = build_tool_registry(_Agent(tmp_path))
+    skills = {"explain": {"name": "explain", "description": "Use when explaining.", "body": "x", "path": "p"}}
+
+    prefix = build_prompt_prefix(workspace=workspace, tools=tools, skills=skills)
+
+    assert "Skills:" in prefix.text
+    assert "- explain: Use when explaining." in prefix.text
+    assert prefix.text.index("Tools:") < prefix.text.index("Skills:") < prefix.text.index("Valid response examples:")
+    assert prefix.skill_signature

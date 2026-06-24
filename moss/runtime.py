@@ -17,10 +17,11 @@ from .features import memory as memorylib
 from . import security as securitylib
 from .context_manager import ContextManager
 from .checkpoint import CHECKPOINT_NONE_STATUS
-from .prompt_prefix import build_prompt_prefix, tool_signature
+from .prompt_prefix import build_prompt_prefix, tool_signature, skill_signature
 from .run_store import RunStore
 from .security import REDACTED_VALUE
 from .session_store import SessionStore
+from . import skills as skilllib
 from .tool_context import ToolContext
 from .tool_executor import ToolExecutor
 from . import tools as toolkit
@@ -99,6 +100,8 @@ class Moss:
             workspace_root=self.root,
         )
         self.session["memory"] = self.memory.to_dict()
+        # skill 先于 tool 构建：tool 注册表会根据是否存在 skill 决定要不要暴露 use_skill。
+        self.skills = self.build_skills()
         self.tools = self._apply_tool_allowlist(self.build_tools())
         self.tool_executor = ToolExecutor(self)
         self.prefix_state = self.build_prefix()
@@ -177,6 +180,9 @@ class Moss:
     def build_tools(self):
         return toolkit.build_tool_registry(self.tool_context())
 
+    def build_skills(self):
+        return skilllib.build_skill_registry(self.root)
+
     @staticmethod
     def _normalize_allowed_tools(allowed_tools):
         if allowed_tools is None:
@@ -204,7 +210,7 @@ class Moss:
         return tool_signature(self.tools)
 
     def build_prefix(self):
-        return build_prompt_prefix(workspace=self.workspace, tools=self.tools)
+        return build_prompt_prefix(workspace=self.workspace, tools=self.tools, skills=self.skills)
 
     def _apply_prefix_state(self, prefix_state):
         self.prefix_state = prefix_state
@@ -214,16 +220,22 @@ class Moss:
         previous_hash = getattr(getattr(self, "prefix_state", None), "hash", None)
         previous_workspace_fingerprint = getattr(getattr(self, "prefix_state", None), "workspace_fingerprint", None)
 
-        # 工作区事实相对稳定，所以这里按整体刷新；
-        # 只有这些事实真的变化了，才重建完整 prefix。
         refreshed_workspace = WorkspaceContext.build(self.root)
         refreshed_workspace_fingerprint = refreshed_workspace.fingerprint()
-        workspace_changed = force or refreshed_workspace_fingerprint != previous_workspace_fingerprint
-        if workspace_changed:
+        workspace_changed = refreshed_workspace_fingerprint != previous_workspace_fingerprint
+        if workspace_changed or force:
             self.workspace = refreshed_workspace
 
-        prefix_state = self.build_prefix() if workspace_changed or force or previous_hash is None else self.prefix_state
-        prefix_changed = force or previous_hash != prefix_state.hash
+        # 重新发现 skill、重建 tool 注册表：这样磁盘上新增/删除的 skill
+        # （以及 use_skill 是否该暴露）都能在本轮被反映出来。
+        self.skills = self.build_skills()
+        self.tools = self._apply_tool_allowlist(self.build_tools())
+
+        # prefix 的重建判据是整段 prefix 的 hash，而不是 workspace 指纹：
+        # 组 prefix 只是字符串拼接 + 一次 sha256，开销极小，所以每轮都重建，
+        # 由 hash 决定它到底有没有变（workspace / tools / skills 任一变化都会被捕获）。
+        prefix_state = self.build_prefix()
+        prefix_changed = force or previous_hash is None or previous_hash != prefix_state.hash
         if prefix_changed:
             self._apply_prefix_state(prefix_state)
 
@@ -319,12 +331,14 @@ class Moss:
                 "history_chars": len(self.history_text()),
                 "request_chars": len(user_message),
                 "tool_count": len(self.tools),
+                "skill_count": len(self.skills),
                 "workspace_docs": len(self.workspace.project_docs),
                 "recent_commits": len(self.workspace.recent_commits),
                 "prefix_hash": self.prefix_state.hash,
                 "prompt_cache_key": self.prefix_state.hash,
                 "workspace_fingerprint": self.prefix_state.workspace_fingerprint,
                 "tool_signature": self.prefix_state.tool_signature,
+                "skill_signature": self.prefix_state.skill_signature,
                 "workspace_changed": refresh["workspace_changed"],
                 "prefix_changed": refresh["prefix_changed"],
                 "prompt_cache_supported": bool(getattr(self.model_client, "supports_prompt_cache", False)),
@@ -583,6 +597,7 @@ class Moss:
             depth=self.depth,
             max_depth=self.max_depth,
             spawn_delegate=self.spawn_delegate,
+            skills_provider=lambda: self.skills,
         )
 
     def spawn_delegate(self, args):
