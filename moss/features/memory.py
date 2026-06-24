@@ -137,7 +137,9 @@ class DurableMemoryStore:
         for pattern in patterns:
             match = re.match(pattern, text, re.I)
             if match:
-                subject = " ".join(_tokenize(match.group(1)))
+                # sorted：_tokenize 返回 set，中文现在会切出多个 bigram，
+                # 不排序的话 join 顺序受 hash 随机化影响，subject_key 不稳定。
+                subject = " ".join(sorted(_tokenize(match.group(1))))
                 return subject or None
         return None
 
@@ -279,8 +281,26 @@ def file_freshness(raw_path, workspace_root=None):
     return hashlib.sha256(resolved.read_bytes()).hexdigest()
 
 
+_ASCII_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
+# CJK 统一表意文字（含扩展 A）。中文没有空格，正则切不出 ASCII token，
+# 所以这些字符要单独按「相邻 bigram」切，否则中文 query/note 的 token 集恒为空，
+# 召回（relevant_memory / durable）对中文等于永远 miss。
+_CJK_PATTERN = re.compile(r"[㐀-䶿一-鿿]+")
+
+
 def _tokenize(text):
-    return {token.lower() for token in re.findall(r"[A-Za-z0-9_]+", str(text))}
+    text = str(text)
+    tokens = {token.lower() for token in _ASCII_TOKEN_PATTERN.findall(text)}
+    # 经典的 CJK bigram 索引：连续中文段切成相邻两字（"项目约定" -> 项目/目约/约定）。
+    # bigram 兼顾精度与召回，又不会像单字那样被「的/是」之类高频字淹没；
+    # 仍是纯字符串处理，不引入分词库，符合本项目刻意不上重依赖的取向。
+    for run in _CJK_PATTERN.findall(text):
+        if len(run) == 1:
+            tokens.add(run)
+            continue
+        for index in range(len(run) - 1):
+            tokens.add(run[index : index + 2])
+    return tokens
 
 
 def _parse_timestamp(value):
@@ -502,6 +522,18 @@ def invalidate_stale_file_summaries(state, workspace_root=None):
     return state, invalidated
 
 
+# 常见语言的「定义行」开头。命中这些的行，才是真正说明文件里有什么的行。
+_CODE_SIGNATURE_PREFIXES = (
+    "def ", "async def ", "class ",
+    "func ", "fn ", "function ",
+    "public ", "private ", "protected ", "static ",
+    "interface ", "struct ", "trait ", "impl ", "enum ", "type ",
+    "export ", "module ", "package ",
+)
+# tool_read_file 给每行加了 "  N: " 行号前缀，判断签名前先把它剥掉。
+_LINE_NUMBER_PREFIX = re.compile(r"^\s*\d+:\s?")
+
+
 def summarize_read_result(result, limit=180):
     # 我们不会把完整文件内容塞进记忆层，
     # 这里只保留足够提醒下一轮“刚刚读到了什么”的短摘要。
@@ -512,6 +544,18 @@ def summarize_read_result(result, limit=180):
         lines = lines[1:]
     if not lines:
         return "(empty)"
+
+    # 代码文件优先抽签名行（def/class/func...）：对代码来说，前 3 行通常是
+    # import/docstring，几乎没有信息量；签名行才能说明“这个文件里有什么”。
+    signatures = []
+    for line in lines:
+        content = _LINE_NUMBER_PREFIX.sub("", line).lstrip()
+        if content.lower().startswith(_CODE_SIGNATURE_PREFIXES):
+            signatures.append(content)
+    if signatures:
+        return clip(" | ".join(signatures[:3]), limit)
+
+    # 非代码（或没抽到签名）时退回原行为：取前 3 行，保持与改动前逐字节一致。
     summary = " | ".join(lines[:3])
     return clip(summary, limit)
 

@@ -1,4 +1,4 @@
-from moss.features.memory import LayeredMemory
+from moss.features.memory import LayeredMemory, summarize_read_result, _tokenize
 
 
 def test_working_memory_tracks_summary_and_recent_files():
@@ -120,3 +120,55 @@ def test_durable_memory_index_and_topic_notes_are_loaded_and_retrieved(tmp_path)
 
     lines = [line for line in memory.retrieval_view("constrained tools", limit=4).splitlines() if line.startswith("- ")]
     assert any("Use constrained tools instead of guessing." in line for line in lines)
+
+
+def test_tokenize_splits_cjk_into_bigrams_without_breaking_ascii():
+    # ASCII 路径与改动前完全一致
+    assert _tokenize("Hello_World 42") == {"hello_world", "42"}
+    # 连续中文按相邻 bigram 切；改动前 re.findall(r"[A-Za-z0-9_]+") 对中文返回 set()
+    tokens = _tokenize("缓存键设计")
+    assert tokens == {"缓存", "存键", "键设", "设计"}
+    # 单字 CJK 段保留为 unigram
+    assert "码" in _tokenize("a码b")
+
+
+def test_retrieval_recalls_chinese_notes_via_keyword_overlap():
+    memory = LayeredMemory()
+    memory.append_note("缓存键用稳定头的哈希", created_at="2026-04-07T10:00:00+00:00")
+    memory.append_note("完全无关的另一条笔记", created_at="2026-04-07T10:01:00+00:00")
+
+    hits = [note["text"] for note in memory.retrieval_candidates("缓存键怎么设计", limit=3)]
+
+    # 改动前这条对中文 query 永远是空召回（token 集为空）
+    assert "缓存键用稳定头的哈希" in hits
+    assert "完全无关的另一条笔记" not in hits
+
+
+def test_summarize_read_result_prefers_code_signatures():
+    result = (
+        "# app.py\n"
+        "   1: import os\n"
+        "   2: from pathlib import Path\n"
+        "   3: \n"
+        "   4: def load(path):\n"
+        "   5:     return Path(path).read_text()\n"
+        "   6: \n"
+        "   7: class Loader:\n"
+        "   8:     def run(self):\n"
+        "   9:         return load('x')\n"
+    )
+
+    summary = summarize_read_result(result)
+
+    # 取签名行（含缩进的方法），而不是前 3 行的 import/docstring
+    assert summary == "def load(path): | class Loader: | def run(self):"
+
+
+def test_summarize_read_result_falls_back_to_first_lines_for_non_code():
+    result = "# notes.txt\n   1: deploy key is red\n   2: second line\n"
+
+    summary = summarize_read_result(result)
+
+    # 非代码：保持改动前行为（含行号前缀，取前几行）
+    assert summary.startswith("1: deploy key is red")
+    assert "deploy key is red" in summary
