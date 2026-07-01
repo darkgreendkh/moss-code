@@ -18,7 +18,7 @@ BASE_TOOL_SPECS = {
         "description": "List files in the workspace.",
     },
     "read_file": {
-        "schema": {"path": "str", "start": "int=1", "end": "int=200"},
+        "schema": {"path": "str", "start": "int=1", "end": "int=800"},
         "risky": False,
         "description": "Read a UTF-8 file by line range.",
     },
@@ -38,7 +38,7 @@ BASE_TOOL_SPECS = {
         "description": "Search the workspace with rg or a simple fallback.",
     },
     "run_shell": {
-        "schema": {"command": "str", "timeout": "int=20"},
+        "schema": {"command": "str", "timeout": "int=60"},
         "risky": True,
         "description": "Run a shell command in the repo root.",
     }
@@ -62,7 +62,7 @@ def legal_tool_names():
 
 TOOL_EXAMPLES = {
     "list_files": '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-    "read_file": '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":80}}</tool>',
+    "read_file": '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":400}}</tool>',
     "search_text": '<tool>{"name":"search_text","args":{"pattern":"binary_search","path":"."}}</tool>',
     "run_shell": '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":20}}</tool>',
     "write_file": '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
@@ -130,9 +130,9 @@ def validate_tool(context, name, args):
         command = str(args.get("command", "")).strip()
         if not command:
             raise ValueError("command must not be empty")
-        timeout = int(args.get("timeout", 20))
-        if timeout < 1 or timeout > 120:
-            raise ValueError("timeout must be in [1, 120]")
+        timeout = int(args.get("timeout", 60))
+        if timeout < 1 or timeout > 600:
+            raise ValueError("timeout must be in [1, 600]")
         return
 
     if name == "write_file":
@@ -239,9 +239,9 @@ def tool_run_shell(context, args):
     command = str(args.get("command", "")).strip()
     if not command:
         raise ValueError("command must not be empty")
-    timeout = int(args.get("timeout", 20))
-    if timeout < 1 or timeout > 120:
-        raise ValueError("timeout must be in [1, 120]")
+    timeout = int(args.get("timeout", 60))
+    if timeout < 1 or timeout > 600:
+        raise ValueError("timeout must be in [1, 600]")
     result = subprocess.run(
         command,
         cwd=context.root,

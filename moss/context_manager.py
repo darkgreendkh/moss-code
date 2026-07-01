@@ -10,18 +10,18 @@ import json
 from dataclasses import dataclass
 
 
-DEFAULT_TOTAL_BUDGET = 12000
+DEFAULT_TOTAL_BUDGET = 48000
 DEFAULT_SECTION_BUDGETS = {
-    "prefix": 3600,
-    "memory": 1600,
-    "relevant_memory": 1200,
-    "history": 5200,
+    "prefix": 12000,
+    "memory": 4000,
+    "relevant_memory": 3000,
+    "history": 24000,
 }
 DEFAULT_SECTION_FLOORS = {
-    "prefix": 1200,
-    "memory": 400,
-    "relevant_memory": 300,
-    "history": 1500,
+    "prefix": 4000,
+    "memory": 1000,
+    "relevant_memory": 800,
+    "history": 6000,
 }
 # 当 prompt 超预算时，会优先压缩这些 section。
 DEFAULT_REDUCTION_ORDER = ("relevant_memory", "history", "memory", "prefix")

@@ -64,7 +64,7 @@ def test_provider_profile_uses_right_codes_shared_key_for_gpt(tmp_path, monkeypa
 
     assert profile["status"] == "ready"
     assert profile["api_key"] == "sk-right-codes"
-    assert profile["model"] == "gpt-5.4"
+    assert profile["model"] == "gpt-4o"
 
 
 def test_run_memory_ablation_v2_writes_expected_artifact(tmp_path):

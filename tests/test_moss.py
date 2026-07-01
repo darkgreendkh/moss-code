@@ -845,7 +845,7 @@ def test_build_agent_uses_anthropic_default_model_when_env_is_missing(tmp_path):
         with patch("moss.cli.AnthropicCompatibleModelClient") as mock_anthropic:
             moss_pkg.build_agent(args)
 
-    assert mock_anthropic.call_args.kwargs["model"] == "claude-sonnet-4-6"
+    assert mock_anthropic.call_args.kwargs["model"] == "claude-sonnet-4-5-20250929"
 
 
 def test_build_agent_uses_deepseek_provider_and_env_configuration(tmp_path):
@@ -916,7 +916,7 @@ def test_build_agent_uses_deepseek_default_model_when_env_is_missing(tmp_path):
         with patch("moss.cli.AnthropicCompatibleModelClient") as mock_anthropic:
             moss_pkg.build_agent(args)
 
-    assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-pro"
+    assert mock_anthropic.call_args.kwargs["model"] == "deepseek-chat"
     assert mock_anthropic.call_args.kwargs["base_url"] == "https://api.deepseek.com/anthropic"
 
 
@@ -942,7 +942,7 @@ def test_build_agent_uses_deepseek_provider_by_default(tmp_path):
             agent = moss_pkg.build_agent(args)
 
     mock_anthropic.assert_called_once()
-    assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-pro"
+    assert mock_anthropic.call_args.kwargs["model"] == "deepseek-chat"
     assert mock_anthropic.call_args.kwargs["base_url"] == "https://api.deepseek.com/anthropic"
     assert mock_anthropic.call_args.kwargs["api_key"] == "sk-test"
     assert agent.model_client is fake_client

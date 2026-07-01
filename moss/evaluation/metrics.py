@@ -689,7 +689,7 @@ def _provider_profile(provider):
         return {
             "provider": provider,
             "status": "ready",
-            "model": provider_env("MOSS_OPENAI_MODEL", ("OPENAI_MODEL",), "gpt-5.4"),
+            "model": provider_env("MOSS_OPENAI_MODEL", ("OPENAI_MODEL",), "gpt-4o"),
             "base_url": provider_env("MOSS_OPENAI_API_BASE", ("OPENAI_API_BASE",), "https://api.openai.com/v1"),
             "api_key": api_key,
         }
@@ -700,7 +700,7 @@ def _provider_profile(provider):
         return {
             "provider": provider,
             "status": "ready",
-            "model": provider_env("MOSS_DEEPSEEK_MODEL", ("DEEPSEEK_MODEL",), "deepseek-v4-pro"),
+            "model": provider_env("MOSS_DEEPSEEK_MODEL", ("DEEPSEEK_MODEL",), "deepseek-chat"),
             "base_url": provider_env("MOSS_DEEPSEEK_API_BASE", ("DEEPSEEK_API_BASE",), "https://api.deepseek.com/anthropic"),
             "api_key": api_key,
         }
@@ -713,7 +713,7 @@ def _provider_profile(provider):
     return {
         "provider": "claude",
         "status": "ready",
-        "model": provider_env("MOSS_ANTHROPIC_MODEL", ("ANTHROPIC_MODEL",), "claude-sonnet-4-6"),
+        "model": provider_env("MOSS_ANTHROPIC_MODEL", ("ANTHROPIC_MODEL",), "claude-sonnet-4-5-20250929"),
         "base_url": provider_env("MOSS_ANTHROPIC_API_BASE", ("ANTHROPIC_API_BASE",), "https://www.right.codes/claude/v1"),
         "api_key": api_key,
     }
