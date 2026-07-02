@@ -25,7 +25,7 @@ from . import skills as skilllib
 from .tool_context import ToolContext
 from .tool_executor import ToolExecutor
 from . import tools as toolkit
-from .workspace import IGNORED_PATH_NAMES, MAX_HISTORY, WorkspaceContext, clip, now
+from .workspace import MAX_HISTORY, WorkspaceContext, capture_snapshot, clip, diff_snapshots, now
 
 DEFAULT_SHELL_ENV_ALLOWLIST = (
     # POSIX-ish
@@ -397,55 +397,10 @@ class Moss:
         return payload
 
     def capture_workspace_snapshot(self):
-        # 变更检测只需要“文件有没有动过”，不需要内容 hash。
-        # 用 stat 的 (mtime_ns, size) 元组代替 sha256，避免对每个文件读整份内容——
-        # 在几百个文件的仓库里这一步能把 risky 工具的开销从秒级降到毫秒级。
-        snapshot = {}
-        ignored = IGNORED_PATH_NAMES
-        root = self.root
-        stack = [root]
-        while stack:
-            current = stack.pop()
-            try:
-                entries = list(current.iterdir())
-            except (OSError, PermissionError):
-                continue
-            for entry in entries:
-                if entry.name in ignored:
-                    continue
-                try:
-                    # 不跟随符号链接目录：符号链接指回祖先目录会导致遍历死循环，
-                    # 让 risky 工具直接卡死——对 agent 来说是最糟糕的体验。
-                    if entry.is_symlink():
-                        continue
-                    if entry.is_dir():
-                        stack.append(entry)
-                        continue
-                    if not entry.is_file():
-                        continue
-                    stat = entry.stat()
-                    key = entry.relative_to(root).as_posix()
-                    snapshot[key] = (stat.st_mtime_ns, stat.st_size)
-                except (OSError, ValueError):
-                    continue
-        return snapshot
+        # 实现下沉到 workspace.py：快照语义属于工作区，不属于控制循环。
+        return capture_snapshot(self.root)
 
-    @staticmethod
-    def diff_workspace_snapshots(before, after):
-        changed_paths = []
-        summaries = []
-        all_paths = sorted(set(before) | set(after))
-        for path in all_paths:
-            if before.get(path) == after.get(path):
-                continue
-            changed_paths.append(path)
-            if path not in before:
-                summaries.append(f"created:{path}")
-            elif path not in after:
-                summaries.append(f"deleted:{path}")
-            else:
-                summaries.append(f"modified:{path}")
-        return changed_paths, summaries
+    diff_workspace_snapshots = staticmethod(diff_snapshots)
 
     def create_checkpoint(self, task_state, user_message, trigger):
         return checkpointlib.create_checkpoint(self, task_state, user_message, trigger)

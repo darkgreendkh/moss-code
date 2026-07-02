@@ -56,6 +56,60 @@ def middle(text, limit):
     return text[:left] + "..." + text[-right:]
 
 
+def capture_snapshot(root):
+    """扫一遍工作区，记录每个文件的 (mtime_ns, size)。
+
+    变更检测只需要“文件有没有动过”，不需要内容 hash。
+    用 stat 的 (mtime_ns, size) 元组代替 sha256，避免对每个文件读整份内容——
+    在几百个文件的仓库里这一步能把 risky 工具的开销从秒级降到毫秒级。
+    """
+    snapshot = {}
+    root = Path(root)
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(current.iterdir())
+        except (OSError, PermissionError):
+            continue
+        for entry in entries:
+            if entry.name in IGNORED_PATH_NAMES:
+                continue
+            try:
+                # 不跟随符号链接目录：符号链接指回祖先目录会导致遍历死循环，
+                # 让 risky 工具直接卡死——对 agent 来说是最糟糕的体验。
+                if entry.is_symlink():
+                    continue
+                if entry.is_dir():
+                    stack.append(entry)
+                    continue
+                if not entry.is_file():
+                    continue
+                stat = entry.stat()
+                key = entry.relative_to(root).as_posix()
+                snapshot[key] = (stat.st_mtime_ns, stat.st_size)
+            except (OSError, ValueError):
+                continue
+    return snapshot
+
+
+def diff_snapshots(before, after):
+    """对比两份快照，返回 (changed_paths, summaries)，summaries 形如 created:/deleted:/modified:path。"""
+    changed_paths = []
+    summaries = []
+    for path in sorted(set(before) | set(after)):
+        if before.get(path) == after.get(path):
+            continue
+        changed_paths.append(path)
+        if path not in before:
+            summaries.append(f"created:{path}")
+        elif path not in after:
+            summaries.append(f"deleted:{path}")
+        else:
+            summaries.append(f"modified:{path}")
+    return changed_paths, summaries
+
+
 class WorkspaceContext:
     def __init__(self, cwd, repo_root, branch, default_branch, status, recent_commits, project_docs):
         self.cwd = cwd
