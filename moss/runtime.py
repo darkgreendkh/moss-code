@@ -402,6 +402,10 @@ class Moss:
                 if entry.name in ignored:
                     continue
                 try:
+                    # 不跟随符号链接目录：符号链接指回祖先目录会导致遍历死循环，
+                    # 让 risky 工具直接卡死——对 agent 来说是最糟糕的体验。
+                    if entry.is_symlink():
+                        continue
                     if entry.is_dir():
                         stack.append(entry)
                         continue
@@ -681,6 +685,22 @@ class Moss:
     def tool_delegate(self, args):
         return toolkit.tool_delegate(self.tool_context(), args)
 
+    @staticmethod
+    def _approval_summary(name, args):
+        # 审批提示要一眼能看懂：write_file 把整份文件内容塞进 [y/N] 提示里
+        # 会刷屏且没法读，所以这里对每种工具挑出最有信息量的一小段来展示。
+        args = args or {}
+        if name == "write_file":
+            content = str(args.get("content", ""))
+            return f"{args.get('path', '')} ({len(content)} chars)"
+        if name == "edit_file":
+            return str(args.get("path", ""))
+        if name == "run_shell":
+            command = str(args.get("command", ""))
+            return command if len(command) <= 200 else command[:197] + "..."
+        summary = json.dumps(args, ensure_ascii=True)
+        return summary if len(summary) <= 200 else summary[:197] + "..."
+
     def approve(self, name, args):
         if self.read_only:
             return False
@@ -689,7 +709,7 @@ class Moss:
         if self.approval_policy == "never":
             return False
         try:
-            answer = input(f"approve {name} {json.dumps(args, ensure_ascii=True)}? [y/N] ")
+            answer = input(f"approve {name} {self._approval_summary(name, args)}? [y/N] ")
         except EOFError:
             return False
         return answer.strip().lower() in {"y", "yes"}
