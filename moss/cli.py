@@ -49,6 +49,8 @@ HELP_DETAILS = textwrap.dedent(
     /session Show the path to the saved session file.
     /reset   Clear the current session history and memory.
     /exit    Exit the agent.
+
+    Press Ctrl-C during a task to cancel it and return to the prompt.
     """
 ).strip()
 
@@ -172,6 +174,66 @@ def _build_model_client(args):
         top_p=args.top_p,
         timeout=args.ollama_timeout,
     )
+
+
+def _format_tool_line(name, args):
+    args = args or {}
+    if name in ("read_file", "list_files"):
+        detail = str(args.get("path", "."))
+    elif name == "search_text":
+        detail = str(args.get("pattern", ""))
+    elif name in ("write_file", "edit_file"):
+        detail = str(args.get("path", ""))
+    elif name == "run_shell":
+        detail = str(args.get("command", ""))
+    elif name == "delegate":
+        detail = str(args.get("task", ""))
+    elif name == "use_skill":
+        detail = str(args.get("name", ""))
+    else:
+        detail = ""
+    detail = middle(detail, 72)
+    return f"  > {name}  {detail}".rstrip()
+
+
+def make_progress_printer(stream):
+    """把 agent 的进度事件渲染成终端里逐行滚动的活动反馈。
+
+    交互式 coding agent 最劝退的一点，就是敲完请求后要盯着空屏幕等一整个
+    工具循环跑完。这个渲染器让每一步（在想什么、调了哪个工具、结果如何）
+    都实时可见。它只写 stderr，所以 stdout 里仍然只有最终答案，方便管道使用。
+    """
+    state = {"pending": False}
+
+    def clear():
+        if state["pending"]:
+            try:
+                stream.write("\r" + " " * 72 + "\r")
+                stream.flush()
+            except Exception:
+                pass
+            state["pending"] = False
+
+    def render(event, payload):
+        if event == "thinking":
+            clear()
+            step = payload.get("step")
+            max_steps = payload.get("max_steps")
+            stream.write(f"\r  ... thinking ({step}/{max_steps})")
+            stream.flush()
+            state["pending"] = True
+        elif event == "tool":
+            clear()
+            stream.write(_format_tool_line(payload.get("name", ""), payload.get("args")) + "\n")
+            stream.flush()
+        elif event == "tool_result":
+            status = str(payload.get("status", "ok"))
+            if status != "ok":
+                stream.write(f"      ({status})\n")
+                stream.flush()
+
+    render.clear = clear
+    return render
 
 
 def build_welcome(agent, model, host):
@@ -313,16 +375,42 @@ def main(argv=None):
     host = getattr(agent.model_client, "host", getattr(agent.model_client, "base_url", getattr(args, "host", DEFAULT_OLLAMA_HOST)))
     print(build_welcome(agent, model=model, host=host))
 
+    # 装上实时进度渲染器，让工具循环里的每一步都对用户可见。
+    progress = make_progress_printer(sys.stderr)
+    agent.progress_observer = progress
+
+    # 首次运行最常见的踩坑：没配 key 就直接调用，拿到一坨 HTTP 报错。
+    # 这里提前给一句人话提示，指出该设哪个环境变量。Ollama 不需要 key，跳过。
+    if hasattr(agent.model_client, "api_key") and not agent.model_client.api_key:
+        provider = _effective_provider(args)
+        env_hint = {
+            "deepseek": "MOSS_DEEPSEEK_API_KEY (or DEEPSEEK_API_KEY)",
+            "openai": "MOSS_OPENAI_API_KEY (or OPENAI_API_KEY)",
+            "anthropic": "MOSS_ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY)",
+        }.get(provider, "the provider API key")
+        print(
+            f"warning: no API key found for provider '{provider}'. "
+            f"Set {env_hint} in your .env or environment before sending a request.",
+            file=sys.stderr,
+        )
+
     if args.prompt:
         # one-shot 模式：只跑一次 ask，不进入 REPL 循环。
         prompt = " ".join(args.prompt).strip()
         if prompt:
             print()
             try:
-                print(agent.ask(prompt))
+                answer = agent.ask(prompt)
+            except KeyboardInterrupt:
+                progress.clear()
+                print("\n(cancelled)", file=sys.stderr)
+                return 130
             except RuntimeError as exc:
+                progress.clear()
                 print(str(exc), file=sys.stderr)
                 return 1
+            progress.clear()
+            print(answer)
         return 0
 
     while True:
@@ -354,6 +442,15 @@ def main(argv=None):
 
         print()
         try:
-            print(agent.ask(user_input))
+            answer = agent.ask(user_input)
+        except KeyboardInterrupt:
+            # Ctrl-C 只取消当前这一轮任务，回到提示符，而不是退出整个程序。
+            progress.clear()
+            print("\n(cancelled)", file=sys.stderr)
+            continue
         except RuntimeError as exc:
+            progress.clear()
             print(str(exc), file=sys.stderr)
+            continue
+        progress.clear()
+        print(answer)

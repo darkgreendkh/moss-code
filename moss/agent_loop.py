@@ -109,6 +109,7 @@ class AgentLoop:
                 # 只有后端明确支持时，才把稳定前缀的 hash 作为 cache key 发出去。
                 prompt_cache_key = prompt_metadata.get("prompt_cache_key")
                 prompt_cache_retention = "in_memory"
+            agent.emit_progress("thinking", {"step": tool_steps + 1, "max_steps": agent.max_steps})
             model_started_at = time.monotonic()
             raw = agent.model_client.complete(
                 prompt,
@@ -139,9 +140,18 @@ class AgentLoop:
                 name = payload.get("name", "")
                 args = payload.get("args", {})
                 task_state.record_tool(name)
+                agent.emit_progress("tool", {"name": name, "args": args})
                 tool_started_at = time.monotonic()
                 tool_result = agent.execute_tool(name, args)
                 result = tool_result.content
+                agent.emit_progress(
+                    "tool_result",
+                    {
+                        "name": name,
+                        "status": (tool_result.metadata or {}).get("tool_status", "ok"),
+                        "duration_ms": int((time.monotonic() - tool_started_at) * 1000),
+                    },
+                )
                 agent.record(
                     {
                         "role": "tool",

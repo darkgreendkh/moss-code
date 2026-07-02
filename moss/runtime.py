@@ -119,6 +119,9 @@ class Moss:
         self.session_path = self.session_store.save(self.session)
         self.current_task_state = None
         self.current_run_dir = None
+        # 可选的进度观察者：CLI 用它把 agent 每一步在做什么实时打给用户看。
+        # 默认 None（比如 benchmark / 子 agent 场景），完全不影响控制循环。
+        self.progress_observer = None
         self.last_prompt_metadata = {}
         self.last_completion_metadata = {}
         self.last_durable_promotions = []
@@ -361,6 +364,17 @@ class Moss:
         )
         metadata.update(self.detected_secret_env_summary())
         return prompt, metadata
+
+    def emit_progress(self, event, payload=None):
+        # 把「agent 现在在做什么」推给可选的观察者。observer 只负责展示，
+        # 不能影响控制流，所以这里吞掉它抛出的任何异常。
+        observer = getattr(self, "progress_observer", None)
+        if observer is None:
+            return
+        try:
+            observer(event, dict(payload or {}))
+        except Exception:
+            pass
 
     def emit_trace(self, task_state, event, payload=None):
         payload = self.redact_artifact(payload or {})
