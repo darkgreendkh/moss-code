@@ -90,6 +90,32 @@ def test_process_notes_keep_kind_and_latest_duplicate_wins():
     assert notes[0]["created_at"] == "2026-04-07T10:01:00+00:00"
 
 
+def test_memory_notes_have_provenance_defaults_and_reject_noisy_secret_shaped_text():
+    memory = LayeredMemory()
+
+    memory.append_note("Kept fact", tags=("fact",), source="README.md", created_at="2026-04-07T10:00:00+00:00")
+    memory.append_note("API key is sk-live-secret-abc", tags=("secret",))
+    memory.append_note("stdout: FAIL test_one FAIL test_two FAIL test_three", tags=("noise",))
+
+    notes = memory.to_dict()["episodic_notes"]
+
+    assert [note["text"] for note in notes] == ["Kept fact"]
+    assert notes[0]["source"] == "README.md"
+    assert notes[0]["kind"] == "episodic"
+    assert notes[0]["confidence"] == ""
+    assert notes[0]["line_range"] == []
+    assert notes[0]["freshness"] == ""
+
+
+def test_file_summary_rejects_secret_shaped_text(tmp_path):
+    (tmp_path / "sample.txt").write_text("secret\n", encoding="utf-8")
+    memory = LayeredMemory(workspace_root=tmp_path)
+
+    memory.set_file_summary("sample.txt", "API key is sk-live-secret-abc")
+
+    assert memory.to_dict()["file_summaries"] == {}
+
+
 def test_durable_memory_index_and_topic_notes_are_loaded_and_retrieved(tmp_path):
     memory_root = tmp_path / ".moss" / "memory"
     topics_dir = memory_root / "topics"

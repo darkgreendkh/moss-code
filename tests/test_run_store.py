@@ -1,7 +1,12 @@
 import json
 
 from moss.run_store import RunStore
-from moss.task_state import STOP_REASON_FINAL_ANSWER_RETURNED, TaskState
+from moss.task_state import (
+    STATUS_FAILED,
+    STOP_REASON_FINAL_ANSWER_RETURNED,
+    STOP_REASON_INTERRUPTED,
+    TaskState,
+)
 
 
 def test_run_store_creates_run_directory_and_state_file(tmp_path):
@@ -39,6 +44,62 @@ def test_run_store_appends_trace_jsonl(tmp_path):
     assert json.loads(lines[0])["event"] == "run_started"
     assert json.loads(lines[1])["event"] == "prompt_built"
     assert json.loads(lines[2])["event"] == "run_finished"
+
+
+def test_run_store_adds_trace_identity_fields(tmp_path):
+    store = RunStore(tmp_path / ".moss" / "runs")
+    state = TaskState.create(run_id="run_identity", task_id="task_identity", user_request="Trace identity.")
+    state.record_attempt()
+    state.record_tool("read_file")
+    store.start_run(state)
+
+    store.append_trace(state, {"event": "tool_executed"})
+    state.record_attempt()
+    store.append_trace(state, {"event": "checkpoint_created"})
+
+    events = store.read_trace(state.run_id)
+    assert [event["sequence"] for event in events] == [1, 2]
+    assert events[0]["event_id"] == "run_identity:000001"
+    assert events[0]["run_id"] == "run_identity"
+    assert events[0]["task_id"] == "task_identity"
+    assert events[0]["attempt"] == 1
+    assert events[0]["tool_steps"] == 1
+    assert events[1]["attempt"] == 2
+
+
+def test_run_store_read_trace_ignores_trailing_partial_json_line(tmp_path):
+    store = RunStore(tmp_path / ".moss" / "runs")
+    state = TaskState.create(run_id="run_partial_trace", task_id="task_partial_trace", user_request="Read trace.")
+    store.start_run(state)
+    store.append_trace(state, {"event": "run_started"})
+    store.append_trace(state, {"event": "prompt_built"})
+    with store.trace_path(state.run_id).open("a", encoding="utf-8") as handle:
+        handle.write("\n")
+        handle.write('{"event": "tool_executed"')
+
+    events = store.read_trace(state.run_id)
+
+    assert [event["event"] for event in events] == ["run_started", "prompt_built"]
+
+
+def test_run_store_marks_running_runs_interrupted_with_audit_report(tmp_path):
+    store = RunStore(tmp_path / ".moss" / "runs")
+    running = TaskState.create(run_id="run_interrupted", task_id="task_interrupted", user_request="Crash.")
+    completed = TaskState.create(run_id="run_completed", task_id="task_completed", user_request="Done.")
+    completed.finish_success("ok")
+    store.start_run(running)
+    store.start_run(completed)
+    store.append_trace(running, {"event": "tool_executed"})
+
+    interrupted = store.mark_interrupted_runs()
+
+    assert [item["run_id"] for item in interrupted] == ["run_interrupted"]
+    persisted = store.load_task_state(running.run_id)
+    assert persisted["status"] == STATUS_FAILED
+    assert persisted["stop_reason"] == STOP_REASON_INTERRUPTED
+    report = store.load_report(running.run_id)
+    assert report["stop_reason"] == STOP_REASON_INTERRUPTED
+    assert report["last_complete_event"]["event"] == "tool_executed"
 
 
 def test_run_store_writes_report_json(tmp_path):

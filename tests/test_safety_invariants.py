@@ -1,5 +1,4 @@
 import os
-import shlex
 import sys
 from unittest.mock import patch
 
@@ -146,8 +145,7 @@ def test_cli_build_agent_reads_secret_names_from_environment_config(tmp_path):
 def test_run_shell_uses_allowlisted_environment_only(tmp_path):
     secret = "shh-allowlist-secret"
     agent = build_agent(tmp_path, [], approval_policy="auto")
-    script = 'import os; print(os.getenv("MOSS_ALLOWLIST_SECRET", "missing"))'
-    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+    command = f'"{sys.executable}" -c "import os; print(os.getenv(\'MOSS_ALLOWLIST_SECRET\', \'missing\'))"'
 
     with patch.dict(os.environ, {"MOSS_ALLOWLIST_SECRET": secret}, clear=False):
         result = agent.run_tool("run_shell", {"command": command, "timeout": 20})

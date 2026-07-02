@@ -1,4 +1,5 @@
 import json
+import sys
 
 import pytest
 
@@ -49,7 +50,7 @@ def test_validate_benchmark_rejects_unknown_allowed_tool(tmp_path):
                 "allowed_tools": ["read_file", "missing_tool"],
                 "step_budget": 1,
                 "expected_artifact": "README.md",
-                "verifier": "python -c 'print(1)'",
+                "verifier": f'"{sys.executable}" -c "print(1)"',
                 "category": "contract",
             }
         ],
@@ -78,7 +79,7 @@ def test_benchmark_evaluator_applies_allowed_tools_to_runtime_prompt(tmp_path):
                         "allowed_tools": ["read_file"],
                         "step_budget": 1,
                         "expected_artifact": "README.md",
-                        "verifier": "python -c 'import pathlib; assert pathlib.Path(\"README.md\").exists()'",
+                        "verifier": f'"{sys.executable}" -c "import pathlib; assert pathlib.Path(\'README.md\').exists()"',
                         "category": "contract",
                     }
                 ],

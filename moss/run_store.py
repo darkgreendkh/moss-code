@@ -8,6 +8,8 @@ import json
 import tempfile
 from pathlib import Path
 
+from .task_state import STATUS_RUNNING, TaskState
+
 
 def _run_id(value):
     if hasattr(value, "run_id"):
@@ -41,20 +43,81 @@ class RunStore:
         return run_dir
 
     def write_task_state(self, task_state):
-        path = self.task_state_path(task_state)
+        return self.write_task_state_payload(task_state, task_state.to_dict())
+
+    def write_task_state_payload(self, run_id, payload):
+        path = self.task_state_path(run_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._write_json_atomic(path, task_state.to_dict())
+        self._write_json_atomic(path, payload)
         return path
 
     def append_trace(self, task_state, event):
         path = self.trace_path(task_state)
         path.parent.mkdir(parents=True, exist_ok=True)
+        event = self._trace_event(task_state, event)
         # trace 采用 jsonl 追加写入，原因是 agent 运行过程是流式事件序列，
         # 逐条落盘比“最后一次性写整份 trace”更稳，也更适合调试。
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, sort_keys=True, ensure_ascii=True))
             handle.write("\n")
         return path
+
+    def read_trace(self, run_id):
+        path = self.trace_path(run_id)
+        if not path.exists():
+            return []
+        lines = path.read_text(encoding="utf-8").splitlines()
+        events = []
+        for index, line in enumerate(lines):
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                events.append(json.loads(text))
+            except json.JSONDecodeError:
+                if index == len(lines) - 1:
+                    continue
+                raise
+        return sorted(events, key=lambda item: int(item.get("sequence", 0) or 0))
+
+    def find_running_runs(self):
+        running = []
+        for task_path in sorted(self.root.glob("*/task_state.json")):
+            try:
+                payload = json.loads(task_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if str(payload.get("status", "")) == STATUS_RUNNING:
+                running.append(TaskState.from_dict(payload))
+        return running
+
+    def mark_interrupted_runs(self):
+        interrupted = []
+        for task_state in self.find_running_runs():
+            events = self.read_trace(task_state.run_id)
+            last_event = events[-1] if events else {}
+            task_state.stop_interrupted("Run interrupted before completion.")
+            self.write_task_state(task_state)
+            self.write_report(
+                task_state,
+                {
+                    "run_id": task_state.run_id,
+                    "task_id": task_state.task_id,
+                    "status": task_state.status,
+                    "stop_reason": task_state.stop_reason,
+                    "final_answer": task_state.final_answer,
+                    "task_state": task_state.to_dict(),
+                    "last_complete_event": last_event,
+                },
+            )
+            interrupted.append(
+                {
+                    "run_id": task_state.run_id,
+                    "task_id": task_state.task_id,
+                    "last_complete_event": last_event,
+                }
+            )
+        return interrupted
 
     def write_report(self, task_state, report):
         path = self.report_path(task_state)
@@ -67,6 +130,29 @@ class RunStore:
 
     def load_report(self, task_id):
         return json.loads(self.report_path(task_id).read_text(encoding="utf-8"))
+
+    def _trace_event(self, task_state, event):
+        payload = dict(event or {})
+        run_id = _run_id(task_state)
+        sequence = self._next_trace_sequence(run_id)
+        payload["sequence"] = sequence
+        payload["event_id"] = f"{run_id}:{sequence:06d}"
+        payload.setdefault("run_id", run_id)
+        if hasattr(task_state, "task_id"):
+            payload.setdefault("task_id", task_state.task_id)
+            payload.setdefault("attempt", task_state.attempts)
+            payload.setdefault("tool_steps", task_state.tool_steps)
+        else:
+            payload.setdefault("task_id", "")
+            payload.setdefault("attempt", int(payload.get("attempt", 0) or 0))
+            payload.setdefault("tool_steps", int(payload.get("tool_steps", 0) or 0))
+        return payload
+
+    def _next_trace_sequence(self, run_id):
+        events = self.read_trace(run_id)
+        if not events:
+            return 1
+        return max(int(event.get("sequence", 0) or 0) for event in events) + 1
 
     def _write_json_atomic(self, path, payload):
         # 原子写：先写临时文件，再 replace。

@@ -20,7 +20,7 @@ class AgentLoop:
         task_state = TaskState.create(run_id=agent.new_run_id(), task_id=agent.new_task_id(), user_request=user_message)
         task_state.resume_status = agent.resume_state.get("status", CHECKPOINT_NONE_STATUS)
         agent.current_task_state = task_state
-        agent.current_run_dir = agent.run_store.start_run(task_state)
+        agent.current_run_dir = agent.start_run(task_state)
         agent.emit_trace(
             task_state,
             "run_started",
@@ -43,7 +43,7 @@ class AgentLoop:
         while tool_steps < agent.max_steps and attempts < max_attempts:
             attempts += 1
             task_state.record_attempt()
-            agent.run_store.write_task_state(task_state)
+            agent.write_task_state(task_state)
             prompt_started_at = time.monotonic()
             prompt, prompt_metadata = agent._build_prompt_and_metadata(user_message)
             agent.emit_trace(
@@ -56,7 +56,7 @@ class AgentLoop:
             )
             if prompt_metadata.get("resume_status") == CHECKPOINT_PARTIAL_STALE_STATUS:
                 checkpoint = agent.create_checkpoint(task_state, user_message, trigger="freshness_mismatch")
-                agent.run_store.write_task_state(task_state)
+                agent.write_task_state(task_state)
                 agent.emit_trace(
                     task_state,
                     "checkpoint_created",
@@ -74,7 +74,7 @@ class AgentLoop:
                     },
                 )
                 checkpoint = agent.create_checkpoint(task_state, user_message, trigger="workspace_mismatch")
-                agent.run_store.write_task_state(task_state)
+                agent.write_task_state(task_state)
                 agent.emit_trace(
                     task_state,
                     "checkpoint_created",
@@ -85,7 +85,7 @@ class AgentLoop:
                 )
             if prompt_metadata.get("budget_reductions"):
                 checkpoint = agent.create_checkpoint(task_state, user_message, trigger="context_reduction")
-                agent.run_store.write_task_state(task_state)
+                agent.write_task_state(task_state)
                 agent.emit_trace(
                     task_state,
                     "checkpoint_created",
@@ -109,6 +109,9 @@ class AgentLoop:
                 # 只有后端明确支持时，才把稳定前缀的 hash 作为 cache key 发出去。
                 prompt_cache_key = prompt_metadata.get("prompt_cache_key")
                 prompt_cache_retention = "in_memory"
+            native_tools = None
+            if getattr(agent.model_client, "supports_native_tools", False):
+                native_tools = agent.native_tool_definitions()
             agent.emit_progress("thinking", {"step": tool_steps + 1, "max_steps": agent.max_steps})
             model_started_at = time.monotonic()
             try:
@@ -117,6 +120,7 @@ class AgentLoop:
                     agent.max_new_tokens,
                     prompt_cache_key=prompt_cache_key,
                     prompt_cache_retention=prompt_cache_retention,
+                    tools=native_tools,
                 )
             except Exception as exc:
                 # 模型后端出错（网络中断、超时、5xx）不应该让整个 run 带着一堆
@@ -170,7 +174,7 @@ class AgentLoop:
                         "created_at": now(),
                     }
                 )
-                agent.run_store.write_task_state(task_state)
+                agent.write_task_state(task_state)
                 agent.emit_trace(
                     task_state,
                     "tool_executed",
@@ -183,7 +187,7 @@ class AgentLoop:
                     },
                 )
                 checkpoint = agent.create_checkpoint(task_state, user_message, trigger="tool_executed")
-                agent.run_store.write_task_state(task_state)
+                agent.write_task_state(task_state)
                 agent.emit_trace(
                     task_state,
                     "checkpoint_created",
@@ -196,7 +200,7 @@ class AgentLoop:
 
             if kind == "retry":
                 agent.record({"role": "assistant", "content": payload, "created_at": now()})
-                agent.run_store.write_task_state(task_state)
+                agent.write_task_state(task_state)
                 continue
 
             final = (payload or raw).strip()
@@ -204,7 +208,7 @@ class AgentLoop:
             task_state.finish_success(final)
             agent.promote_durable_memory(user_message, final)
             checkpoint = agent.create_checkpoint(task_state, user_message, trigger="run_finished")
-            agent.run_store.write_task_state(task_state)
+            agent.write_task_state(task_state)
             agent.emit_trace(
                 task_state,
                 "checkpoint_created",
@@ -234,7 +238,7 @@ class AgentLoop:
             task_state.stop_step_limit(final)
         agent.record({"role": "assistant", "content": final, "created_at": now()})
         agent.promote_durable_memory(user_message, final)
-        agent.run_store.write_task_state(task_state)
+        agent.write_task_state(task_state)
         checkpoint = agent.create_checkpoint(task_state, user_message, trigger=task_state.stop_reason or "run_stopped")
         agent.emit_trace(
             task_state,
@@ -281,7 +285,7 @@ class AgentLoop:
         )
         task_state.stop_model_error(final)
         agent.record({"role": "assistant", "content": final, "created_at": now()})
-        agent.run_store.write_task_state(task_state)
+        agent.write_task_state(task_state)
         checkpoint = agent.create_checkpoint(task_state, user_message, trigger="model_error")
         agent.emit_trace(
             task_state,

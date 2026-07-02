@@ -3,7 +3,24 @@
 from dataclasses import dataclass
 import re
 
+from .tools import ToolRunOutput, classify_shell_command
 from .workspace import clip
+
+
+# 工具输出超上限时，保留哪一端取决于关键信息的位置。
+# run_shell 的输出是 "exit_code: ... / stdout / stderr"，退出码在顶部、
+# 报错在底部，所以两端都要留（middle）；读文件/列目录/搜索的信息在开头，
+# 保头即可。默认保头。
+_TRUNCATION_KEEP = {
+    "run_shell": "middle",
+}
+
+_SHELL_RISK_LEVELS = {
+    "read_only": "low",
+    "test": "low",
+    "general": "medium",
+    "destructive_or_network": "high",
+}
 
 
 @dataclass(frozen=True)
@@ -22,6 +39,7 @@ def _metadata(
     workspace_changed=False,
     workspace_fingerprint="",
     diff_summary=None,
+    extra=None,
 ):
     result = {
         "tool_status": tool_status,
@@ -35,7 +53,47 @@ def _metadata(
     }
     if workspace_fingerprint:
         result["workspace_fingerprint"] = workspace_fingerprint
+    if extra:
+        result.update(dict(extra))
     return result
+
+
+def _normalize_tool_output(value):
+    if isinstance(value, ToolRunOutput):
+        return value
+    return ToolRunOutput(content=str(value))
+
+
+def _shell_risk_metadata(name, args):
+    if name != "run_shell":
+        return None
+    risk_class = classify_shell_command((args or {}).get("command", ""))
+    return {
+        "shell_risk_class": risk_class,
+        "risk_level": _SHELL_RISK_LEVELS.get(risk_class, "medium"),
+        "read_only": False,
+    }
+
+
+def _risk_level_for(tool, name, args):
+    shell_metadata = _shell_risk_metadata(name, args)
+    if shell_metadata:
+        return shell_metadata["risk_level"]
+    return "high" if tool["risky"] else "low"
+
+
+def _read_only_for(tool, name, args):
+    shell_metadata = _shell_risk_metadata(name, args)
+    if shell_metadata:
+        return shell_metadata["read_only"]
+    return not tool["risky"]
+
+
+def _extra_metadata_for(name, args):
+    shell_metadata = _shell_risk_metadata(name, args)
+    if not shell_metadata:
+        return {}
+    return {"shell_risk_class": shell_metadata["shell_risk_class"]}
 
 
 class ToolExecutor:
@@ -81,8 +139,9 @@ class ToolExecutor:
                     "rejected",
                     tool_error_code="invalid_arguments",
                     security_event_type=security_event_type,
-                    risk_level="high" if tool["risky"] else "low",
-                    read_only=not tool["risky"],
+                    risk_level=_risk_level_for(tool, name, args),
+                    read_only=_read_only_for(tool, name, args),
+                    extra=_extra_metadata_for(name, args),
                 ),
             )
 
@@ -92,8 +151,9 @@ class ToolExecutor:
                 metadata=_metadata(
                     "rejected",
                     tool_error_code="repeated_identical_call",
-                    risk_level="high" if tool["risky"] else "low",
-                    read_only=not tool["risky"],
+                    risk_level=_risk_level_for(tool, name, args),
+                    read_only=_read_only_for(tool, name, args),
+                    extra=_extra_metadata_for(name, args),
                 ),
             )
 
@@ -104,23 +164,35 @@ class ToolExecutor:
                     "rejected",
                     tool_error_code="approval_denied",
                     security_event_type="read_only_block" if agent.read_only else "approval_denied",
-                    risk_level="high",
-                    read_only=False,
+                    risk_level=_risk_level_for(tool, name, args),
+                    read_only=_read_only_for(tool, name, args),
+                    extra=_extra_metadata_for(name, args),
                 ),
             )
 
         before_snapshot = agent.capture_workspace_snapshot() if tool["risky"] else {}
         after_snapshot = before_snapshot
         try:
-            content = clip(tool["run"](args))
+            output = _normalize_tool_output(tool["run"](args))
+            content = clip(output.content, keep=_TRUNCATION_KEEP.get(name, "head"))
             after_snapshot = agent.capture_workspace_snapshot() if tool["risky"] else before_snapshot
             affected_paths, diff_summary = agent.diff_workspace_snapshots(before_snapshot, after_snapshot)
             workspace_changed = bool(affected_paths)
             tool_status = "ok"
             tool_error_code = ""
+            extra_metadata = _extra_metadata_for(name, args)
             if name == "run_shell":
-                match = re.search(r"exit_code:\s*(-?\d+)", content)
-                exit_code = int(match.group(1)) if match else 0
+                exit_code = output.exit_code
+                if exit_code is None:
+                    match = re.search(r"exit_code:\s*(-?\d+)", content)
+                    exit_code = int(match.group(1)) if match else 0
+                extra_metadata.update(
+                    {
+                        "exit_code": exit_code,
+                        "stdout_chars": len(output.stdout),
+                        "stderr_chars": len(output.stderr),
+                    }
+                )
                 if exit_code != 0 and workspace_changed:
                     tool_status = "partial_success"
                     tool_error_code = "tool_partial_success"
@@ -131,12 +203,13 @@ class ToolExecutor:
             metadata = _metadata(
                 tool_status,
                 tool_error_code=tool_error_code,
-                risk_level="high" if tool["risky"] else "low",
-                read_only=not tool["risky"],
+                risk_level=_risk_level_for(tool, name, args),
+                read_only=_read_only_for(tool, name, args),
                 affected_paths=affected_paths,
                 workspace_changed=workspace_changed,
                 workspace_fingerprint=agent.workspace.fingerprint(),
                 diff_summary=diff_summary,
+                extra=extra_metadata,
             )
             agent.record_process_note_for_tool(name, metadata)
             return ToolExecutionResult(content=content, metadata=metadata)
@@ -149,12 +222,13 @@ class ToolExecutor:
                 "partial_success" if workspace_changed else "error",
                 tool_error_code="tool_partial_success" if workspace_changed else "tool_failed",
                 security_event_type=security_event_type,
-                risk_level="high" if tool["risky"] else "low",
-                read_only=not tool["risky"],
+                risk_level=_risk_level_for(tool, name, args),
+                read_only=_read_only_for(tool, name, args),
                 affected_paths=affected_paths,
                 workspace_changed=workspace_changed,
                 workspace_fingerprint=agent.workspace.fingerprint(),
                 diff_summary=diff_summary,
+                extra=_extra_metadata_for(name, args),
             )
             agent.record_process_note_for_tool(name, metadata)
             return ToolExecutionResult(content=f"error: tool {name} failed: {exc}", metadata=metadata)

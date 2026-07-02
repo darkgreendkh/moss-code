@@ -10,6 +10,7 @@ from datetime import datetime
 import re
 from pathlib import Path
 
+from ..security import REDACTED_VALUE
 from ..workspace import clip, now
 
 WORKING_FILE_LIMIT = 8
@@ -282,6 +283,21 @@ def file_freshness(raw_path, workspace_root=None):
 
 
 _ASCII_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
+_SECRET_SHAPED_TEXT_PATTERN = re.compile(r"(?i)(\b(api[_ -]?key|token|secret|password)\b|sk-[A-Za-z0-9_-]{6,})")
+_NOISY_MEMORY_PATTERN = re.compile(r"(?i)\b(stdout|stderr|traceback|exit_code)\b")
+
+
+def reject_memory_reason(text):
+    text = str(text or "").strip()
+    if not text:
+        return "empty"
+    if REDACTED_VALUE in text or _SECRET_SHAPED_TEXT_PATTERN.search(text):
+        return "secret_shaped"
+    if _NOISY_MEMORY_PATTERN.search(text):
+        return "noisy_output"
+    return ""
+
+
 # CJK 统一表意文字（含扩展 A）。中文没有空格，正则切不出 ASCII token，
 # 所以这些字符要单独按「相邻 bigram」切，否则中文 query/note 的 token 集恒为空，
 # 召回（relevant_memory / durable）对中文等于永远 miss。
@@ -322,6 +338,9 @@ def _normalize_note(note, index):
             "created_at": now(),
             "note_index": index,
             "kind": "episodic",
+            "confidence": "",
+            "line_range": [],
+            "freshness": "",
         }
 
     if not isinstance(note, dict):
@@ -333,6 +352,9 @@ def _normalize_note(note, index):
             "created_at": now(),
             "note_index": index,
             "kind": "episodic",
+            "confidence": "",
+            "line_range": [],
+            "freshness": "",
         }
 
     text = clip(str(note.get("text", "")).strip(), 500)
@@ -341,6 +363,9 @@ def _normalize_note(note, index):
     created_at = str(note.get("created_at", "")).strip() or now()
     note_index = int(note.get("note_index", index))
     kind = str(note.get("kind", "episodic")).strip() or "episodic"
+    confidence = str(note.get("confidence", "")).strip()
+    line_range = [int(item) for item in _ensure_list(note.get("line_range", [])) if str(item).strip()]
+    freshness = str(note.get("freshness", "")).strip()
     return {
         "text": text,
         "tags": _dedupe_preserve_order(tags),
@@ -348,6 +373,9 @@ def _normalize_note(note, index):
         "created_at": created_at,
         "note_index": note_index,
         "kind": kind,
+        "confidence": confidence,
+        "line_range": line_range,
+        "freshness": freshness,
     }
 
 
@@ -463,10 +491,21 @@ def remember_file(state, path, workspace_root=None):
     return state
 
 
-def append_note(state, text, tags=(), source="", created_at=None, workspace_root=None, kind="episodic"):
+def append_note(
+    state,
+    text,
+    tags=(),
+    source="",
+    created_at=None,
+    workspace_root=None,
+    kind="episodic",
+    confidence="",
+    line_range=None,
+    freshness="",
+):
     state = normalize_memory_state(state, workspace_root)
     text = clip(str(text).strip(), 500)
-    if not text:
+    if reject_memory_reason(text):
         return state
 
     normalized_tags = _dedupe_preserve_order(
@@ -479,6 +518,9 @@ def append_note(state, text, tags=(), source="", created_at=None, workspace_root
         "created_at": str(created_at).strip() if created_at else now(),
         "note_index": int(state.get("next_note_index", 0)),
         "kind": str(kind).strip() or "episodic",
+        "confidence": str(confidence).strip(),
+        "line_range": [int(item) for item in _ensure_list(line_range) if str(item).strip()],
+        "freshness": str(freshness).strip(),
     }
     state["next_note_index"] = note["note_index"] + 1
 
@@ -487,11 +529,13 @@ def append_note(state, text, tags=(), source="", created_at=None, workspace_root
     state["episodic_notes"] = notes[-EPISODIC_NOTE_LIMIT:]
     state["notes"] = [item["text"] for item in state["episodic_notes"]]
     return state
+
+
 def set_file_summary(state, path, summary, workspace_root=None):
     state = normalize_memory_state(state, workspace_root)
     path = canonicalize_path(path, workspace_root).strip()
     summary = clip(str(summary).strip(), 500)
-    if not path or not summary:
+    if not path or reject_memory_reason(summary):
         return state
     state["file_summaries"][path] = {
         "summary": summary,
@@ -663,7 +707,17 @@ class LayeredMemory:
         self.state = remember_file(self.state, path, self.workspace_root)
         return self
 
-    def append_note(self, text, tags=(), source="", created_at=None, kind="episodic"):
+    def append_note(
+        self,
+        text,
+        tags=(),
+        source="",
+        created_at=None,
+        kind="episodic",
+        confidence="",
+        line_range=None,
+        freshness="",
+    ):
         self.state = append_note(
             self.state,
             text,
@@ -672,6 +726,9 @@ class LayeredMemory:
             created_at=created_at,
             workspace_root=self.workspace_root,
             kind=kind,
+            confidence=confidence,
+            line_range=line_range,
+            freshness=freshness,
         )
         return self
 
