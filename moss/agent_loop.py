@@ -3,6 +3,7 @@
 import time
 
 from .checkpoint import CHECKPOINT_NONE_STATUS, CHECKPOINT_PARTIAL_STALE_STATUS, CHECKPOINT_WORKSPACE_MISMATCH_STATUS
+from .output_parser import parse_model_output
 from .task_state import TaskState
 from .workspace import clip, now
 
@@ -137,7 +138,7 @@ class AgentLoop:
                 prompt_metadata.update(completion_metadata)
             agent.last_completion_metadata = completion_metadata
             agent.last_prompt_metadata = prompt_metadata
-            kind, payload = agent.parse(raw)
+            kind, payload = parse_model_output(raw)
             agent.emit_trace(
                 task_state,
                 "model_parsed",

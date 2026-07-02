@@ -16,6 +16,7 @@ from moss import (
     WorkspaceContext,
     build_welcome,
 )
+from moss.output_parser import parse_model_output
 
 
 def build_workspace(tmp_path):
@@ -530,7 +531,7 @@ def test_openai_compatible_client_sends_native_tools_and_normalizes_tool_call():
         result = client.complete("hello", 42, tools=native_tools)
 
     assert captured["body"]["tools"] == native_tools
-    assert Moss.parse(result) == ("tool", {"name": "read_file", "args": {"path": "README.md"}})
+    assert parse_model_output(result) == ("tool", {"name": "read_file", "args": {"path": "README.md"}})
 
 
 def test_openai_compatible_client_sends_prompt_cache_fields_and_records_usage():
@@ -776,7 +777,7 @@ def test_anthropic_compatible_client_sends_native_tools_and_normalizes_tool_use(
         result = client.complete("hello", 42, tools=native_tools)
 
     assert captured["body"]["tools"] == native_tools
-    assert Moss.parse(result) == ("tool", {"name": "read_file", "args": {"path": "README.md"}})
+    assert parse_model_output(result) == ("tool", {"name": "read_file", "args": {"path": "README.md"}})
 
 
 def test_anthropic_compatible_client_extracts_first_text_block():

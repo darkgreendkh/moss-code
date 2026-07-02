@@ -30,7 +30,7 @@ cli.py (装配/REPL/进度渲染)
        └─ agent_loop.py::AgentLoop.run (感知→决策→行动→记录 主循环)
             ├─ context_manager.py   每轮按预算组 prompt（prefix/memory/relevant/history/request 五段）
             ├─ providers/clients.py 统一 complete() 接口（Ollama / OpenAI /responses / Anthropic /messages）
-            ├─ runtime.py::parse    模型输出 → ("tool"|"final"|"retry", payload)
+            ├─ output_parser.py     模型输出 → ("tool"|"final"|"retry", payload)（纯函数）
             ├─ tool_executor.py     执行护栏：allowlist→存在性→校验→重复检测→审批→快照 diff
             │    └─ tools.py        工具白名单（显式注册，非动态发现）
             ├─ checkpoint.py        每步落 checkpoint（上限 CHECKPOINT_HISTORY_LIMIT=40，自动裁剪）
