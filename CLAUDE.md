@@ -12,11 +12,11 @@ python -m moss                    # 模块入口（等价于 moss）
 uv run ruff check moss tests scripts   # lint（本机 base 环境没装 ruff，用 uv）
 ```
 
-**测试基线（Windows 本机）：152 passed / 7 failed 即为绿色。** 那 7 个失败全部是环境问题，不是代码 bug，只需要关注新增失败：
-- `test_evaluator.py` ×3 + `test_allowed_tools.py::test_benchmark_evaluator_*`：benchmark verifier 需要真实环境/`python3`
-- `test_safety_invariants.py::test_run_shell_uses_allowlisted_environment_only`：测试用 POSIX `shlex.quote`，cmd.exe 解析不了
-- `test_moss.py::test_trace_and_report_redact_secret_env_values`：测试命令用 `printf`，不是 cmd.exe 内置命令
+**测试基线（Windows 本机）：全量通过、仅 4 个失败即为绿色。** 那 4 个失败全部是 Windows 环境问题，不是代码 bug，只需要关注新增失败：
+- `test_evaluator.py` ×3：benchmark verifier 需要真实环境/`python3`
 - `test_safety_invariants.py::test_symlink_path_traversal_is_rejected`：Windows 创建符号链接需要特权（WinError 1314）
+
+CI（`.github/workflows/ci.yml`）在 Ubuntu 上跑同样的 `ruff check` + `pytest`（Python 3.10 与 3.12），那里应当全绿；CI 出现任何失败都必须排查，不允许 skip 了事。
 
 Git 约定：个人项目，直接提交并 push 到 `main`，不开分支/PR。push 偶发 TLS 报错，重试即可。
 
@@ -42,7 +42,7 @@ cli.py (装配/REPL/进度渲染)
 - `token_budget.py`：token 估算与全部文本裁剪（`clip_to_budget` 按预算二分；`clip`/`middle` 硬切片，`MAX_TOOL_OUTPUT=16000`、`MAX_HISTORY=32000`）；`clock.py`：统一 UTC 时间戳 `now()`
 - `output_parser.py`：模型输出 → `("tool"|"final"|"retry", payload)` 的纯函数解析层
 - `prompt_prefix.py`：稳定前缀构建。**prompt cache key 用 `stable_hash`（只覆盖身份/规则/Tools/Skills 段），不用整段 hash**——否则 agent 自己写文件会导致 workspace 段变化、缓存键每轮抖动
-- `features/memory.py`：分层记忆（working / episodic notes / durable topics），文件摘要带 freshness 失效
+- `features/memory.py`：分层记忆（working / episodic notes / durable topics），文件摘要带 freshness 失效；也承载记忆写入/durable 提炼策略（`update_memory_after_tool`/`extract_durable_promotions` 等，Moss 只薄委托）
 - `session_store.py`：会话持久化到 `.moss/sessions/`；delegate 子 agent 的会话隔离在 `.moss/delegates/`（不能污染 `--resume latest`）
 - `security.py`：secret 检测/脱敏；`run_shell` 只继承 `DEFAULT_SHELL_ENV_ALLOWLIST` 里的环境变量（**含 Windows 必需的 COMSPEC/SYSTEMROOT 等，删了 run_shell 在 Windows 上直接崩**）
 - `config.py`：`.env` 加载。坏行跳过并警告，不允许让整个启动崩掉
@@ -58,7 +58,7 @@ cli.py (装配/REPL/进度渲染)
 3. **错误收敛，不裸抛**：模型后端异常由 `AgentLoop._finish_model_error` 收敛为已收尾的失败运行（task_state=failed / stop_reason=model_error，trace+report 齐全），并对错误信息脱敏。one-shot 模式下失败必须非零退出（CI 依赖这个）。`KeyboardInterrupt` 继承 BaseException 不会被捕获——REPL 里 Ctrl-C 只取消当前轮。
 4. **所有落盘/展示的文本先过脱敏**：`redact_artifact` / `redact_text`，secret 名单来自 `DEFAULT_SECRET_ENV_NAMES` + `MOSS_SECRET_ENV_NAMES` + `--secret-env-name`。
 5. **路径锚定**：所有文件类工具经 `Moss.path()`，resolve 后必须在 workspace root 之下（防 `../` 和符号链接逃逸）。遍历工作区时不跟随符号链接目录（防死循环）。
-6. **工具是显式注册的白名单**（`BASE_TOOL_SPECS`），risky 工具走审批（`ask`/`auto`/`never`）；审批提示只展示摘要（`_approval_summary`），不 dump 完整 args。
+6. **工具是显式注册的白名单**（`BASE_TOOL_SPECS`），risky 工具走审批（`ask`/`auto`/`never`）；审批提示只展示摘要（`tool_executor.approval_summary`：写文件类展示脱敏 diff、shell 展示风险分级），不 dump 完整 args。
 7. **快照 diff 用 `(mtime_ns, size)`**，不做内容 hash——risky 工具每次调用前后各扫一遍工作区，性能敏感。
 8. **注释风格**：中文、解释"为什么存在/在链路里的位置"，新代码保持一致。
 
