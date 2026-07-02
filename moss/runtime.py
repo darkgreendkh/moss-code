@@ -4,8 +4,6 @@ Moss 就是包在模型外面的控制循环：负责组 prompt、解析模型�
 校验并执行工具、写 trace、更新工作记忆，以及在合适的时候停下来。
 """
 
-import difflib
-import json
 import os
 import re
 import uuid
@@ -23,7 +21,7 @@ from .security import REDACTED_VALUE
 from .session_store import SessionStore
 from . import skills as skilllib
 from .tool_context import ToolContext
-from .tool_executor import ToolExecutor
+from .tool_executor import ToolExecutor, approval_summary
 from . import tools as toolkit
 from .workspace import MAX_HISTORY, WorkspaceContext, capture_snapshot, clip, diff_snapshots, now
 
@@ -680,56 +678,6 @@ class Moss:
     def tool_delegate(self, args):
         return toolkit.tool_delegate(self.tool_context(), args)
 
-    def _approval_summary(self, name, args):
-        # 审批提示要一眼能看懂：写文件类工具展示脱敏 diff，shell 展示命令摘要。
-        args = args or {}
-        if name in {"write_file", "edit_file"}:
-            preview = self._file_change_preview(name, args)
-            if preview:
-                return preview
-        if name == "run_shell":
-            command = str(args.get("command", ""))
-            command_summary = command if len(command) <= 200 else command[:197] + "..."
-            risk_class = toolkit.classify_shell_command(command)
-            return f"[{risk_class}] {command_summary}"
-        summary = json.dumps(args, ensure_ascii=True)
-        return summary if len(summary) <= 200 else summary[:197] + "..."
-
-    def _file_change_preview(self, name, args):
-        raw_path = str(args.get("path", "")).strip()
-        if not raw_path:
-            return ""
-        try:
-            path = self.path(raw_path)
-        except Exception:
-            return raw_path
-        try:
-            before = path.read_text(encoding="utf-8") if path.exists() and path.is_file() else ""
-        except OSError:
-            before = ""
-        if name == "write_file":
-            after = str(args.get("content", ""))
-        else:
-            old_text = str(args.get("old_text", ""))
-            new_text = str(args.get("new_text", ""))
-            after = before.replace(old_text, new_text, 1) if old_text and before.count(old_text) == 1 else before
-        try:
-            rel_path = path.relative_to(self.root).as_posix()
-        except ValueError:
-            rel_path = raw_path
-        diff_lines = list(
-            difflib.unified_diff(
-                before.splitlines(),
-                after.splitlines(),
-                fromfile="before",
-                tofile="after",
-                lineterm="",
-            )
-        )
-        if not diff_lines:
-            return rel_path
-        return self.redact_text(clip("\n".join([rel_path, *diff_lines]), 800))
-
     def approve(self, name, args):
         if self.read_only:
             return False
@@ -738,7 +686,7 @@ class Moss:
         if self.approval_policy == "never":
             return False
         try:
-            answer = input(f"approve {name} {self._approval_summary(name, args)}? [y/N] ")
+            answer = input(f"approve {name} {approval_summary(self, name, args)}? [y/N] ")
         except EOFError:
             return False
         return answer.strip().lower() in {"y", "yes"}

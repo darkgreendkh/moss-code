@@ -17,6 +17,7 @@ from moss import (
     build_welcome,
 )
 from moss.output_parser import parse_model_output
+from moss.tool_executor import approval_summary
 
 
 def build_workspace(tmp_path):
@@ -273,7 +274,8 @@ def test_edit_file_approval_summary_shows_redacted_diff(tmp_path):
         agent = build_agent(tmp_path, [])
         (tmp_path / "sample.txt").write_text("alpha\n", encoding="utf-8")
 
-        summary = agent._approval_summary(
+        summary = approval_summary(
+            agent,
             "edit_file",
             {
                 "path": "sample.txt",
@@ -293,7 +295,7 @@ def test_edit_file_approval_summary_shows_redacted_diff(tmp_path):
 def test_run_shell_approval_summary_includes_risk_class(tmp_path):
     agent = build_agent(tmp_path, [])
 
-    summary = agent._approval_summary("run_shell", {"command": "git push origin main"})
+    summary = approval_summary(agent, "run_shell", {"command": "git push origin main"})
 
     assert summary.startswith("[destructive_or_network] ")
     assert "git push origin main" in summary

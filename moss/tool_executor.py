@@ -1,7 +1,9 @@
 """Structured tool execution for the agent runtime."""
 
-from dataclasses import dataclass
+import difflib
+import json
 import re
+from dataclasses import dataclass
 
 from .tools import ToolRunOutput, classify_shell_command
 from .workspace import clip
@@ -94,6 +96,59 @@ def _extra_metadata_for(name, args):
     if not shell_metadata:
         return {}
     return {"shell_risk_class": shell_metadata["shell_risk_class"]}
+
+
+def approval_summary(agent, name, args):
+    # 审批提示要一眼能看懂：写文件类工具展示脱敏 diff，shell 展示风险分级 + 命令摘要。
+    args = args or {}
+    if name in {"write_file", "edit_file"}:
+        preview = file_change_preview(agent, name, args)
+        if preview:
+            return preview
+    if name == "run_shell":
+        command = str(args.get("command", ""))
+        command_summary = command if len(command) <= 200 else command[:197] + "..."
+        risk_class = classify_shell_command(command)
+        return f"[{risk_class}] {command_summary}"
+    summary = json.dumps(args, ensure_ascii=True)
+    return summary if len(summary) <= 200 else summary[:197] + "..."
+
+
+def file_change_preview(agent, name, args):
+    """为 write_file/edit_file 生成脱敏后的 unified diff 预览，最长 800 字符。"""
+    raw_path = str(args.get("path", "")).strip()
+    if not raw_path:
+        return ""
+    try:
+        path = agent.path(raw_path)
+    except Exception:
+        return raw_path
+    try:
+        before = path.read_text(encoding="utf-8") if path.exists() and path.is_file() else ""
+    except OSError:
+        before = ""
+    if name == "write_file":
+        after = str(args.get("content", ""))
+    else:
+        old_text = str(args.get("old_text", ""))
+        new_text = str(args.get("new_text", ""))
+        after = before.replace(old_text, new_text, 1) if old_text and before.count(old_text) == 1 else before
+    try:
+        rel_path = path.relative_to(agent.root).as_posix()
+    except ValueError:
+        rel_path = raw_path
+    diff_lines = list(
+        difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile="before",
+            tofile="after",
+            lineterm="",
+        )
+    )
+    if not diff_lines:
+        return rel_path
+    return agent.redact_text(clip("\n".join([rel_path, *diff_lines]), 800))
 
 
 class ToolExecutor:
