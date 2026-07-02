@@ -118,7 +118,7 @@ MOSS_DEEPSEEK_API_KEY="your-api-key"
 
 ```bash
 MOSS_DEEPSEEK_API_BASE="https://api.deepseek.com/anthropic"
-MOSS_DEEPSEEK_MODEL="deepseek-v4-pro"
+MOSS_DEEPSEEK_MODEL="deepseek-chat"
 ```
 
 所以常规情况下 `.env` 里只填 `MOSS_DEEPSEEK_API_KEY` 就能直接启动：
@@ -130,7 +130,7 @@ uv run moss
 如果你需要临时切模型或代理地址，不必改 `.env`，可以直接覆盖：
 
 ```bash
-uv run moss --model deepseek-v4-pro --base-url https://api.deepseek.com/anthropic
+uv run moss --model deepseek-chat --base-url https://api.deepseek.com/anthropic
 ```
 
 DeepSeek 当前走 Anthropic-compatible Messages API，所以 runtime 里复用的是 Anthropic-compatible client；这只影响 HTTP 协议，不影响 CLI 用法。
@@ -139,8 +139,8 @@ DeepSeek 当前走 Anthropic-compatible Messages API，所以 runtime 里复用�
 
 right.codes 在 Moss 里有两条可选 provider 路径：
 
-- `--provider openai`：走 OpenAI-compatible `/responses`，默认 base URL 是 `https://www.right.codes/codex/v1`，默认模型是 `gpt-5.4`
-- `--provider anthropic`：走 Anthropic-compatible `/messages`，默认 base URL 是 `https://www.right.codes/claude/v1`，默认模型是 `claude-sonnet-4-6`
+- `--provider openai`：走 OpenAI-compatible `/responses`，默认 base URL 是 `https://www.right.codes/codex/v1`，默认模型是 `gpt-4o`
+- `--provider anthropic`：走 Anthropic-compatible `/messages`，默认 base URL 是 `https://www.right.codes/claude/v1`，默认模型是 `claude-sonnet-4-5-20250929`
 
 如果 right.codes 给你的是一把共享 key，推荐只填这一项：
 
@@ -170,10 +170,10 @@ MOSS_ANTHROPIC_API_KEY="your-right-codes-key-for-claude"
 
 | provider | base URL | API key | model |
 | --- | --- | --- | --- |
-| `deepseek` | `MOSS_DEEPSEEK_API_BASE`，回退 `DEEPSEEK_API_BASE`，默认 `https://api.deepseek.com/anthropic` | `MOSS_DEEPSEEK_API_KEY`，回退 `DEEPSEEK_API_KEY` | `MOSS_DEEPSEEK_MODEL`，回退 `DEEPSEEK_MODEL`，默认 `deepseek-v4-pro` |
-| `openai` | `MOSS_OPENAI_API_BASE`，回退 `OPENAI_API_BASE`，默认 `https://www.right.codes/codex/v1` | `MOSS_OPENAI_API_KEY`，回退 `OPENAI_API_KEY`、`MOSS_RIGHT_CODES_API_KEY`、`RIGHT_CODES_API_KEY`、`MOSS_ANTHROPIC_API_KEY`、`ANTHROPIC_API_KEY` | `MOSS_OPENAI_MODEL`，回退 `OPENAI_MODEL`，默认 `gpt-5.4` |
-| `anthropic` | `MOSS_ANTHROPIC_API_BASE`，回退 `ANTHROPIC_API_BASE`，默认 `https://www.right.codes/claude/v1` | `MOSS_ANTHROPIC_API_KEY`，回退 `ANTHROPIC_API_KEY`、`MOSS_RIGHT_CODES_API_KEY`、`RIGHT_CODES_API_KEY`、`MOSS_OPENAI_API_KEY`、`OPENAI_API_KEY` | `MOSS_ANTHROPIC_MODEL`，回退 `ANTHROPIC_MODEL`，默认 `claude-sonnet-4-6` |
-| `ollama` | `--host`，默认 `http://127.0.0.1:11434` | 不需要 | `--model`，默认 `qwen3.5:4b` |
+| `deepseek` | `MOSS_DEEPSEEK_API_BASE`，回退 `DEEPSEEK_API_BASE`，默认 `https://api.deepseek.com/anthropic` | `MOSS_DEEPSEEK_API_KEY`，回退 `DEEPSEEK_API_KEY` | `MOSS_DEEPSEEK_MODEL`，回退 `DEEPSEEK_MODEL`，默认 `deepseek-chat` |
+| `openai` | `MOSS_OPENAI_API_BASE`，回退 `OPENAI_API_BASE`，默认 `https://www.right.codes/codex/v1` | `MOSS_OPENAI_API_KEY`，回退 `OPENAI_API_KEY`、`MOSS_RIGHT_CODES_API_KEY`、`RIGHT_CODES_API_KEY`、`MOSS_ANTHROPIC_API_KEY`、`ANTHROPIC_API_KEY` | `MOSS_OPENAI_MODEL`，回退 `OPENAI_MODEL`，默认 `gpt-4o` |
+| `anthropic` | `MOSS_ANTHROPIC_API_BASE`，回退 `ANTHROPIC_API_BASE`，默认 `https://www.right.codes/claude/v1` | `MOSS_ANTHROPIC_API_KEY`，回退 `ANTHROPIC_API_KEY`、`MOSS_RIGHT_CODES_API_KEY`、`RIGHT_CODES_API_KEY`、`MOSS_OPENAI_API_KEY`、`OPENAI_API_KEY` | `MOSS_ANTHROPIC_MODEL`，回退 `ANTHROPIC_MODEL`，默认 `claude-sonnet-4-5-20250929` |
+| `ollama` | `--host`，默认 `http://127.0.0.1:11434` | 不需要 | `--model`，默认 `qwen3:8b` |
 
 如果有额外的敏感环境变量需要从 trace/report 里脱敏，可以用 `MOSS_SECRET_ENV_NAMES` 配置逗号分隔的变量名，或启动时重复传 `--secret-env-name NAME`。
 
@@ -190,7 +190,7 @@ uv run moss --provider openai
 ```bash
 MOSS_OPENAI_API_BASE="https://www.right.codes/codex/v1"
 MOSS_RIGHT_CODES_API_KEY="your-right-codes-key"
-MOSS_OPENAI_MODEL="gpt-5.4"
+MOSS_OPENAI_MODEL="gpt-4o"
 ```
 
 也可以改成其他 OpenAI-compatible 服务：
@@ -198,7 +198,7 @@ MOSS_OPENAI_MODEL="gpt-5.4"
 ```bash
 MOSS_OPENAI_API_BASE="https://your-api.example/v1"
 MOSS_OPENAI_API_KEY="your-api-key"
-MOSS_OPENAI_MODEL="gpt-5.4"
+MOSS_OPENAI_MODEL="gpt-4o"
 ```
 
 ### Anthropic 兼容接口
@@ -214,7 +214,7 @@ uv run moss --provider anthropic
 ```bash
 MOSS_ANTHROPIC_API_BASE="https://www.right.codes/claude/v1"
 MOSS_RIGHT_CODES_API_KEY="your-right-codes-key"
-MOSS_ANTHROPIC_MODEL="claude-sonnet-4-6"
+MOSS_ANTHROPIC_MODEL="claude-sonnet-4-5-20250929"
 ```
 
 如果你的服务端对多个兼容接口复用了同一套密钥，`moss` 也支持从 `MOSS_ANTHROPIC_API_KEY` 回退到 `ANTHROPIC_API_KEY`、`MOSS_RIGHT_CODES_API_KEY`、`RIGHT_CODES_API_KEY`、`MOSS_OPENAI_API_KEY` 或 `OPENAI_API_KEY`。
@@ -225,8 +225,8 @@ MOSS_ANTHROPIC_MODEL="claude-sonnet-4-6"
 
 ```bash
 ollama serve
-ollama pull qwen3.5:4b
-uv run moss --provider ollama --model qwen3.5:4b
+ollama pull qwen3:8b
+uv run moss --provider ollama --model qwen3:8b
 ```
 
 ## 常用交互命令
@@ -236,6 +236,8 @@ uv run moss --provider ollama --model qwen3.5:4b
 - `/session`：查看当前会话文件路径
 - `/reset`：清空当前会话状态
 - `/exit` 或 `/quit`：退出 REPL
+
+任务执行期间，moss 会把每一步（正在思考第几步、调用了哪个工具、结果是否正常）实时打印到 stderr，方便你看清它在做什么；最终答案走 stdout，因此 one-shot 模式的输出仍然可以直接管道使用。任务跑到一半按 `Ctrl-C` 只会取消当前这一轮，回到提示符，而不是退出整个程序。
 
 ## 安全与持久化
 
