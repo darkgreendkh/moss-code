@@ -5,7 +5,6 @@ Moss 就是包在模型外面的控制循环：负责组 prompt、解析模型�
 """
 
 import os
-import re
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +16,6 @@ from .context_manager import ContextManager
 from .checkpoint import CHECKPOINT_NONE_STATUS
 from .prompt_prefix import build_prompt_prefix, tool_signature
 from .run_store import RunStore
-from .security import REDACTED_VALUE
 from .session_store import SessionStore
 from . import skills as skilllib
 from .tool_context import ToolContext
@@ -43,20 +41,6 @@ DEFAULT_FEATURE_FLAGS = {
     "context_reduction": True,
     "prompt_cache": True,
 }
-DURABLE_MEMORY_INTENT_PATTERN = re.compile(r"(?i)\b(capture|remember|save|store|persist|note)\b")
-DURABLE_MEMORY_INTENT_ZH_PATTERN = re.compile(r"(记住|保存|记录|沉淀|长期记忆|持久记忆)")
-DURABLE_MEMORY_LINE_PATTERNS = (
-    ("project-conventions", re.compile(r"(?i)^Project convention:\s*(.+)$")),
-    ("key-decisions", re.compile(r"(?i)^Decision:\s*(.+)$")),
-    ("dependency-facts", re.compile(r"(?i)^Dependency:\s*(.+)$")),
-    ("user-preferences", re.compile(r"(?i)^Preference:\s*(.+)$")),
-    ("project-conventions", re.compile(r"^项目约定：\s*(.+)$")),
-    ("key-decisions", re.compile(r"^决策：\s*(.+)$")),
-    ("dependency-facts", re.compile(r"^依赖：\s*(.+)$")),
-    ("user-preferences", re.compile(r"^偏好：\s*(.+)$")),
-)
-SECRET_SHAPED_TEXT_PATTERN = re.compile(r"(?i)(\b(api[_ -]?key|token|secret|password)\b|sk-[A-Za-z0-9_-]{6,})")
-
 __all__ = ["Moss", "SessionStore"]
 
 
@@ -409,132 +393,15 @@ class Moss:
         return checkpointlib.infer_next_step(task_state)
 
     def update_memory_after_tool(self, name, args, result):
-        """把少量高价值工具结果沉淀到 working memory。
-
-        为什么存在：
-        并不是每个工具结果都值得长期带进下一轮 prompt。完整结果已经进了
-        `history`，这里只挑少量“下一轮大概率还会用到”的事实做提纯，
-        例如最近读写过哪些文件、某个文件读出来的短摘要。
-
-        输入 / 输出：
-        - 输入：工具名 `name`、参数 `args`、执行结果 `result`
-        - 输出：无显式返回值，副作用是更新 `self.memory`
-
-        在 agent 链路里的位置：
-        它发生在 `run_tool()` 真正执行完工具之后、下一轮 prompt 组装之前。
-        也就是说：工具结果先进入完整历史，再由这个函数择优沉淀成轻量记忆。
-        """
-        if not self.feature_enabled("memory"):
-            return
-        path = args.get("path")
-        if not path:
-            return
-
-        canonical_path = self.memory.canonical_path(path)
-        # 不是所有工具结果都进入工作记忆。
-        # 读文件会生成摘要；写文件/patch 会让旧摘要失效，因为它们可能过期了。
-        if name in {"read_file", "write_file", "edit_file"}:
-            self.memory.remember_file(canonical_path)
-        if name == "read_file":
-            summary = memorylib.summarize_read_result(result)
-            self.set_memory_file_summary(canonical_path, summary)
-            self.append_memory_note(summary, tags=(canonical_path,), source=canonical_path)
-        elif name in {"write_file", "edit_file"}:
-            self.memory.invalidate_file_summary(canonical_path)
-
-    def note_tool(self, name, args, result):
-        self.update_memory_after_tool(name, args, result)
-
-    def safe_memory_text(self, text):
-        safe_text = self.redact_text(text)
-        if memorylib.reject_memory_reason(safe_text):
-            return ""
-        return safe_text
-
-    def append_memory_note(self, text, **kwargs):
-        safe_text = self.safe_memory_text(text)
-        if not safe_text:
-            return False
-        self.memory.append_note(safe_text, **kwargs)
-        return True
-
-    def set_memory_file_summary(self, path, summary):
-        safe_summary = self.safe_memory_text(summary)
-        if not safe_summary:
-            return False
-        self.memory.set_file_summary(path, safe_summary)
-        return True
+        return memorylib.update_memory_after_tool(self, name, args, result)
 
     def record_process_note_for_tool(self, name, metadata):
-        status = str(metadata.get("tool_status", "")).strip()
-        if status not in {"partial_success", "error", "rejected"}:
-            return
-        affected_paths = [str(path).strip() for path in metadata.get("affected_paths", []) if str(path).strip()]
-        path_text = ", ".join(affected_paths) or "workspace"
-        if status == "partial_success":
-            text = f"{name} partial_success on {path_text}; inspect diff before retry"
-        elif status == "error":
-            text = f"{name} error on {path_text}; check the failure before retry"
-        else:
-            text = f"{name} rejected; choose a different action before retry"
-        tags = ["process", status, *affected_paths]
-        self.append_memory_note(text, tags=tuple(tags), source=name, kind="process")
-        self.session["memory"] = self.memory.to_dict()
-
-    def reject_durable_reason(self, note_text):
-        text = str(note_text or "").strip()
-        lowered = text.lower()
-        if not text:
-            return "empty"
-        if REDACTED_VALUE in text or SECRET_SHAPED_TEXT_PATTERN.search(text):
-            return "secret_shaped"
-        checkpoint_like_prefixes = (
-            "current goal",
-            "current blocker",
-            "next step",
-            "current phase",
-            "key files",
-            "freshness",
-            "当前目标",
-            "当前卡点",
-            "下一步",
-            "当前阶段",
-            "关键文件",
-            "已完成",
-            "已排除",
-        )
-        if any(lowered.startswith(prefix) for prefix in checkpoint_like_prefixes):
-            return "transient_task_state"
-        if re.search(r"(?i)\b(stdout|stderr|traceback|exit_code)\b", text) or len(text) > 220:
-            return "noisy_output"
-        return ""
-
-    def extract_durable_promotions(self, user_message, final_answer):
-        user_text = str(user_message or "")
-        if not (DURABLE_MEMORY_INTENT_PATTERN.search(user_text) or DURABLE_MEMORY_INTENT_ZH_PATTERN.search(user_text)):
-            return [], []
-        promotions = []
-        rejections = []
-        for line in str(final_answer or "").splitlines():
-            text = line.strip()
-            if not text or REDACTED_VALUE in text:
-                continue
-            for topic, pattern in DURABLE_MEMORY_LINE_PATTERNS:
-                match = pattern.match(text)
-                if not match:
-                    continue
-                note_text = self.redact_text(match.group(1).strip())
-                if note_text:
-                    reason = self.reject_durable_reason(note_text)
-                    if reason:
-                        rejections.append(f"{topic}:{reason}")
-                        break
-                    promotions.append((topic, note_text))
-                break
-        return promotions, rejections
+        return memorylib.record_process_note_for_tool(self, name, metadata)
 
     def promote_durable_memory(self, user_message, final_answer):
-        promotions, rejections = self.extract_durable_promotions(user_message, final_answer)
+        promotions, rejections = memorylib.extract_durable_promotions(
+            user_message, final_answer, redact_text=self.redact_text
+        )
         promoted, superseded = self.memory.promote_durable(promotions)
         self.session["memory"] = self.memory.to_dict()
         self.last_durable_promotions = promoted

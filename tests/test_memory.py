@@ -1,4 +1,32 @@
-from moss.features.memory import LayeredMemory, summarize_read_result, _tokenize
+from moss.features.memory import (
+    LayeredMemory,
+    extract_durable_promotions,
+    reject_durable_reason,
+    summarize_read_result,
+    _tokenize,
+)
+
+
+def test_reject_durable_reason_filters_bad_notes():
+    assert reject_durable_reason("") == "empty"
+    assert reject_durable_reason("Current goal: finish task") == "transient_task_state"
+    assert reject_durable_reason("stdout said hello") == "noisy_output"
+    assert reject_durable_reason("api_key=sk-abcdef123456") == "secret_shaped"
+    assert reject_durable_reason("use ruff for linting") == ""
+
+
+def test_extract_durable_promotions_requires_intent_and_topic_prefix():
+    promotions, rejections = extract_durable_promotions(
+        "please remember this", "Decision: use pytest\nrandom line"
+    )
+    assert promotions == [("key-decisions", "use pytest")]
+    assert rejections == []
+
+
+def test_extract_durable_promotions_without_intent_returns_nothing():
+    promotions, rejections = extract_durable_promotions("hello there", "Decision: use pytest")
+    assert promotions == []
+    assert rejections == []
 
 
 def test_working_memory_tracks_summary_and_recent_files():

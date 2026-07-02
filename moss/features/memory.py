@@ -761,3 +761,147 @@ class LayeredMemory:
         promoted, superseded = self.durable_store.promote(promotions)
         self.state = normalize_memory_state(self.state, self.workspace_root)
         return promoted, superseded
+
+
+# ---- runtime 集成：记忆写入与 durable 提炼策略 ----
+# 为什么放在这里而不是 runtime：这些是"什么值得记、什么必须拒"的记忆策略，
+# 和 LayeredMemory 属于同一关切。Moss 只保留薄委托（同 checkpoint.py 的模式）。
+
+DURABLE_MEMORY_INTENT_PATTERN = re.compile(r"(?i)\b(capture|remember|save|store|persist|note)\b")
+DURABLE_MEMORY_INTENT_ZH_PATTERN = re.compile(r"(记住|保存|记录|沉淀|长期记忆|持久记忆)")
+DURABLE_MEMORY_LINE_PATTERNS = (
+    ("project-conventions", re.compile(r"(?i)^Project convention:\s*(.+)$")),
+    ("key-decisions", re.compile(r"(?i)^Decision:\s*(.+)$")),
+    ("dependency-facts", re.compile(r"(?i)^Dependency:\s*(.+)$")),
+    ("user-preferences", re.compile(r"(?i)^Preference:\s*(.+)$")),
+    ("project-conventions", re.compile(r"^项目约定：\s*(.+)$")),
+    ("key-decisions", re.compile(r"^决策：\s*(.+)$")),
+    ("dependency-facts", re.compile(r"^依赖：\s*(.+)$")),
+    ("user-preferences", re.compile(r"^偏好：\s*(.+)$")),
+)
+
+
+def reject_durable_reason(note_text):
+    text = str(note_text or "").strip()
+    lowered = text.lower()
+    if not text:
+        return "empty"
+    if REDACTED_VALUE in text or _SECRET_SHAPED_TEXT_PATTERN.search(text):
+        return "secret_shaped"
+    checkpoint_like_prefixes = (
+        "current goal",
+        "current blocker",
+        "next step",
+        "current phase",
+        "key files",
+        "freshness",
+        "当前目标",
+        "当前卡点",
+        "下一步",
+        "当前阶段",
+        "关键文件",
+        "已完成",
+        "已排除",
+    )
+    if any(lowered.startswith(prefix) for prefix in checkpoint_like_prefixes):
+        return "transient_task_state"
+    if _NOISY_MEMORY_PATTERN.search(text) or len(text) > 220:
+        return "noisy_output"
+    return ""
+
+
+def extract_durable_promotions(user_message, final_answer, redact_text=None):
+    redact = redact_text or (lambda text: text)
+    user_text = str(user_message or "")
+    if not (DURABLE_MEMORY_INTENT_PATTERN.search(user_text) or DURABLE_MEMORY_INTENT_ZH_PATTERN.search(user_text)):
+        return [], []
+    promotions = []
+    rejections = []
+    for line in str(final_answer or "").splitlines():
+        text = line.strip()
+        if not text or REDACTED_VALUE in text:
+            continue
+        for topic, pattern in DURABLE_MEMORY_LINE_PATTERNS:
+            match = pattern.match(text)
+            if not match:
+                continue
+            note_text = redact(match.group(1).strip())
+            if note_text:
+                reason = reject_durable_reason(note_text)
+                if reason:
+                    rejections.append(f"{topic}:{reason}")
+                    break
+                promotions.append((topic, note_text))
+            break
+    return promotions, rejections
+
+
+def safe_memory_text(agent, text):
+    safe_text = agent.redact_text(text)
+    if reject_memory_reason(safe_text):
+        return ""
+    return safe_text
+
+
+def append_memory_note(agent, text, **kwargs):
+    safe_text = safe_memory_text(agent, text)
+    if not safe_text:
+        return False
+    agent.memory.append_note(safe_text, **kwargs)
+    return True
+
+
+def set_memory_file_summary(agent, path, summary):
+    safe_summary = safe_memory_text(agent, summary)
+    if not safe_summary:
+        return False
+    agent.memory.set_file_summary(path, safe_summary)
+    return True
+
+
+def update_memory_after_tool(agent, name, args, result):
+    """把少量高价值工具结果沉淀到 working memory。
+
+    为什么存在：
+    并不是每个工具结果都值得长期带进下一轮 prompt。完整结果已经进了
+    `history`，这里只挑少量"下一轮大概率还会用到"的事实做提纯，
+    例如最近读写过哪些文件、某个文件读出来的短摘要。
+
+    在 agent 链路里的位置：
+    它发生在 `run_tool()` 真正执行完工具之后、下一轮 prompt 组装之前。
+    也就是说：工具结果先进入完整历史，再由这个函数择优沉淀成轻量记忆。
+    """
+    if not agent.feature_enabled("memory"):
+        return
+    path = args.get("path")
+    if not path:
+        return
+
+    canonical_path = agent.memory.canonical_path(path)
+    # 不是所有工具结果都进入工作记忆。
+    # 读文件会生成摘要；写文件/patch 会让旧摘要失效，因为它们可能过期了。
+    if name in {"read_file", "write_file", "edit_file"}:
+        agent.memory.remember_file(canonical_path)
+    if name == "read_file":
+        summary = summarize_read_result(result)
+        set_memory_file_summary(agent, canonical_path, summary)
+        append_memory_note(agent, summary, tags=(canonical_path,), source=canonical_path)
+    elif name in {"write_file", "edit_file"}:
+        agent.memory.invalidate_file_summary(canonical_path)
+
+
+def record_process_note_for_tool(agent, name, metadata):
+    status = str(metadata.get("tool_status", "")).strip()
+    if status not in {"partial_success", "error", "rejected"}:
+        return
+    affected_paths = [str(path).strip() for path in metadata.get("affected_paths", []) if str(path).strip()]
+    path_text = ", ".join(affected_paths) or "workspace"
+    if status == "partial_success":
+        text = f"{name} partial_success on {path_text}; inspect diff before retry"
+    elif status == "error":
+        text = f"{name} error on {path_text}; check the failure before retry"
+    else:
+        text = f"{name} rejected; choose a different action before retry"
+    tags = ["process", status, *affected_paths]
+    append_memory_note(agent, text, tags=tuple(tags), source=name, kind="process")
+    agent.session["memory"] = agent.memory.to_dict()
