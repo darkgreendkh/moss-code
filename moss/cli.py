@@ -411,6 +411,11 @@ def main(argv=None):
                 return 1
             progress.clear()
             print(answer)
+            # 后端错误现在会被 agent 收敛成一次已收尾的失败运行（而不是抛异常），
+            # 但 one-shot / CI 场景需要用退出码反映失败，否则脚本会误以为成功。
+            task_state = getattr(agent, "current_task_state", None)
+            if task_state is not None and task_state.status == "failed":
+                return 1
         return 0
 
     while True:

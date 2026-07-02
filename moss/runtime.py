@@ -642,12 +642,19 @@ class Moss:
             skills_provider=lambda: self.skills,
         )
 
+    def delegate_session_store(self):
+        # 委派子 agent 会创建一个一次性的只读会话。如果它和用户会话写进同一个
+        # sessions 目录，`--resume latest`（按 mtime 取最新）就会恢复到这个刚写完
+        # 的临时委派会话，而不是用户自己的工作会话。把它们隔离到独立目录，既避免
+        # 污染 latest()，又保留可审计的委派轨迹。
+        return SessionStore(str(self.root / ".moss" / "delegates"))
+
     def spawn_delegate(self, args):
         task = str(args.get("task", "")).strip()
         child = Moss(
             model_client=self.model_client,
             workspace=self.workspace,
-            session_store=self.session_store,
+            session_store=self.delegate_session_store(),
             run_store=self.run_store,
             approval_policy="never",
             max_steps=int(args.get("max_steps", 3)),

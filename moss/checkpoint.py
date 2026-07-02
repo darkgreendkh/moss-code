@@ -5,6 +5,12 @@ import uuid
 from .features import memory as memorylib
 from .workspace import clip, now
 
+# 每执行一步工具就会生成一个 checkpoint，且它们全都存在 session JSON 里、
+# 每次保存都整份重写。不设上限的话，一个长期的 REPL 会话里 checkpoint 会无限
+# 累积，session 文件越来越大、保存越来越慢。只有最新的 current checkpoint 会被
+# 读取用于恢复，历史 checkpoint 仅作参考，所以保留最近 N 个足矣。
+CHECKPOINT_HISTORY_LIMIT = 40
+
 CHECKPOINT_SCHEMA_VERSION = "phase1-v1"
 CHECKPOINT_NONE_STATUS = "no-checkpoint"
 CHECKPOINT_FULL_VALID_STATUS = "full-valid"
@@ -142,6 +148,19 @@ def infer_next_step(task_state):
     return "Continue the task from the latest checkpoint."
 
 
+def _prune_checkpoints(state, limit=CHECKPOINT_HISTORY_LIMIT):
+    # 只保留最近插入的 limit 个 checkpoint（dict 保序，靠后 = 更新）。
+    # current_id 一定是最后插入的，所以永远在保留集合里。
+    items = state.get("items", {})
+    if len(items) <= limit:
+        return
+    keep_keys = list(items)[-limit:]
+    current_id = str(state.get("current_id", "")).strip()
+    if current_id and current_id not in keep_keys:
+        keep_keys.append(current_id)
+    state["items"] = {key: items[key] for key in keep_keys if key in items}
+
+
 def create_checkpoint(agent, task_state, user_message, trigger):
     state = checkpoint_state(agent)
     current = current_checkpoint(agent)
@@ -169,6 +188,7 @@ def create_checkpoint(agent, task_state, user_message, trigger):
     }
     state["items"][checkpoint_id] = checkpoint
     state["current_id"] = checkpoint_id
+    _prune_checkpoints(state)
     task_state.checkpoint_id = checkpoint_id
     agent.session["runtime_identity"] = checkpoint["runtime_identity"]
     agent.session_path = agent.session_store.save(agent.session)

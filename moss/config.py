@@ -2,6 +2,7 @@
 
 import os
 import re
+import sys
 from pathlib import Path
 
 
@@ -46,8 +47,15 @@ def load_project_env(start, override=True):
     if env_path is None:
         return {}
     loaded = {}
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        parsed = _parse_env_line(line)
+    for lineno, line in enumerate(env_path.read_text(encoding="utf-8").splitlines(), start=1):
+        try:
+            parsed = _parse_env_line(line)
+        except ValueError as exc:
+            # 一行写错不应该让整个 agent 起不来。这是团队场景里非常真实的踩坑：
+            # 某人往 .env 里粘了一段带空格或注释符的东西，结果所有人启动即崩。
+            # 跳过这一行并给出定位信息，让其余合法配置照常生效。
+            print(f"warning: skipping {env_path.name}:{lineno}: {exc}", file=sys.stderr)
+            continue
         if parsed is None:
             continue
         name, value = parsed

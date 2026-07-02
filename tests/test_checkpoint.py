@@ -1,12 +1,16 @@
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
 from moss.checkpoint import (
     CHECKPOINT_FULL_VALID_STATUS,
+    CHECKPOINT_HISTORY_LIMIT,
     CHECKPOINT_NONE_STATUS,
     CHECKPOINT_SCHEMA_MISMATCH_STATUS,
     CHECKPOINT_SCHEMA_VERSION,
+    create_checkpoint,
+    current_checkpoint,
     current_runtime_identity,
     evaluate_resume_state,
 )
+from moss.task_state import TaskState
 
 
 def build_agent(tmp_path, outputs=None, **kwargs):
@@ -57,3 +61,19 @@ def test_evaluate_resume_state_distinguishes_no_checkpoint_full_valid_and_schema
 
     agent.session["checkpoints"]["items"]["ckpt_valid"]["schema_version"] = "old"
     assert evaluate_resume_state(agent)["status"] == CHECKPOINT_SCHEMA_MISMATCH_STATUS
+
+
+def test_create_checkpoint_prunes_old_checkpoints_but_keeps_current(tmp_path):
+    agent = build_agent(tmp_path)
+    task_state = TaskState.create(task_id="t", user_request="req")
+
+    total = CHECKPOINT_HISTORY_LIMIT + 15
+    for index in range(total):
+        create_checkpoint(agent, task_state, f"step {index}", trigger="tool_executed")
+
+    items = agent.session["checkpoints"]["items"]
+    # 数量被限制住，不再随步数无限增长。
+    assert len(items) <= CHECKPOINT_HISTORY_LIMIT
+    # 当前 checkpoint 一定还在，恢复链路不受影响。
+    assert agent.session["checkpoints"]["current_id"] in items
+    assert current_checkpoint(agent) is not None

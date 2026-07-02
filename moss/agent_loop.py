@@ -111,12 +111,21 @@ class AgentLoop:
                 prompt_cache_retention = "in_memory"
             agent.emit_progress("thinking", {"step": tool_steps + 1, "max_steps": agent.max_steps})
             model_started_at = time.monotonic()
-            raw = agent.model_client.complete(
-                prompt,
-                agent.max_new_tokens,
-                prompt_cache_key=prompt_cache_key,
-                prompt_cache_retention=prompt_cache_retention,
-            )
+            try:
+                raw = agent.model_client.complete(
+                    prompt,
+                    agent.max_new_tokens,
+                    prompt_cache_key=prompt_cache_key,
+                    prompt_cache_retention=prompt_cache_retention,
+                )
+            except Exception as exc:
+                # 模型后端出错（网络中断、超时、5xx）不应该让整个 run 带着一堆
+                # 半成品工件崩掉。这里把它收敛成一次「失败但已收尾」的运行：
+                # 落 trace、把 task_state 标成 model_error、写 report，再返回一句
+                # 人能看懂的话，交给 CLI 展示。KeyboardInterrupt 继承自
+                # BaseException 而非 Exception，不会被这里捕获——用户主动取消仍会
+                # 正常向上冒泡，由 CLI 决定回到提示符还是退出。
+                return self._finish_model_error(task_state, user_message, exc, run_started_at, model_started_at)
             completion_metadata = dict(getattr(agent.model_client, "last_completion_metadata", {}) or {})
             if completion_metadata:
                 # 把后端返回的 usage/cache 统计并回 prompt_metadata，
@@ -233,6 +242,53 @@ class AgentLoop:
             {
                 "checkpoint_id": checkpoint["checkpoint_id"],
                 "trigger": task_state.stop_reason or "run_stopped",
+            },
+        )
+        agent.emit_trace(
+            task_state,
+            "run_finished",
+            {
+                "status": task_state.status,
+                "stop_reason": task_state.stop_reason,
+                "final_answer": final,
+                "run_duration_ms": int((time.monotonic() - run_started_at) * 1000),
+            },
+        )
+        agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
+        return final
+
+    def _finish_model_error(self, task_state, user_message, exc, run_started_at, model_started_at):
+        """把一次模型后端失败收敛成一次已收尾的失败运行。
+
+        这样即使后端挂了，磁盘上留下的仍然是一份完整、可复盘的运行工件
+        （task_state=failed / stop_reason=model_error + report），而不是一个
+        永远停在 running、没有 report 的半截目录。
+        """
+        agent = self.agent
+        message = str(exc).strip() or exc.__class__.__name__
+        # 后端错误信息里可能带 URL/key 之类，统一走脱敏再落盘和展示。
+        safe_message = agent.redact_text(message)
+        final = f"Model backend error, stopped without a final answer: {safe_message}"
+        agent.emit_progress("error", {"scope": "model", "message": safe_message})
+        agent.emit_trace(
+            task_state,
+            "model_error",
+            {
+                "error": safe_message,
+                "error_type": exc.__class__.__name__,
+                "duration_ms": int((time.monotonic() - model_started_at) * 1000),
+            },
+        )
+        task_state.stop_model_error(final)
+        agent.record({"role": "assistant", "content": final, "created_at": now()})
+        agent.run_store.write_task_state(task_state)
+        checkpoint = agent.create_checkpoint(task_state, user_message, trigger="model_error")
+        agent.emit_trace(
+            task_state,
+            "checkpoint_created",
+            {
+                "checkpoint_id": checkpoint["checkpoint_id"],
+                "trigger": "model_error",
             },
         )
         agent.emit_trace(

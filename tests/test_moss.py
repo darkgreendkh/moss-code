@@ -225,6 +225,28 @@ def test_delegate_uses_child_agent(tmp_path):
     assert "delegate_result" in tool_events[0]["content"]
 
 
+def test_delegate_session_does_not_pollute_resume_latest(tmp_path):
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"delegate","args":{"task":"inspect README","max_steps":2}}</tool>',
+            "<final>Child result.</final>",
+            "<final>Parent done.</final>",
+        ],
+    )
+    user_session_id = agent.session["id"]
+
+    agent.ask("Use delegation")
+
+    # 用户会话目录的 latest() 必须仍指向用户自己的会话，
+    # 而不是委派子 agent 刚写完的临时会话。
+    assert agent.session_store.latest() == user_session_id
+    # 委派会话被隔离到独立目录，可审计但不干扰恢复。
+    delegate_dir = tmp_path / ".moss" / "delegates"
+    assert delegate_dir.is_dir()
+    assert list(delegate_dir.glob("*.json"))
+
+
 def test_edit_file_replaces_exact_match(tmp_path):
     file_path = tmp_path / "sample.txt"
     file_path.write_text("hello world\n", encoding="utf-8")
@@ -1722,6 +1744,28 @@ def test_reviewer_skeleton_docs_exist():
     architecture_text = architecture.read_text(encoding="utf-8")
     assert "Agent Harness v1" in architecture_text
     assert "task state" in architecture_text.lower()
+
+
+def test_one_shot_returns_nonzero_exit_on_backend_failure(tmp_path):
+    from moss import cli
+
+    class RaisingClient:
+        supports_prompt_cache = False
+        last_completion_metadata = {}
+        model = "raising"
+
+        def complete(self, prompt, max_new_tokens, **kwargs):
+            raise RuntimeError("backend down")
+
+    agent = build_agent(tmp_path, [])
+    agent.model_client = RaisingClient()
+
+    with patch("moss.cli.build_agent", return_value=agent):
+        exit_code = cli.main(["do the task", "--cwd", str(tmp_path), "--approval", "auto"])
+
+    # 后端失败在 one-shot 模式下必须以非零退出码结束，否则 CI 会误判为成功。
+    assert exit_code == 1
+    assert agent.current_task_state.status == "failed"
 
 
 def test_package_import_surface_includes_cli_entrypoints():
