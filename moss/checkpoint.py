@@ -65,6 +65,7 @@ def current_checkpoint(agent):
 
 def evaluate_resume_state(agent):
     previous_resume_state = dict(agent.session.get("resume_state", {}) or {})
+    interrupted_runs = list(getattr(agent, "interrupted_runs", []) or previous_resume_state.get("interrupted_runs", []) or [])
     invalidated = agent.invalidate_stale_memory()
     checkpoint = current_checkpoint(agent)
     status = CHECKPOINT_NONE_STATUS
@@ -108,14 +109,33 @@ def evaluate_resume_state(agent):
             else 0,
         ),
     }
+    if interrupted_runs:
+        resume_state["interrupted_runs"] = interrupted_runs
     agent.session["resume_state"] = resume_state
     agent.session["runtime_identity"] = current_runtime_identity(agent)
     return resume_state
 
 
+def _interrupted_run_lines(interrupted_runs):
+    lines = []
+    for item in interrupted_runs:
+        last_event = dict(item.get("last_complete_event", {}) or {})
+        event_name = str(last_event.get("event", "")).strip() or "-"
+        lines.append(f"{item.get('run_id', '-')}: last complete event {event_name}")
+    return lines
+
+
 def render_checkpoint_text(agent):
     checkpoint = current_checkpoint(agent)
+    interrupted_runs = list(agent.resume_state.get("interrupted_runs", []) or [])
     if not checkpoint:
+        if interrupted_runs:
+            lines = [
+                "Task checkpoint:",
+                f"- Resume status: {agent.resume_state.get('status', CHECKPOINT_NONE_STATUS)}",
+                "- Interrupted runs: " + " | ".join(_interrupted_run_lines(interrupted_runs)),
+            ]
+            return "\n".join(lines)
         return ""
     lines = [
         "Task checkpoint:",
@@ -132,6 +152,8 @@ def render_checkpoint_text(agent):
         lines.append("- Excluded: " + " | ".join(str(item) for item in checkpoint.get("excluded", [])))
     if agent.resume_state.get("stale_paths"):
         lines.append("- Stale paths: " + ", ".join(agent.resume_state["stale_paths"]))
+    if interrupted_runs:
+        lines.append("- Interrupted runs: " + " | ".join(_interrupted_run_lines(interrupted_runs)))
     summary = str(checkpoint.get("summary", "")).strip()
     if summary:
         lines.append(f"- Summary: {summary}")

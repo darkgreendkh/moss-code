@@ -3,7 +3,7 @@
 import hashlib
 import json
 import textwrap
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 
 from .workspace import now
 
@@ -25,6 +25,35 @@ class PromptPrefix:
     built_at: str
 
 
+def _field_payload(field):
+    if is_dataclass(field):
+        return asdict(field)
+    return field
+
+
+def _schema_payload(schema):
+    return {name: _field_payload(field) for name, field in schema.items()}
+
+
+def render_schema_field(field):
+    if not is_dataclass(field):
+        return str(field)
+    payload = asdict(field)
+    text = str(payload["type"])
+    if not payload.get("required", True):
+        default = payload.get("default")
+        if isinstance(default, str):
+            default_text = repr(default)
+        else:
+            default_text = str(default)
+        text += f"={default_text}"
+    return text
+
+
+def render_tool_schema(schema):
+    return ", ".join(f"{key}: {render_schema_field(value)}" for key, value in schema.items())
+
+
 def tool_signature(tools):
     payload = []
     for name in sorted(tools):
@@ -32,7 +61,7 @@ def tool_signature(tools):
         payload.append(
             {
                 "name": name,
-                "schema": tool["schema"],
+                "schema": _schema_payload(tool["schema"]),
                 "risky": tool["risky"],
                 "description": tool["description"],
             }
@@ -53,7 +82,7 @@ def skill_signature(skills):
 def build_prompt_prefix(workspace, tools, skills=None, built_at=None):
     tool_lines = []
     for name, tool in tools.items():
-        fields = ", ".join(f"{key}: {value}" for key, value in tool["schema"].items())
+        fields = render_tool_schema(tool["schema"])
         risk = "approval required" if tool["risky"] else "safe"
         tool_lines.append(f"- {name}({fields}) [{risk}] {tool['description']}")
     tool_text = "\n".join(tool_lines)

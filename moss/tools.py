@@ -4,57 +4,185 @@
 如何做参数校验，以及最终如何执行，都是在这里定义的。
 """
 
+import os
 import shutil
 import subprocess
+import tempfile
 import textwrap
+from dataclasses import dataclass
 from functools import partial
 
 from .workspace import IGNORED_PATH_NAMES
 
+
+@dataclass(frozen=True)
+class ToolRunOutput:
+    content: str
+    stdout: str = ""
+    stderr: str = ""
+    exit_code: int | None = None
+
+
+@dataclass(frozen=True)
+class ToolField:
+    type: str
+    required: bool = True
+    default: object = None
+    minimum: int | None = None
+    maximum: int | None = None
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    name: str
+    fields: dict[str, ToolField]
+    risky: bool
+    description: str
+
+
+def write_text_atomic(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            delete=False,
+            dir=str(path.parent),
+            prefix=path.name + ".",
+            suffix=".tmp",
+        ) as handle:
+            handle.write(str(content))
+            temp_name = handle.name
+        os.replace(temp_name, path)
+    finally:
+        if temp_name and os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
+def classify_shell_command(command):
+    lowered = str(command or "").strip().lower()
+    if not lowered:
+        return "general"
+
+    destructive_or_network_markers = (
+        "git push",
+        "curl ",
+        "curl.",
+        "wget ",
+        "wget.",
+        "npm publish",
+        "twine upload",
+        "pip install",
+        "uv pip install",
+        "rm ",
+        "rm -",
+        "del ",
+        "erase ",
+        "rmdir ",
+        "remove-item",
+        "move-item",
+        "mv ",
+        "git reset",
+        "git checkout --",
+        "git clean",
+    )
+    if any(marker in lowered for marker in destructive_or_network_markers):
+        return "destructive_or_network"
+
+    test_markers = (
+        "pytest",
+        "python -m unittest",
+        "ruff",
+        "mypy",
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "cargo test",
+        "go test",
+    )
+    if any(marker in lowered for marker in test_markers):
+        return "test"
+
+    read_only_markers = (
+        "git status",
+        "git diff",
+        "git show",
+        "git log",
+        "ls",
+        "dir",
+        "pwd",
+        "type ",
+        "cat ",
+        "get-content",
+        "select-string",
+        "findstr",
+    )
+    if any(lowered == marker.strip() or lowered.startswith(marker) for marker in read_only_markers):
+        return "read_only"
+
+    return "general"
+
+
 BASE_TOOL_SPECS = {
-    "list_files": {
-        "schema": {"path": "str='.'"},
-        "risky": False,
-        "description": "List files in the workspace.",
-    },
-    "read_file": {
-        "schema": {"path": "str", "start": "int=1", "end": "int=800"},
-        "risky": False,
-        "description": "Read a UTF-8 file by line range.",
-    },
-    "write_file": {
-        "schema": {"path": "str", "content": "str"},
-        "risky": True,
-        "description": "Write a text file.",
-    },
-    "edit_file": {
-        "schema": {"path": "str", "old_text": "str", "new_text": "str"},
-        "risky": True,
-        "description": "Replace one exact text block in a file.",
-    },
-    "search_text": {
-        "schema": {"pattern": "str", "path": "str='.'"},
-        "risky": False,
-        "description": "Search the workspace with rg or a simple fallback.",
-    },
-    "run_shell": {
-        "schema": {"command": "str", "timeout": "int=60"},
-        "risky": True,
-        "description": "Run a shell command in the repo root.",
-    }
+    "list_files": ToolSpec(
+        name="list_files",
+        fields={"path": ToolField("str", required=False, default=".")},
+        risky=False,
+        description="List files in the workspace.",
+    ),
+    "read_file": ToolSpec(
+        name="read_file",
+        fields={
+            "path": ToolField("str"),
+            "start": ToolField("int", required=False, default=1, minimum=1),
+            "end": ToolField("int", required=False, default=800, minimum=1),
+        },
+        risky=False,
+        description="Read a UTF-8 file by line range.",
+    ),
+    "write_file": ToolSpec(
+        name="write_file",
+        fields={"path": ToolField("str"), "content": ToolField("str")},
+        risky=True,
+        description="Write a text file.",
+    ),
+    "edit_file": ToolSpec(
+        name="edit_file",
+        fields={"path": ToolField("str"), "old_text": ToolField("str"), "new_text": ToolField("str")},
+        risky=True,
+        description="Replace one exact text block in a file.",
+    ),
+    "search_text": ToolSpec(
+        name="search_text",
+        fields={"pattern": ToolField("str"), "path": ToolField("str", required=False, default=".")},
+        risky=False,
+        description="Search the workspace with rg or a simple fallback.",
+    ),
+    "run_shell": ToolSpec(
+        name="run_shell",
+        fields={
+            "command": ToolField("str"),
+            "timeout": ToolField("int", required=False, default=60, minimum=1, maximum=600),
+        },
+        risky=True,
+        description="Run a shell command in the repo root.",
+    ),
 }
 
-DELEGATE_TOOL_SPEC = {
-    "schema": {"task": "str", "max_steps": "int=3"},
-    "risky": False,
-    "description": "Ask a bounded read-only child agent to investigate.",
-}
+DELEGATE_TOOL_SPEC = ToolSpec(
+    name="delegate",
+    fields={"task": ToolField("str"), "max_steps": ToolField("int", required=False, default=3, minimum=1)},
+    risky=False,
+    description="Ask a bounded read-only child agent to investigate.",
+)
 
-USE_SKILL_TOOL_SPEC = {
-    "schema": {"name": "str"},
-    "risky": False,
-    "description": "Load a skill's instructions by name before doing the work it describes.",
-}
+USE_SKILL_TOOL_SPEC = ToolSpec(
+    name="use_skill",
+    fields={"name": ToolField("str")},
+    risky=False,
+    description="Load a skill's instructions by name before doing the work it describes.",
+)
 
 
 def legal_tool_names():
@@ -79,20 +207,82 @@ def _context_skills(context):
     return provider() or {}
 
 
+def _registry_entry(spec, context, runner):
+    return {
+        "schema": dict(spec.fields),
+        "risky": spec.risky,
+        "description": spec.description,
+        "run": partial(runner, context),
+    }
+
+
+def _json_schema_for_fields(fields):
+    properties = {}
+    required = []
+    type_map = {
+        "str": "string",
+        "int": "integer",
+    }
+    for name, field in fields.items():
+        json_type = type_map.get(str(field.type), "string")
+        payload = {"type": json_type}
+        if not field.required:
+            payload["default"] = field.default
+        if field.minimum is not None:
+            payload["minimum"] = field.minimum
+        if field.maximum is not None:
+            payload["maximum"] = field.maximum
+        properties[name] = payload
+        if field.required:
+            required.append(name)
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+def native_tool_definitions(tools, native_tool_format):
+    definitions = []
+    for name, tool in tools.items():
+        schema = _json_schema_for_fields(tool["schema"])
+        if native_tool_format == "openai_responses":
+            definitions.append(
+                {
+                    "type": "function",
+                    "name": name,
+                    "description": tool["description"],
+                    "parameters": schema,
+                }
+            )
+        elif native_tool_format == "anthropic_messages":
+            definitions.append(
+                {
+                    "name": name,
+                    "description": tool["description"],
+                    "input_schema": schema,
+                }
+            )
+        else:
+            raise ValueError(f"unknown native tool format: {native_tool_format}")
+    return definitions
+
+
 def build_tool_registry(context):
     # 工具不是动态发现的，而是显式注册的。
     # 这样模型看到的是一个有边界、可审计的动作集合。
     tools = {
-        name: {**spec, "run": partial(_TOOL_RUNNERS[name], context)}
+        name: _registry_entry(spec, context, _TOOL_RUNNERS[name])
         for name, spec in BASE_TOOL_SPECS.items()
     }
     # 子 agent 是刻意做成受限能力的：一旦深度耗尽，
     # 就连 delegate 这个工具都不再暴露给模型。
     if context.depth < context.max_depth:
-        tools["delegate"] = {**DELEGATE_TOOL_SPEC, "run": partial(tool_delegate, context)}
+        tools["delegate"] = _registry_entry(DELEGATE_TOOL_SPEC, context, tool_delegate)
     # 只有真的存在 skill 时才暴露 use_skill，避免给模型一个无处可用的工具。
     if _context_skills(context):
-        tools["use_skill"] = {**USE_SKILL_TOOL_SPEC, "run": partial(tool_use_skill, context)}
+        tools["use_skill"] = _registry_entry(USE_SKILL_TOOL_SPEC, context, tool_use_skill)
     return tools
 
 
@@ -100,8 +290,47 @@ def tool_example(name):
     return TOOL_EXAMPLES.get(name, "")
 
 
+def _tool_spec(name):
+    if name in BASE_TOOL_SPECS:
+        return BASE_TOOL_SPECS[name]
+    if name == "delegate":
+        return DELEGATE_TOOL_SPEC
+    if name == "use_skill":
+        return USE_SKILL_TOOL_SPEC
+    return None
+
+
+def _validate_schema(name, args):
+    spec = _tool_spec(name)
+    if spec is None:
+        return
+    for field_name, field in spec.fields.items():
+        if field.required and field_name not in args:
+            raise ValueError(f"missing required argument: {field_name}")
+        if field_name not in args:
+            continue
+        value = args[field_name]
+        if field.type == "str":
+            if not isinstance(value, str):
+                raise ValueError(f"{field_name} must be a string")
+        elif field.type == "int":
+            try:
+                number = int(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field_name} must be an integer") from exc
+            if field.minimum is not None and number < field.minimum:
+                if field.maximum is not None:
+                    raise ValueError(f"{field_name} must be in [{field.minimum}, {field.maximum}]")
+                raise ValueError(f"{field_name} must be >= {field.minimum}")
+            if field.maximum is not None and number > field.maximum:
+                if field.minimum is not None:
+                    raise ValueError(f"{field_name} must be in [{field.minimum}, {field.maximum}]")
+                raise ValueError(f"{field_name} must be <= {field.maximum}")
+
+
 def validate_tool(context, name, args):
     args = args or {}
+    _validate_schema(name, args)
 
     if name == "list_files":
         path = context.path(args.get("path", "."))
@@ -253,7 +482,7 @@ def tool_run_shell(context, args):
         # 目的是减少敏感信息被意外带进命令执行环境的风险。
         env=context.shell_env(),
     )
-    return textwrap.dedent(
+    content = textwrap.dedent(
         f"""\
         exit_code: {result.returncode}
         stdout:
@@ -262,13 +491,19 @@ def tool_run_shell(context, args):
         {result.stderr.strip() or "(empty)"}
         """
     ).strip()
+    return ToolRunOutput(
+        content=content,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        exit_code=result.returncode,
+    )
 
 
 def tool_write_file(context, args):
     path = context.path(args["path"])
     content = str(args["content"])
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    write_text_atomic(path, content)
     return f"wrote {path.relative_to(context.root)} ({len(content)} chars)"
 
 
@@ -285,7 +520,7 @@ def tool_edit_file(context, args):
     count = text.count(old_text)
     if count != 1:
         raise ValueError(f"old_text must occur exactly once, found {count}")
-    path.write_text(text.replace(old_text, str(args["new_text"]), 1), encoding="utf-8")
+    write_text_atomic(path, text.replace(old_text, str(args["new_text"]), 1))
     return f"edited {path.relative_to(context.root)}"
 
 

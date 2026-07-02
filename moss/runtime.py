@@ -4,6 +4,7 @@ Moss 就是包在模型外面的控制循环：负责组 prompt、解析模型�
 校验并执行工具、写 trace、更新工作记忆，以及在合适的时候停下来。
 """
 
+import difflib
 import json
 import os
 import re
@@ -16,7 +17,7 @@ from .features import memory as memorylib
 from . import security as securitylib
 from .context_manager import ContextManager
 from .checkpoint import CHECKPOINT_NONE_STATUS
-from .prompt_prefix import build_prompt_prefix, tool_signature, skill_signature
+from .prompt_prefix import build_prompt_prefix, tool_signature
 from .run_store import RunStore
 from .security import REDACTED_VALUE
 from .session_store import SessionStore
@@ -95,6 +96,7 @@ class Moss:
             self.feature_flags.update({str(key): bool(value) for key, value in feature_flags.items()})
         self.allowed_tools = self._normalize_allowed_tools(allowed_tools)
         self.run_store = run_store or RunStore(Path(workspace.repo_root) / ".moss" / "runs")
+        self.interrupted_runs = self.recover_interrupted_runs()
         self.session = session or {
             "id": datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
             "created_at": now(),
@@ -191,6 +193,22 @@ class Moss:
     def build_tools(self):
         return toolkit.build_tool_registry(self.tool_context())
 
+    def native_tool_definitions(self):
+        native_tool_format = str(getattr(self.model_client, "native_tool_format", "") or "")
+        if not native_tool_format:
+            return None
+        return toolkit.native_tool_definitions(self.tools, native_tool_format)
+
+    def recover_interrupted_runs(self):
+        # 启动恢复只属于顶层 agent。delegate 子 agent 与父 agent 共用同一个
+        # run_store，且是在父 agent 运行途中（父 run 的 task_state 正处于
+        # running）被构造的——如果这里对共享 run_store 做扫描，会把父 agent
+        # 正在进行的 run 误判成 interrupted 并覆写它的 report。所以 depth>0
+        # 一律跳过恢复。
+        if self.depth > 0:
+            return []
+        return self.run_store.mark_interrupted_runs()
+
     def build_skills(self):
         return skilllib.build_skill_registry(self.root)
 
@@ -260,30 +278,10 @@ class Moss:
         return self.memory.render_memory_text()
 
     def history_text(self):
-        history = self.session["history"]
-        if not history:
-            return "- empty"
-
-        lines = []
-        seen_reads = set()
-        recent_start = max(0, len(history) - 6)
-        for index, item in enumerate(history):
-            recent = index >= recent_start
-            if item["role"] == "tool" and item["name"] == "read_file" and not recent:
-                path = str(item["args"].get("path", ""))
-                if path in seen_reads:
-                    continue
-                seen_reads.add(path)
-
-            if item["role"] == "tool":
-                limit = 900 if recent else 180
-                lines.append(f"[tool:{item['name']}] {json.dumps(item['args'], sort_keys=True)}")
-                lines.append(clip(item["content"], limit))
-            else:
-                limit = 900 if recent else 220
-                lines.append(f"[{item['role']}] {clip(item['content'], limit)}")
-
-        return clip("\n".join(lines), MAX_HISTORY)
+        # 单一口径：直接复用 ContextManager 的历史渲染，避免出现两套
+        # 略有差异的压缩逻辑（曾经这里有一份独立实现，会和真正进 prompt 的
+        # 历史对不上，metadata 里的 history_chars 也因此失真）。
+        return clip(self.context_manager.render_history_text(), MAX_HISTORY)
 
     def feature_enabled(self, name):
         return bool(self.feature_flags.get(str(name), False))
@@ -293,8 +291,22 @@ class Moss:
         return prompt
 
     def record(self, item):
-        self.session["history"].append(item)
+        # session 会进入下一轮 prompt，也会长期落盘；这里必须和 trace/report
+        # 一样先过脱敏边界，避免一次工具输出把 secret 带进可恢复上下文。
+        safe_item = self.redact_artifact(dict(item or {}))
+        self.session["history"].append(safe_item)
         self.session_path = self.session_store.save(self.session)
+
+    def start_run(self, task_state):
+        run_dir = self.run_store.run_dir(task_state)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        self.write_task_state(task_state)
+        return run_dir
+
+    def write_task_state(self, task_state):
+        # task_state 同样是落盘审计工件，不能绕过 runtime 的 secret 策略。
+        payload = self.redact_artifact(task_state.to_dict())
+        return self.run_store.write_task_state_payload(task_state.run_id, payload)
 
     @staticmethod
     def looks_sensitive_env_name(name):
@@ -470,13 +482,33 @@ class Moss:
             self.memory.remember_file(canonical_path)
         if name == "read_file":
             summary = memorylib.summarize_read_result(result)
-            self.memory.set_file_summary(canonical_path, summary)
-            self.memory.append_note(summary, tags=(canonical_path,), source=canonical_path)
+            self.set_memory_file_summary(canonical_path, summary)
+            self.append_memory_note(summary, tags=(canonical_path,), source=canonical_path)
         elif name in {"write_file", "edit_file"}:
             self.memory.invalidate_file_summary(canonical_path)
 
     def note_tool(self, name, args, result):
         self.update_memory_after_tool(name, args, result)
+
+    def safe_memory_text(self, text):
+        safe_text = self.redact_text(text)
+        if memorylib.reject_memory_reason(safe_text):
+            return ""
+        return safe_text
+
+    def append_memory_note(self, text, **kwargs):
+        safe_text = self.safe_memory_text(text)
+        if not safe_text:
+            return False
+        self.memory.append_note(safe_text, **kwargs)
+        return True
+
+    def set_memory_file_summary(self, path, summary):
+        safe_summary = self.safe_memory_text(summary)
+        if not safe_summary:
+            return False
+        self.memory.set_file_summary(path, safe_summary)
+        return True
 
     def record_process_note_for_tool(self, name, metadata):
         status = str(metadata.get("tool_status", "")).strip()
@@ -491,7 +523,7 @@ class Moss:
         else:
             text = f"{name} rejected; choose a different action before retry"
         tags = ["process", status, *affected_paths]
-        self.memory.append_note(text, tags=tuple(tags), source=name, kind="process")
+        self.append_memory_note(text, tags=tuple(tags), source=name, kind="process")
         self.session["memory"] = self.memory.to_dict()
 
     def reject_durable_reason(self, note_text):
@@ -536,7 +568,7 @@ class Moss:
                 match = pattern.match(text)
                 if not match:
                     continue
-                note_text = match.group(1).strip()
+                note_text = self.redact_text(match.group(1).strip())
                 if note_text:
                     reason = self.reject_durable_reason(note_text)
                     if reason:
@@ -681,7 +713,8 @@ class Moss:
         return toolkit.tool_search_text(self.tool_context(), args)
 
     def tool_run_shell(self, args):
-        return toolkit.tool_run_shell(self.tool_context(), args)
+        result = toolkit.tool_run_shell(self.tool_context(), args)
+        return result.content if hasattr(result, "content") else result
 
     def tool_write_file(self, args):
         return toolkit.tool_write_file(self.tool_context(), args)
@@ -692,21 +725,55 @@ class Moss:
     def tool_delegate(self, args):
         return toolkit.tool_delegate(self.tool_context(), args)
 
-    @staticmethod
-    def _approval_summary(name, args):
-        # 审批提示要一眼能看懂：write_file 把整份文件内容塞进 [y/N] 提示里
-        # 会刷屏且没法读，所以这里对每种工具挑出最有信息量的一小段来展示。
+    def _approval_summary(self, name, args):
+        # 审批提示要一眼能看懂：写文件类工具展示脱敏 diff，shell 展示命令摘要。
         args = args or {}
-        if name == "write_file":
-            content = str(args.get("content", ""))
-            return f"{args.get('path', '')} ({len(content)} chars)"
-        if name == "edit_file":
-            return str(args.get("path", ""))
+        if name in {"write_file", "edit_file"}:
+            preview = self._file_change_preview(name, args)
+            if preview:
+                return preview
         if name == "run_shell":
             command = str(args.get("command", ""))
-            return command if len(command) <= 200 else command[:197] + "..."
+            command_summary = command if len(command) <= 200 else command[:197] + "..."
+            risk_class = toolkit.classify_shell_command(command)
+            return f"[{risk_class}] {command_summary}"
         summary = json.dumps(args, ensure_ascii=True)
         return summary if len(summary) <= 200 else summary[:197] + "..."
+
+    def _file_change_preview(self, name, args):
+        raw_path = str(args.get("path", "")).strip()
+        if not raw_path:
+            return ""
+        try:
+            path = self.path(raw_path)
+        except Exception:
+            return raw_path
+        try:
+            before = path.read_text(encoding="utf-8") if path.exists() and path.is_file() else ""
+        except OSError:
+            before = ""
+        if name == "write_file":
+            after = str(args.get("content", ""))
+        else:
+            old_text = str(args.get("old_text", ""))
+            new_text = str(args.get("new_text", ""))
+            after = before.replace(old_text, new_text, 1) if old_text and before.count(old_text) == 1 else before
+        try:
+            rel_path = path.relative_to(self.root).as_posix()
+        except ValueError:
+            rel_path = raw_path
+        diff_lines = list(
+            difflib.unified_diff(
+                before.splitlines(),
+                after.splitlines(),
+                fromfile="before",
+                tofile="after",
+                lineterm="",
+            )
+        )
+        if not diff_lines:
+            return rel_path
+        return self.redact_text(clip("\n".join([rel_path, *diff_lines]), 800))
 
     def approve(self, name, args):
         if self.read_only:

@@ -1,5 +1,5 @@
 from moss.prompt_prefix import build_prompt_prefix, tool_signature
-from moss.tools import build_tool_registry
+from moss.tools import ToolField, build_tool_registry
 from moss.workspace import WorkspaceContext
 
 
@@ -51,6 +51,38 @@ def test_build_prompt_prefix_renders_tools_and_workspace_metadata(tmp_path):
     assert prefix.workspace_fingerprint == workspace.fingerprint()
     assert prefix.tool_signature == tool_signature(tools)
     assert prefix.built_at == "2026-06-02T00:00:00+08:00"
+
+
+def test_prompt_prefix_renders_executable_schema_fields_as_concise_text(tmp_path):
+    (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
+    workspace = WorkspaceContext.build(tmp_path)
+    tools = build_tool_registry(_Agent(tmp_path))
+
+    prefix = build_prompt_prefix(workspace=workspace, tools=tools)
+
+    assert isinstance(tools["read_file"]["schema"]["start"], ToolField)
+    assert "- read_file(path: str, start: int=1, end: int=800)" in prefix.text
+    assert "- run_shell(command: str, timeout: int=60)" in prefix.text
+    assert "ToolField(" not in prefix.text
+
+
+def test_tool_signature_changes_when_executable_schema_field_changes():
+    base = {
+        "run_shell": {
+            "schema": {"command": ToolField("str"), "timeout": ToolField("int", required=False, default=60, minimum=1, maximum=600)},
+            "risky": True,
+            "description": "Run shell",
+        }
+    }
+    changed = {
+        "run_shell": {
+            "schema": {"command": ToolField("str"), "timeout": ToolField("int", required=False, default=30, minimum=1, maximum=600)},
+            "risky": True,
+            "description": "Run shell",
+        }
+    }
+
+    assert tool_signature(base) != tool_signature(changed)
 
 
 def test_build_prompt_prefix_lists_skills_under_tools(tmp_path):

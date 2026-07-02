@@ -2,6 +2,11 @@
 
 这个模块负责决定：每一轮到底把多少 prefix、memory、相关笔记、历史
 以及当前用户请求送进模型。
+
+预算的计量单位是「估算 token」而不是字符数（见 `token_budget`）：真实约束
+是模型上下文窗口和费用，都按 token 计，而 CJK 文本的 token 密度远高于英文，
+用字符数当预算会系统性低估中文内容的开销。计量函数可通过 `measure` 注入，
+测试里会传 `len` 以获得确定的字符级行为。
 """
 
 from __future__ import annotations
@@ -9,36 +14,53 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from .token_budget import clip_to_budget, estimate_tokens
 
-DEFAULT_TOTAL_BUDGET = 48000
+
+# 预算与 floor 以「估算 token」为单位。
+DEFAULT_TOTAL_BUDGET = 12000
 DEFAULT_SECTION_BUDGETS = {
-    "prefix": 12000,
-    "memory": 4000,
-    "relevant_memory": 3000,
-    "history": 24000,
-}
-DEFAULT_SECTION_FLOORS = {
-    "prefix": 4000,
+    "prefix": 3000,
     "memory": 1000,
     "relevant_memory": 800,
     "history": 6000,
+}
+DEFAULT_SECTION_FLOORS = {
+    "prefix": 1000,
+    "memory": 250,
+    "relevant_memory": 200,
+    "history": 1500,
 }
 # 当 prompt 超预算时，会优先压缩这些 section。
 DEFAULT_REDUCTION_ORDER = ("relevant_memory", "history", "memory", "prefix")
 SECTION_ORDER = ("prefix", "memory", "relevant_memory", "history", "current_request")
 CURRENT_REQUEST_SECTION = "current_request"
 RELEVANT_MEMORY_LIMIT = 3
+# 工具输出在历史里被截断时，保留哪一端取决于关键信息的位置：
+# run_shell 是 "exit_code(顶部) / stdout / stderr(底部)"，两端都要留。
+_HISTORY_KEEP = {"run_shell": "middle"}
+# 判断 shell 输出里“说明成败”的信号行时用到的关键词。
+_SHELL_SIGNAL_KEYWORDS = (
+    "exit_code",
+    "error",
+    "err:",
+    "fail",
+    "failed",
+    "failure",
+    "traceback",
+    "exception",
+    "fatal",
+    "no such",
+    "not found",
+    "cannot",
+    "denied",
+    "assert",
+)
 
 
-def _tail_clip(text, limit):
-    text = str(text)
-    if limit <= 0:
-        return ""
-    if len(text) <= limit:
-        return text
-    if limit <= 3:
-        return text[:limit]
-    return text[: limit - 3] + "..."
+def _is_shell_signal_line(line):
+    lowered = line.lower()
+    return any(keyword in lowered for keyword in _SHELL_SIGNAL_KEYWORDS)
 
 
 @dataclass
@@ -65,8 +87,11 @@ class ContextManager:
         section_budgets=None,
         section_floors=None,
         reduction_order=None,
+        measure=None,
     ):
         self.agent = agent
+        # measure 决定预算的计量单位：默认 token 估算；测试可注入 len 走字符级。
+        self.measure = measure or estimate_tokens
         self.total_budget = int(total_budget)
         self.section_budgets = dict(DEFAULT_SECTION_BUDGETS)
         if section_budgets:
@@ -74,6 +99,10 @@ class ContextManager:
         self._section_floor_overrides = {str(key): int(value) for key, value in (section_floors or {}).items()}
         self.section_floors = self._compute_section_floors()
         self.reduction_order = tuple(reduction_order or DEFAULT_REDUCTION_ORDER)
+
+    def _clip(self, text, limit, keep="head"):
+        """按当前计量单位把 text 截断到 limit 以内。"""
+        return clip_to_budget(text, int(limit), measure=self.measure, keep=keep)
 
     def build(self, user_message):
         """按预算组装一轮完整 prompt。
@@ -88,8 +117,8 @@ class ContextManager:
         - 输出：`(prompt, metadata)`。
           `prompt` 是最终发送给模型的文本；
           `metadata` 记录了每个 section 的原始长度、裁剪后的长度、是否触发了
-          预算收缩等信息，后续会进入 trace/report，便于解释这轮 prompt
-          是怎么被拼出来的。
+          预算收缩、以及按 token 估算的规模等信息，后续会进入 trace/report，
+          便于解释这轮 prompt 是怎么被拼出来的。
 
         在 agent 链路里的位置：
         它位于 `Moss.ask()` 的每轮模型调用之前，是“真正发请求给模型”
@@ -143,15 +172,23 @@ class ContextManager:
         # 这里的顺序体现了平台偏好：
         # 先牺牲 relevant_memory，再牺牲 history，然后才动 memory 和 prefix。
         # 最新用户请求永远不裁剪，因为那是本轮最重要的输入。
-        while len(prompt) > self.total_budget:
-            overflow = len(prompt) - self.total_budget
+        #
+        # 收缩以「实际渲染规模」为基准而不是「名义预算」：只有当某个 section
+        # 真的在占用空间（rendered > floor）时才去削它，并且直接把它的预算压到
+        # 「当前渲染规模 - 溢出量」，保证每一步都真正减少内容，不会因为预算高于
+        # 实际内容而空转。
+        while self.measure(prompt) > self.total_budget:
+            overflow = self.measure(prompt) - self.total_budget
             reduced = False
             for section in self.reduction_order:
                 floor = int(self.section_floors.get(section, 0))
                 current_budget = int(budgets.get(section, 0))
                 if current_budget <= floor:
                     continue
-                new_budget = max(floor, current_budget - overflow)
+                rendered_size = self.measure(rendered[section].rendered)
+                if rendered_size <= floor:
+                    continue
+                new_budget = max(floor, rendered_size - overflow)
                 if new_budget >= current_budget:
                     continue
                 reduction_log.append(
@@ -170,6 +207,11 @@ class ContextManager:
             if not reduced:
                 break
 
+        # 兜底：如果所有可压 section 都到了 floor，prompt 仍然超预算（通常是
+        # 当前请求本身巨大，而它按设计永不裁剪），如实标记出来，让上层可见，
+        # 而不是悄悄把超大 prompt 发出去。
+        over_budget_unrecoverable = self.measure(prompt) > self.total_budget
+
         metadata = self._metadata(
             prompt=prompt,
             rendered=rendered,
@@ -178,6 +220,7 @@ class ContextManager:
             selected_notes=selected_notes,
             user_message=user_message,
             section_texts=section_texts,
+            over_budget_unrecoverable=over_budget_unrecoverable,
         )
         return prompt, metadata
 
@@ -236,7 +279,8 @@ class ContextManager:
                 rendered[section] = self._render_history_section(int(budget or 0))
             else:
                 raw = section_texts[section]
-                rendered_text = _tail_clip(raw, int(budget)) if budget is not None else raw
+                # prefix / memory 的信息在开头（规则、任务摘要在前），保头截断。
+                rendered_text = self._clip(raw, int(budget), keep="head") if budget is not None else raw
                 rendered[section] = SectionRender(raw=raw, budget=int(budget) if budget is not None else 0, rendered=rendered_text, details={})
         return rendered
 
@@ -260,19 +304,22 @@ class ContextManager:
                 },
             )
 
-        per_note_budget = self._per_note_budget(budget, len(note_texts), header)
         rendered_notes = []
-        while True:
-            # 让每条 note 平分这一段的预算，避免一条超长笔记把其他笔记都挤掉。
-            rendered_notes = [_tail_clip(text, per_note_budget) for text in note_texts]
+        for text in note_texts:
+            candidate_notes = [*rendered_notes, text]
+            candidate = "\n".join([header] + [f"- {item}" for item in candidate_notes])
+            if budget <= 0 or self.measure(candidate) <= budget:
+                rendered_notes = candidate_notes
+        if rendered_notes:
             rendered = "\n".join([header] + [f"- {text}" for text in rendered_notes])
-            if len(rendered) <= budget or per_note_budget <= 1:
-                break
-            per_note_budget -= 1
-
-        if len(rendered) > budget and budget > 0:
-            rendered = _tail_clip(raw, budget)
-            rendered_notes = [rendered]
+            per_note_budget = 0
+        else:
+            per_note_budget = max(1, budget - self.measure(header) - 3)
+            rendered_notes = [self._clip(note_texts[0], per_note_budget, keep="head")]
+            rendered = "\n".join([header, f"- {rendered_notes[0]}"])
+            if self.measure(rendered) > budget and budget > 0:
+                rendered = self._clip(raw, budget, keep="head")
+                rendered_notes = [rendered]
 
         return SectionRender(
             raw=raw,
@@ -290,9 +337,19 @@ class ContextManager:
     def _per_note_budget(self, budget, note_count, header):
         if note_count <= 0:
             return 0
-        overhead = len(header) + 3 * note_count
+        overhead = self.measure(header) + 3 * note_count
         usable = max(0, budget - overhead)
         return max(1, usable // note_count)
+
+    def render_history_text(self):
+        """把当前会话历史渲染成一段文本，供 delegate、报告等复用。
+
+        它和 `build()` 走的是同一套历史压缩逻辑（同样的最近窗口、重复读折叠、
+        文件摘要复用、旧 shell 摘要），因此不会再出现“两套历史口径对不上”的
+        问题——这正是过去 runtime 里另有一份 `history_text` 实现时的隐患。
+        """
+        budget = int(self.section_budgets.get("history", DEFAULT_SECTION_BUDGETS["history"]))
+        return self._render_history_section(budget).rendered
 
     def _render_history_section(self, budget):
         history = list(getattr(self.agent, "session", {}).get("history", []))
@@ -322,29 +379,30 @@ class ContextManager:
             candidate_lines = list(entry.get("lines", []))
             candidate_entries = candidate_lines + rendered_entries
             candidate_rendered = "\n".join(["Transcript:", *candidate_entries])
-            if len(candidate_rendered) <= budget:
+            if self.measure(candidate_rendered) <= budget:
                 rendered_entries = candidate_entries
                 continue
             if recent:
-                available = budget - len("Transcript:")
+                available = budget - self.measure("Transcript:")
                 if rendered_entries:
-                    available -= sum(len(line) + 1 for line in rendered_entries)
+                    available -= sum(self.measure(line) + 1 for line in rendered_entries)
                 available = max(20, available - 1)
-                candidate_lines = [_tail_clip(line, available) for line in candidate_lines]
+                candidate_lines = [self._clip(line, available, keep="head") for line in candidate_lines]
                 candidate_entries = candidate_lines + rendered_entries
                 candidate_rendered = "\n".join(["Transcript:", *candidate_entries])
-                if len(candidate_rendered) <= budget:
+                if self.measure(candidate_rendered) <= budget:
                     rendered_entries = candidate_entries
             else:
-                smaller_lines = [_tail_clip(line, 20) for line in candidate_lines]
+                smaller_lines = [self._clip(line, 20, keep="head") for line in candidate_lines]
                 smaller_entries = smaller_lines + rendered_entries
                 smaller_rendered = "\n".join(["Transcript:", *smaller_entries])
-                if len(smaller_rendered) <= budget:
+                if self.measure(smaller_rendered) <= budget:
                     rendered_entries = smaller_entries
         rendered = "\n".join(["Transcript:", *rendered_entries])
 
-        if len(rendered) > budget and budget > 0:
-            rendered = _tail_clip(raw, budget)
+        # 兜底截断保留结尾：raw 里旧的在前、新的在后，保尾才能留住最近的历史。
+        if self.measure(rendered) > budget and budget > 0:
+            rendered = self._clip(raw, budget, keep="tail")
 
         return SectionRender(
             raw=raw,
@@ -417,10 +475,18 @@ class ContextManager:
     def _summarize_old_tool_item(self, item):
         if item["name"] == "run_shell":
             command = str(item["args"].get("command", "")).strip() or "shell"
-            lines = [line.strip() for line in str(item.get("content", "")).splitlines() if line.strip()]
-            summary = " | ".join(lines[:3]) if lines else "(empty)"
-            return f"{command} -> {summary}"
+            return f"{command} -> {self._shell_summary(str(item.get('content', '')))}"
         return self._render_history_item(item, 60)[0]
+
+    def _shell_summary(self, content):
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        if not lines:
+            return "(empty)"
+        # 优先保留“说明成败”的信号行（exit_code / error / traceback ...）。
+        # 常见失败输出里报错在末尾，纯取前 3 行会恰好丢掉最关键的信息。
+        signal_lines = [line for line in lines if _is_shell_signal_line(line)]
+        chosen = signal_lines[:3] if signal_lines else lines[:3]
+        return " | ".join(chosen)
 
     def _raw_history_text(self, history):
         if not history:
@@ -437,9 +503,10 @@ class ContextManager:
     def _render_history_item(self, item, line_limit):
         if item["role"] == "tool":
             prefix = f"[tool:{item['name']}] {json.dumps(item['args'], sort_keys=True)}"
-            content = _tail_clip(item["content"], max(20, line_limit))
+            keep = _HISTORY_KEEP.get(item["name"], "head")
+            content = self._clip(item["content"], max(20, line_limit), keep=keep)
             return [prefix, content]
-        return [f"[{item['role']}] {_tail_clip(item['content'], line_limit)}"]
+        return [f"[{item['role']}] {self._clip(item['content'], line_limit, keep='head')}"]
 
     def _assemble_prompt(self, rendered):
         # 顺序是刻意设计的：稳定规则放前面，最新请求放最后。
@@ -453,23 +520,40 @@ class ContextManager:
             ]
         ).strip()
 
-    def _metadata(self, prompt, rendered, budgets, reduction_log, selected_notes, user_message, section_texts):
+    def _metadata(
+        self,
+        prompt,
+        rendered,
+        budgets,
+        reduction_log,
+        selected_notes,
+        user_message,
+        section_texts,
+        over_budget_unrecoverable=False,
+    ):
+        measure_unit = "chars" if self.measure is len else "tokens"
         section_metadata = {}
         for section in SECTION_ORDER[:-1]:
             section_metadata[section] = {
                 "raw_chars": rendered[section].raw_chars,
                 "budget_chars": int(budgets.get(section, 0)),
                 "rendered_chars": rendered[section].rendered_chars,
+                "rendered_units": self.measure(rendered[section].rendered),
             }
         section_metadata[CURRENT_REQUEST_SECTION] = {
             "raw_chars": len(section_texts[CURRENT_REQUEST_SECTION]),
             "budget_chars": None,
             "rendered_chars": len(rendered[CURRENT_REQUEST_SECTION].rendered),
+            "rendered_units": self.measure(rendered[CURRENT_REQUEST_SECTION].rendered),
         }
         return {
             "prompt_chars": len(prompt),
+            "prompt_tokens": estimate_tokens(prompt),
+            "measure_unit": measure_unit,
+            "prompt_measured": self.measure(prompt),
             "prompt_budget_chars": self.total_budget,
-            "prompt_over_budget": len(prompt) > self.total_budget,
+            "prompt_over_budget": self.measure(prompt) > self.total_budget,
+            "over_budget_unrecoverable": bool(over_budget_unrecoverable),
             "section_order": list(SECTION_ORDER),
             "section_budgets": {
                 section: (None if section == CURRENT_REQUEST_SECTION else int(budgets.get(section, 0)))

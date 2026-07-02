@@ -19,6 +19,8 @@ class FakeModelClient:
         self.outputs = list(outputs)
         self.prompts = []
         self.supports_prompt_cache = False
+        self.supports_native_tools = bool(getattr(self, "supports_native_tools", False))
+        self.native_tool_format = str(getattr(self, "native_tool_format", "") or "")
         self.last_completion_metadata = {}
 
     def complete(self, prompt, max_new_tokens, **kwargs):
@@ -38,6 +40,8 @@ class OllamaModelClient:
         self.top_p = top_p
         self.timeout = timeout
         self.supports_prompt_cache = False
+        self.supports_native_tools = False
+        self.native_tool_format = ""
         self.last_completion_metadata = {}
 
     def complete(self, prompt, max_new_tokens, **kwargs):
@@ -88,13 +92,49 @@ def _normalize_versioned_base_url(base_url):
     return base
 
 
+def _parse_native_tool_args(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _render_native_tool_call(name, args):
+    return "<tool>" + json.dumps(
+        {"name": str(name or ""), "args": _parse_native_tool_args(args)},
+        separators=(",", ":"),
+        sort_keys=True,
+    ) + "</tool>"
+
+
 def _extract_openai_text(data):
+    for item in data.get("output", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") in {"function_call", "tool_call"}:
+            function = item.get("function", {}) if isinstance(item.get("function"), dict) else {}
+            name = item.get("name") or function.get("name")
+            arguments = item.get("arguments") if item.get("arguments") is not None else function.get("arguments")
+            if name:
+                return _render_native_tool_call(name, arguments)
+
     if data.get("output_text"):
         return data["output_text"]
 
     for item in data.get("output", []):
         for content in item.get("content", []):
             if isinstance(content, dict):
+                if content.get("type") in {"function_call", "tool_call"}:
+                    function = content.get("function", {}) if isinstance(content.get("function"), dict) else {}
+                    name = content.get("name") or function.get("name")
+                    arguments = content.get("arguments") if content.get("arguments") is not None else function.get("arguments")
+                    if name:
+                        return _render_native_tool_call(name, arguments)
                 text = content.get("text")
                 if text:
                     return text
@@ -102,6 +142,14 @@ def _extract_openai_text(data):
     choices = data.get("choices", [])
     if choices:
         message = choices[0].get("message", {})
+        for tool_call in message.get("tool_calls", []) or []:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function", {}) if isinstance(tool_call.get("function"), dict) else {}
+            name = tool_call.get("name") or function.get("name")
+            arguments = tool_call.get("arguments") if tool_call.get("arguments") is not None else function.get("arguments")
+            if name:
+                return _render_native_tool_call(name, arguments)
         content = message.get("content")
         if isinstance(content, str):
             return content
@@ -233,9 +281,11 @@ class OpenAICompatibleModelClient:
         # 当前只在明确支持 prompt cache 语义的后端上启用这条链路，
         # 避免对不支持的后端传一个“看起来统一、其实没意义”的伪参数。
         self.supports_prompt_cache = any(host in self.base_url for host in ("openai.com", "right.codes"))
+        self.supports_native_tools = True
+        self.native_tool_format = "openai_responses"
         self.last_completion_metadata = {}
 
-    def complete(self, prompt, max_new_tokens, prompt_cache_key=None, prompt_cache_retention=None):
+    def complete(self, prompt, max_new_tokens, prompt_cache_key=None, prompt_cache_retention=None, tools=None):
         """向 OpenAI-compatible `/responses` 接口发起一次模型调用。
 
         为什么存在：
@@ -277,6 +327,8 @@ class OpenAICompatibleModelClient:
             payload["prompt_cache_key"] = prompt_cache_key
         if self.supports_prompt_cache and prompt_cache_retention:
             payload["prompt_cache_retention"] = prompt_cache_retention
+        if tools:
+            payload["tools"] = list(tools)
 
         headers = {
             "Content-Type": "application/json",
@@ -352,6 +404,8 @@ class OpenAICompatibleModelClient:
 
 def _extract_anthropic_text(data):
     for item in data.get("content", []):
+        if isinstance(item, dict) and item.get("type") == "tool_use":
+            return _render_native_tool_call(item.get("name"), item.get("input", {}))
         if isinstance(item, dict) and item.get("type") == "text":
             text = item.get("text")
             if isinstance(text, str) and text:
@@ -367,9 +421,11 @@ class AnthropicCompatibleModelClient:
         self.temperature = temperature
         self.timeout = timeout
         self.supports_prompt_cache = False
+        self.supports_native_tools = True
+        self.native_tool_format = "anthropic_messages"
         self.last_completion_metadata = {}
 
-    def complete(self, prompt, max_new_tokens, prompt_cache_key=None, prompt_cache_retention=None):
+    def complete(self, prompt, max_new_tokens, prompt_cache_key=None, prompt_cache_retention=None, tools=None):
         # 为了保持统一接口，runtime 仍然会传缓存参数进来；
         # 这里只是显式丢弃，因为当前 Anthropic-compatible 路径没有接缓存复用。
         del prompt_cache_key, prompt_cache_retention
@@ -392,6 +448,8 @@ class AnthropicCompatibleModelClient:
         }
         if self.temperature is not None:
             payload["temperature"] = self.temperature
+        if tools:
+            payload["tools"] = list(tools)
 
         headers = {
             "Content-Type": "application/json",

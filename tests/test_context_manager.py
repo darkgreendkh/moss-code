@@ -58,6 +58,7 @@ def test_context_manager_reduces_relevant_memory_before_history_and_preserves_ne
             "relevant_memory": 120,
             "history": 400,
         },
+        measure=len,
     )
 
     prompt, metadata = manager.build("keep this request verbatim")
@@ -90,6 +91,7 @@ def test_context_manager_renders_top_three_episodic_notes_per_note_under_budget(
             "relevant_memory": 80,
             "history": 60,
         },
+        measure=len,
     ).build("recall")
 
     assert metadata["relevant_memory"]["selected_count"] == 3
@@ -99,17 +101,43 @@ def test_context_manager_renders_top_three_episodic_notes_per_note_under_budget(
         "alpha episodic note " + ("A" * 120),
         "beta episodic recall note " + ("B" * 120),
     ]
-    assert len(metadata["relevant_memory"]["rendered_notes"]) == 3
-    assert metadata["relevant_memory"]["rendered_count"] == 3
+    assert len(metadata["relevant_memory"]["rendered_notes"]) == 1
+    assert metadata["relevant_memory"]["rendered_count"] == 1
     assert metadata["relevant_memory"]["rendered_notes"][0].startswith("gamma episodi")
-    assert metadata["relevant_memory"]["rendered_notes"][1].startswith("alpha episodi")
-    assert metadata["relevant_memory"]["rendered_notes"][2].startswith("beta episodi")
     relevant_section = prompt.split("Relevant memory:\n", 1)[1].split("\n\nTranscript:", 1)[0]
-    assert len([line for line in relevant_section.splitlines() if line.startswith("- ")]) == 3
-    assert "alpha episodi" in relevant_section
-    assert "beta episodic" in relevant_section
+    assert len([line for line in relevant_section.splitlines() if line.startswith("- ")]) == 1
+    assert "alpha episodi" not in relevant_section
+    assert "beta episodic" not in relevant_section
     assert "gamma episodi" in relevant_section
     assert "older unmatched note" not in relevant_section
+
+
+def test_context_manager_prefers_complete_relevant_memory_notes_under_budget(tmp_path):
+    agent = build_agent(tmp_path, [])
+    first = "complete recall fact one"
+    second = "complete recall fact two"
+    third = "complete recall fact three " + ("X" * 120)
+    agent.memory.append_note(first, tags=("recall",), created_at="2026-04-07T10:00:00+00:00")
+    agent.memory.append_note(second, tags=("recall",), created_at="2026-04-07T10:01:00+00:00")
+    agent.memory.append_note(third, tags=("recall",), created_at="2026-04-07T10:02:00+00:00")
+
+    prompt, metadata = ContextManager(
+        agent,
+        total_budget=400,
+        section_budgets={
+            "prefix": 80,
+            "memory": 80,
+            "relevant_memory": 70,
+            "history": 80,
+        },
+        measure=len,
+    ).build("recall")
+    relevant_section = prompt.split("Relevant memory:\n", 1)[1].split("\n\nTranscript:", 1)[0]
+
+    assert metadata["relevant_memory"]["selected_count"] == 3
+    assert metadata["relevant_memory"]["rendered_notes"] == [second, first]
+    assert third not in relevant_section
+    assert "..." not in relevant_section
 
 
 def test_context_manager_preserves_current_request_when_over_budget(tmp_path):
@@ -129,6 +157,7 @@ def test_context_manager_preserves_current_request_when_over_budget(tmp_path):
             "relevant_memory": 80,
             "history": 80,
         },
+        measure=len,
     ).build(request)
 
     assert prompt.split("Current user request:\n", 1)[1] == request
@@ -237,3 +266,89 @@ def test_context_manager_relevant_memory_can_mix_durable_notes(tmp_path):
     assert metadata["relevant_memory"]["selected_durable_count"] == 1
     assert metadata["relevant_memory"]["selected_sources"] == ["project-conventions"]
     assert metadata["relevant_memory"]["selected_kinds"] == ["durable"]
+
+
+def test_context_manager_default_measure_is_token_based(tmp_path):
+    agent = build_agent(tmp_path, [])
+    _, metadata = ContextManager(agent).build("hello")
+    assert metadata["measure_unit"] == "tokens"
+    assert metadata["prompt_tokens"] >= 1
+    # 默认按 token 估算：token 数应当明显小于字符数（英文约 4:1）。
+    assert metadata["prompt_tokens"] < metadata["prompt_chars"]
+
+
+def test_context_manager_shell_summary_prioritizes_error_lines(tmp_path):
+    agent = build_agent(tmp_path, [])
+    agent.record(
+        {
+            "role": "tool",
+            "name": "run_shell",
+            "args": {"command": "deploy"},
+            "content": (
+                "starting job\nprocessing step 1\ninfo line\nnoise line\n"
+                "Traceback (most recent call last):\nValueError: boom\n"
+            ),
+            "created_at": "2026-04-07T09:00:00+00:00",
+        }
+    )
+    for minute in range(1, 7):
+        role = "user" if minute % 2 == 1 else "assistant"
+        agent.record(
+            {
+                "role": role,
+                "content": f"recent-{minute}",
+                "created_at": f"2026-04-07T09:0{minute}:00+00:00",
+            }
+        )
+
+    prompt, _ = ContextManager(agent).build("what failed")
+    transcript = prompt.split("\n\nTranscript:\n", 1)[1].split("\n\nCurrent user request:", 1)[0]
+
+    # 报错在输出末尾：错误优先的摘要应保留它，而不是只取无信息的前 3 行。
+    assert "ValueError: boom" in transcript
+    assert "starting job" not in transcript
+
+
+def test_context_manager_flags_unrecoverable_over_budget_but_keeps_request(tmp_path):
+    agent = build_agent(tmp_path, [])
+    huge_request = "X" * 500
+    prompt, metadata = ContextManager(
+        agent,
+        total_budget=50,
+        section_budgets={"prefix": 20, "memory": 20, "relevant_memory": 20, "history": 20},
+        section_floors={"prefix": 10, "memory": 10, "relevant_memory": 10, "history": 10},
+        measure=len,
+    ).build(huge_request)
+
+    # 当前请求永不裁剪，所以即便压光其它 section 仍会超预算——如实标记出来。
+    assert metadata["over_budget_unrecoverable"] is True
+    assert metadata["prompt_over_budget"] is True
+    assert prompt.split("Current user request:\n", 1)[1] == huge_request
+
+
+def test_history_text_reuses_context_manager_history_rendering(tmp_path):
+    agent = build_agent(tmp_path, [])
+    agent.record(
+        {
+            "role": "tool",
+            "name": "run_shell",
+            "args": {"command": "pytest -q"},
+            "content": "FAIL test_one\nFAIL test_two\nFAIL test_three\nFAIL test_four\n",
+            "created_at": "2026-04-07T09:00:00+00:00",
+        }
+    )
+    for minute in range(1, 7):
+        role = "user" if minute % 2 == 1 else "assistant"
+        agent.record(
+            {
+                "role": role,
+                "content": f"recent-{minute}",
+                "created_at": f"2026-04-07T09:0{minute}:00+00:00",
+            }
+        )
+
+    # runtime.history_text 现在直接复用 ContextManager 的历史渲染，
+    # 单一口径，不再有第二套略有差异的压缩逻辑。
+    rendered = agent.context_manager.render_history_text()
+    assert "pytest -q -> FAIL test_one" in agent.history_text()
+    assert "pytest -q -> FAIL test_one" in rendered

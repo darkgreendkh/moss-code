@@ -1,4 +1,7 @@
 import os
+from pathlib import Path
+import subprocess
+import sys
 from unittest.mock import patch
 
 from moss.evaluation.metrics import (
@@ -8,6 +11,26 @@ from moss.evaluation.metrics import (
     run_recovery_ablation_v2,
     write_benchmark_core_report,
 )
+
+
+def test_evaluation_script_help_entrypoints_import_from_real_package_path():
+    repo_root = Path(__file__).resolve().parents[1]
+    scripts = [
+        "scripts/collect_resume_metrics.py",
+        "scripts/run_provider_experiments.py",
+        "scripts/run_large_scale_experiments.py",
+    ]
+
+    for script in scripts:
+        result = subprocess.run(
+            [sys.executable, str(repo_root / script), "--help"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "usage:" in result.stdout.lower()
 
 
 def test_run_context_ablation_v2_writes_expected_artifact(tmp_path):

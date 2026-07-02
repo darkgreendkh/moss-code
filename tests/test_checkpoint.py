@@ -10,6 +10,7 @@ from moss.checkpoint import (
     current_runtime_identity,
     evaluate_resume_state,
 )
+from moss.run_store import RunStore
 from moss.task_state import TaskState
 
 
@@ -77,3 +78,18 @@ def test_create_checkpoint_prunes_old_checkpoints_but_keeps_current(tmp_path):
     # 当前 checkpoint 一定还在，恢复链路不受影响。
     assert agent.session["checkpoints"]["current_id"] in items
     assert current_checkpoint(agent) is not None
+
+
+def test_checkpoint_text_mentions_interrupted_run_and_last_complete_event(tmp_path):
+    (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
+    store = RunStore(tmp_path / ".moss" / "runs")
+    state = TaskState.create(run_id="run_interrupted", task_id="task_interrupted", user_request="Crash.")
+    store.start_run(state)
+    store.append_trace(state, {"event": "tool_executed"})
+
+    agent = build_agent(tmp_path)
+
+    text = agent.render_checkpoint_text()
+    assert "interrupted" in text
+    assert "run_interrupted" in text
+    assert "tool_executed" in text

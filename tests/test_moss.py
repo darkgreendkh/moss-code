@@ -265,13 +265,46 @@ def test_edit_file_replaces_exact_match(tmp_path):
     assert file_path.read_text(encoding="utf-8") == "hello agent\n"
 
 
+
+def test_edit_file_approval_summary_shows_redacted_diff(tmp_path):
+    secret = "sk-diff-secret-123"
+    with patch.dict(os.environ, {"OPENAI_API_KEY": secret}, clear=False):
+        agent = build_agent(tmp_path, [])
+        (tmp_path / "sample.txt").write_text("alpha\n", encoding="utf-8")
+
+        summary = agent._approval_summary(
+            "edit_file",
+            {
+                "path": "sample.txt",
+                "old_text": "alpha\n",
+                "new_text": f"beta {secret}\n",
+            },
+        )
+
+    assert "sample.txt" in summary
+    assert "--- before" in summary
+    assert "+++ after" in summary
+    assert "-alpha" in summary
+    assert "+beta <redacted>" in summary
+    assert secret not in summary
+
+
+def test_run_shell_approval_summary_includes_risk_class(tmp_path):
+    agent = build_agent(tmp_path, [])
+
+    summary = agent._approval_summary("run_shell", {"command": "git push origin main"})
+
+    assert summary.startswith("[destructive_or_network] ")
+    assert "git push origin main" in summary
+
+
 def test_invalid_risky_tool_does_not_prompt_for_approval(tmp_path):
     agent = build_agent(tmp_path, [], approval_policy="ask")
 
     with patch("builtins.input") as mock_input:
         result = agent.run_tool("write_file", {})
 
-    assert result.startswith("error: invalid arguments for write_file: 'path'")
+    assert result.startswith("error: invalid arguments for write_file: missing required argument: path")
     assert 'example: <tool name="write_file"' in result
     mock_input.assert_not_called()
 
@@ -416,6 +449,88 @@ def test_openai_compatible_client_posts_expected_responses_payload():
         "stream": False,
         "temperature": 0.2,
     }
+
+
+def test_provider_clients_expose_native_tool_capabilities():
+    openai_client = OpenAICompatibleModelClient(
+        model="right.codes/codex-mini",
+        base_url="https://right.codes/v1",
+        api_key="sk-test",
+        temperature=0.2,
+        timeout=30,
+    )
+    anthropic_client = AnthropicCompatibleModelClient(
+        model="claude-sonnet-4-5-20250929",
+        base_url="https://www.right.codes/claude-aws/v1",
+        api_key="sk-test",
+        temperature=0.2,
+        timeout=30,
+    )
+    fake_client = FakeModelClient(["<final>ok</final>"])
+
+    assert openai_client.supports_native_tools is True
+    assert openai_client.native_tool_format == "openai_responses"
+    assert anthropic_client.supports_native_tools is True
+    assert anthropic_client.native_tool_format == "anthropic_messages"
+    assert fake_client.supports_native_tools is False
+    assert fake_client.native_tool_format == ""
+
+
+def test_openai_compatible_client_sends_native_tools_and_normalizes_tool_call():
+    captured = {}
+    native_tools = [
+        {
+            "type": "function",
+            "name": "read_file",
+            "description": "Read a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        }
+    ]
+
+    class FakeResponse:
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"README.md\"}",
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    client = OpenAICompatibleModelClient(
+        model="right.codes/codex-mini",
+        base_url="https://right.codes/v1",
+        api_key="sk-test",
+        temperature=0.2,
+        timeout=30,
+    )
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        result = client.complete("hello", 42, tools=native_tools)
+
+    assert captured["body"]["tools"] == native_tools
+    assert Moss.parse(result) == ("tool", {"name": "read_file", "args": {"path": "README.md"}})
 
 
 def test_openai_compatible_client_sends_prompt_cache_fields_and_records_usage():
@@ -608,6 +723,62 @@ def test_anthropic_compatible_client_posts_expected_messages_payload():
     }
 
 
+def test_anthropic_compatible_client_sends_native_tools_and_normalizes_tool_use():
+    captured = {}
+    native_tools = [
+        {
+            "name": "read_file",
+            "description": "Read a file.",
+            "input_schema": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        }
+    ]
+
+    class FakeResponse:
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "read_file",
+                            "input": {"path": "README.md"},
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    client = AnthropicCompatibleModelClient(
+        model="claude-sonnet-4-5-20250929",
+        base_url="https://www.right.codes/claude-aws/v1",
+        api_key="sk-test",
+        temperature=0.2,
+        timeout=30,
+    )
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        result = client.complete("hello", 42, tools=native_tools)
+
+    assert captured["body"]["tools"] == native_tools
+    assert Moss.parse(result) == ("tool", {"name": "read_file", "args": {"path": "README.md"}})
+
+
 def test_anthropic_compatible_client_extracts_first_text_block():
     class FakeResponse:
         headers = {"Content-Type": "application/json"}
@@ -640,6 +811,30 @@ def test_anthropic_compatible_client_extracts_first_text_block():
         result = client.complete("hello", 42)
 
     assert result == "<final>ok</final>"
+
+
+def test_agent_passes_native_tool_schema_to_capable_provider(tmp_path):
+    captured = {}
+
+    class NativeToolFakeClient(FakeModelClient):
+        supports_native_tools = True
+        native_tool_format = "openai_responses"
+
+        def complete(self, prompt, max_new_tokens, **kwargs):
+            captured["tools"] = kwargs.get("tools")
+            return super().complete(prompt, max_new_tokens, **kwargs)
+
+    agent = Moss(
+        model_client=NativeToolFakeClient(["<final>Done.</final>"]),
+        workspace=build_workspace(tmp_path),
+        session_store=SessionStore(tmp_path / ".moss" / "sessions"),
+        approval_policy="auto",
+    )
+
+    assert agent.ask("finish") == "Done."
+    assert captured["tools"]
+    assert any(tool["name"] == "read_file" for tool in captured["tools"])
+    assert all(tool["type"] == "function" for tool in captured["tools"])
 
 
 def test_build_agent_uses_openai_provider_and_model_override(tmp_path):
@@ -1010,11 +1205,12 @@ def test_successful_run_persists_run_artifacts_and_stop_reason(tmp_path):
 
 def test_trace_and_report_redact_secret_env_values(tmp_path):
     secret = "sk-test-secret-123"
-    with patch.dict(os.environ, {"OPENAI_API_KEY": secret}, clear=True):
+    with patch.dict(os.environ, {"OPENAI_API_KEY": secret}, clear=False):
+        command = f'"{sys.executable}" -c "print(\'{secret}\')"'
         agent = build_agent(
             tmp_path,
             [
-                '<tool>{"name":"run_shell","args":{"command":"printf \'%s\' \'sk-test-secret-123\'","timeout":20}}</tool>',
+                f'<tool>{{"name":"run_shell","args":{{"command":{json.dumps(command)},"timeout":20}}}}</tool>',
                 "<final>Masked.</final>",
             ],
         )
@@ -1044,6 +1240,57 @@ def test_trace_and_report_redact_secret_env_values(tmp_path):
     assert "<redacted>" in tool_events[0]["result"]
 
 
+
+def test_session_history_redacts_tool_output_before_save(tmp_path):
+    secret = "sk-session-secret-123"
+    with patch.dict(os.environ, {"OPENAI_API_KEY": secret}, clear=True):
+        agent = build_agent(tmp_path, [])
+        agent.record(
+            {
+                "role": "tool",
+                "name": "run_shell",
+                "args": {"command": "print secret"},
+                "content": f"tool output leaked {secret}",
+                "created_at": "2026-07-02T00:00:00+00:00",
+            }
+        )
+
+        saved_text = agent.session_path.read_text(encoding="utf-8")
+        prompt = agent.prompt("continue")
+
+    assert secret not in saved_text
+    assert secret not in agent.history_text()
+    assert secret not in prompt
+    assert "<redacted>" in saved_text
+    assert "<redacted>" in prompt
+
+
+def test_task_state_redacts_secret_final_answer_before_persisting(tmp_path):
+    secret = "sk-task-state-secret-123"
+    with patch.dict(os.environ, {"OPENAI_API_KEY": secret}, clear=True):
+        agent = build_agent(tmp_path, [f"<final>{secret}</final>"])
+        assert agent.ask("finish") == secret
+
+        task_state_text = agent.run_store.task_state_path(agent.current_task_state).read_text(encoding="utf-8")
+
+    assert secret not in task_state_text
+    assert "<redacted>" in task_state_text
+
+
+def test_read_file_secret_output_does_not_enter_memory(tmp_path):
+    secret = "sk-memory-secret-123"
+    with patch.dict(os.environ, {"OPENAI_API_KEY": secret}, clear=True):
+        (tmp_path / "secrets.txt").write_text(f"token={secret}\n", encoding="utf-8")
+        agent = build_agent(tmp_path, [])
+
+        result = agent.run_tool("read_file", {"path": "secrets.txt", "start": 1, "end": 5})
+        memory_text = json.dumps(agent.memory.to_dict(), ensure_ascii=False)
+
+    assert secret in result
+    assert secret not in memory_text
+    assert "<redacted>" not in memory_text
+
+
 def test_prompt_budget_metadata_records_budget_decisions(tmp_path):
     agent = build_agent(tmp_path, ["<final>Done.</final>"])
     agent.memory.append_note("alpha episodic note " + ("A" * 120), tags=("recall",), created_at="2026-04-07T10:00:00+00:00")
@@ -1066,6 +1313,8 @@ def test_prompt_budget_metadata_records_budget_decisions(tmp_path):
         "relevant_memory": 80,
         "history": 80,
     }
+    # 这个测试用字符级预算描述收缩行为，固定成字符计量以保持确定性。
+    agent.context_manager.measure = len
 
     assert agent.ask("recall") == "Done."
 
@@ -1079,10 +1328,10 @@ def test_prompt_budget_metadata_records_budget_decisions(tmp_path):
     relevant_section = agent.model_client.prompts[0].split("Relevant memory:\n", 1)[1].split("\n\nTranscript:", 1)[0]
 
     assert metadata["relevant_memory"]["selected_count"] == 3
-    assert len(metadata["relevant_memory"]["rendered_notes"]) == 3
-    assert len([line for line in relevant_section.splitlines() if line.startswith("- ")]) == 3
-    assert "alpha episodic" in relevant_section
-    assert "beta episodic" in relevant_section
+    assert len(metadata["relevant_memory"]["rendered_notes"]) == 1
+    assert len([line for line in relevant_section.splitlines() if line.startswith("- ")]) == 1
+    assert "alpha episodic" not in relevant_section
+    assert "beta episodic" not in relevant_section
     assert "gamma episodic" in relevant_section
     assert metadata["current_request"]["text"] == "recall"
     assert metadata["current_request"]["rendered_chars"] == len("recall")
@@ -1126,6 +1375,8 @@ def test_agent_creates_checkpoint_when_context_reduction_happens_and_artifacts_o
         "relevant_memory": 120,
         "history": 160,
     }
+    # 这个测试用字符级预算触发收缩/检查点，固定成字符计量以保持确定性。
+    agent.context_manager.measure = len
 
     assert agent.ask("Resume the long task") == "Done after checkpoint."
 
@@ -1256,6 +1507,18 @@ def test_run_shell_nonzero_with_workspace_change_is_recorded_as_partial_success(
     assert agent._last_tool_result_metadata["tool_status"] == "partial_success"
     assert agent._last_tool_result_metadata["affected_paths"] == ["README.md"]
     assert agent._last_tool_result_metadata["workspace_changed"] is True
+
+
+def test_run_shell_metadata_records_risk_class(tmp_path):
+    agent = build_agent(tmp_path, [], approval_policy="auto")
+    command = f'"{sys.executable}" -c "print(\'ok\')"'
+
+    result = agent.run_tool("run_shell", {"command": command, "timeout": 20})
+
+    assert "ok" in result
+    assert agent._last_tool_result_metadata["shell_risk_class"] == "general"
+    assert agent._last_tool_result_metadata["risk_level"] == "medium"
+    assert agent._last_tool_result_metadata["read_only"] is False
 
 
 def test_resume_marks_workspace_mismatch_when_checkpoint_runtime_identity_is_stale(tmp_path):
