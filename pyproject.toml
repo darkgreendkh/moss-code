@@ -6,8 +6,28 @@ build-backend = "setuptools.build_meta"
 name = "moss"
 version = "0.1.0"
 description = "Small local coding agent for DeepSeek, OpenAI-compatible, Anthropic-compatible, and Ollama models"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{ name = "darkgreen", email = "darkgreendkh@gmail.com" }]
 requires-python = ">=3.10"
 dependencies = []
+keywords = ["agent", "llm", "cli", "coding-assistant"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+
+[project.urls]
+Homepage = "https://github.com/darkgreendkh/moss-code"
+Issues = "https://github.com/darkgreendkh/moss-code/issues"
 
 [project.scripts]
 moss = "moss.cli:main"
@@ -23,3 +43,6 @@ include = ["moss*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"

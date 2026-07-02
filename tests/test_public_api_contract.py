@@ -44,3 +44,10 @@ def test_packaging_discovers_moss_subpackages():
 
     assert "[tool.setuptools.packages.find]" in pyproject_text
     assert 'include = ["moss*"]' in pyproject_text
+
+
+def test_open_source_baseline_license_and_metadata():
+    assert Path("LICENSE").exists()
+    pyproject_text = Path("pyproject.toml").read_text(encoding="utf-8")
+    assert 'license = {text = "MIT"}' in pyproject_text
+    assert "[project.urls]" in pyproject_text
