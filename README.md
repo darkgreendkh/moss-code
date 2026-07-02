@@ -1,267 +1,74 @@
 # moss
 
-`moss` 是一个面向代码仓库的轻量本地 coding agent。它直接跑在终端里，先看当前工作区，再用一组受约束的工具去读文件、改文件、跑命令，并把会话状态保存在本地 `.moss/` 目录里。
+`moss` 是一个轻量的本地 coding agent：一个包在模型外面的控制循环，直接跑在终端里，用一组受约束的工具读文件、改文件、跑命令，并把会话状态存在本地 `.moss/` 目录。刻意保持零第三方运行时依赖。
 
-它更像一个能在仓库里持续工作的命令行助手，不是纯聊天窗口。你可以拿它做代码排查、测试修复、仓库分析，或者让它在当前项目里执行一次性的工程任务。
-
-## 适合做什么
-
-- 在本地仓库里排查测试失败
-- 读取当前代码结构并给出修改建议
-- 基于现有文件做小步迭代，而不是脱离仓库空想
-- 在会话中保留上下文，支持继续上一次工作
-
-## 主要特性
-
-- 包名是 `moss`
-- CLI 命令是 `moss`
-- 模块入口是 `python -m moss`
-- 会话保存在 `.moss/sessions/`
-- 每次运行的工件保存在 `.moss/runs/<run_id>/`
-- 支持四类模型后端：
-  - Ollama
-  - OpenAI 兼容 Responses API
-  - Anthropic 兼容 Messages API
-  - DeepSeek Anthropic 兼容 API
-
-## 使用截图
-
-CLI 帮助信息：
-
-![moss help](assets/screenshots/moss-help.png)
-
-启动界面：
+适合在本地仓库里排查测试失败、分析代码结构、做小步迭代或一次性工程任务——它在仓库上下文里持续工作，而不是一个纯聊天窗口。
 
 ![moss start](assets/screenshots/moss-start.png)
-
-REPL 内置命令与会话路径：
-
-![moss repl](assets/screenshots/moss-repl.png)
 
 ## 安装
 
 需要 Python 3.10+。
 
-如果你用 `uv`，直接安装依赖：
-
 ```bash
-uv sync
-```
-
-如果你已经在自己的 Python 环境里工作，也可以直接装成可编辑模式：
-
-```bash
-pip install -e .
+uv sync          # 用 uv
+pip install -e . # 或装成可编辑模式
 ```
 
 ## 快速开始
 
-在当前仓库里启动交互模式。默认 provider 是 DeepSeek：
+默认 provider 是 DeepSeek，`.env` 里填一个 key 即可启动：
 
 ```bash
-uv run moss
+echo 'MOSS_DEEPSEEK_API_KEY="your-api-key"' > .env
+uv run moss                                   # 交互模式
+uv run moss "排查测试失败并给出修复方案"       # 一次性任务
+uv run moss --cwd /path/to/repo               # 指定工作目录
+python -m moss                                # 已安装时的等价入口
 ```
 
-指定另一个工作目录：
-
-```bash
-uv run moss --cwd /path/to/repo
-```
-
-直接跑一次性任务：
-
-```bash
-uv run moss "inspect the test failures and propose a fix"
-```
-
-如果当前环境已经安装过包，也可以直接这样启动：
-
-```bash
-python -m moss
-```
+任务执行时，每一步（第几步、调用了哪个工具、结果是否正常）实时打到 stderr；最终答案走 stdout，所以 one-shot 输出可直接管道使用。跑到一半按 `Ctrl-C` 只取消当前这一轮。
 
 ## 模型后端
 
-Moss 启动时会读取项目根目录的 `.env`。本地真实 key 放在 `.env`，仓库只保留 `.env.example`。配置优先级是：
+支持四类后端，默认 `deepseek`。启动时读取项目根目录的 `.env`（真实 key 放 `.env`，仓库只留 `.env.example`）。配置优先级：`显式 CLI 参数 > .env 里的 MOSS_* > 旧环境变量 > 代码默认值`。
 
-```text
-显式 CLI 参数 > .env 里的 MOSS_* 变量 > 旧环境变量 > 代码默认值
-```
-
-Provider 选择的具体顺序是：
-
-```text
---provider > MOSS_PROVIDER > 代码默认 deepseek
-```
-
-不传 `--provider` 且没有 `MOSS_PROVIDER` 时默认使用 `deepseek`。这是推荐配置路径：DeepSeek 的 Anthropic-compatible endpoint 比本地 Ollama 更少依赖本机模型环境，也比 OpenAI-compatible/Anthropic-compatible 代理少一层默认 gateway 假设。其他 provider 仍然保留，可以在 `.env` 里写 `MOSS_PROVIDER=openai`、`MOSS_PROVIDER=anthropic`、`MOSS_PROVIDER=ollama`，也可以显式传 `--provider openai`、`--provider anthropic` 或 `--provider ollama`。
-
-`.env` 会在构建 provider client 前加载，并覆盖当前进程里的同名环境变量。模型名和 base URL 可以通过 `--model`、`--base-url` 临时覆盖；API key 只从环境变量读取。
-
-本地第一次配置：
-
-```bash
-cp .env.example .env
-```
-
-然后把要使用的 provider key 填进去。`.env` 已经被 `.gitignore` 忽略，不要提交真实 key。
-
-### 推荐配置：DeepSeek
-
-最小配置只需要 key：
-
-```bash
-MOSS_DEEPSEEK_API_KEY="your-api-key"
-```
-
-默认模型和接口是：
-
-```bash
-MOSS_DEEPSEEK_API_BASE="https://api.deepseek.com/anthropic"
-MOSS_DEEPSEEK_MODEL="deepseek-chat"
-```
-
-所以常规情况下 `.env` 里只填 `MOSS_DEEPSEEK_API_KEY` 就能直接启动：
-
-```bash
-uv run moss
-```
-
-如果你需要临时切模型或代理地址，不必改 `.env`，可以直接覆盖：
-
-```bash
-uv run moss --model deepseek-chat --base-url https://api.deepseek.com/anthropic
-```
-
-DeepSeek 当前走 Anthropic-compatible Messages API，所以 runtime 里复用的是 Anthropic-compatible client；这只影响 HTTP 协议，不影响 CLI 用法。
-
-### 可选配置：right.codes
-
-right.codes 在 Moss 里有两条可选 provider 路径：
-
-- `--provider openai`：走 OpenAI-compatible `/responses`，默认 base URL 是 `https://www.right.codes/codex/v1`，默认模型是 `gpt-4o`
-- `--provider anthropic`：走 Anthropic-compatible `/messages`，默认 base URL 是 `https://www.right.codes/claude/v1`，默认模型是 `claude-sonnet-4-5-20250929`
-
-如果 right.codes 给你的是一把共享 key，推荐只填这一项：
-
-```bash
-MOSS_RIGHT_CODES_API_KEY="your-right-codes-key"
-```
-
-然后按需要选择 provider：
-
-```bash
-uv run moss --provider openai
-uv run moss --provider anthropic
-```
-
-如果你想显式区分两条 provider 的 key，也可以分别配置：
-
-```bash
-MOSS_OPENAI_API_KEY="your-right-codes-key-for-codex"
-MOSS_ANTHROPIC_API_KEY="your-right-codes-key-for-claude"
-```
-
-不要在 `.env` 里写 `MOSS_OPENAI_API_KEY=$MOSS_RIGHT_CODES_API_KEY` 这种 shell 展开形式；Moss 的 `.env` 解析器只读取字面量，不展开变量引用。要么只写 `MOSS_RIGHT_CODES_API_KEY`，要么把 key 字符串分别填到 provider-specific 变量里。
-
-如果请求 right.codes 返回 `API Key额度不足`，说明协议和 endpoint 已经打通，但当前 key 没有可用额度；换一把有额度的 key，或到 right.codes 后台处理额度。
-
-当前 provider 环境变量：
-
-| provider | base URL | API key | model |
+| provider | 默认模型 | 默认 base URL | 说明 |
 | --- | --- | --- | --- |
-| `deepseek` | `MOSS_DEEPSEEK_API_BASE`，回退 `DEEPSEEK_API_BASE`，默认 `https://api.deepseek.com/anthropic` | `MOSS_DEEPSEEK_API_KEY`，回退 `DEEPSEEK_API_KEY` | `MOSS_DEEPSEEK_MODEL`，回退 `DEEPSEEK_MODEL`，默认 `deepseek-chat` |
-| `openai` | `MOSS_OPENAI_API_BASE`，回退 `OPENAI_API_BASE`，默认 `https://www.right.codes/codex/v1` | `MOSS_OPENAI_API_KEY`，回退 `OPENAI_API_KEY`、`MOSS_RIGHT_CODES_API_KEY`、`RIGHT_CODES_API_KEY`、`MOSS_ANTHROPIC_API_KEY`、`ANTHROPIC_API_KEY` | `MOSS_OPENAI_MODEL`，回退 `OPENAI_MODEL`，默认 `gpt-4o` |
-| `anthropic` | `MOSS_ANTHROPIC_API_BASE`，回退 `ANTHROPIC_API_BASE`，默认 `https://www.right.codes/claude/v1` | `MOSS_ANTHROPIC_API_KEY`，回退 `ANTHROPIC_API_KEY`、`MOSS_RIGHT_CODES_API_KEY`、`RIGHT_CODES_API_KEY`、`MOSS_OPENAI_API_KEY`、`OPENAI_API_KEY` | `MOSS_ANTHROPIC_MODEL`，回退 `ANTHROPIC_MODEL`，默认 `claude-sonnet-4-5-20250929` |
-| `ollama` | `--host`，默认 `http://127.0.0.1:11434` | 不需要 | `--model`，默认 `qwen3:8b` |
+| `deepseek`（默认） | `deepseek-chat` | `https://api.deepseek.com/anthropic` | Anthropic-compatible `/messages` |
+| `openai` | `gpt-4o` | `https://www.right.codes/codex/v1` | OpenAI-compatible `/responses` |
+| `anthropic` | `claude-sonnet-4-5-20250929` | `https://www.right.codes/claude/v1` | Anthropic-compatible `/messages` |
+| `ollama` | `qwen3:8b` | `http://127.0.0.1:11434` | 本地 Ollama |
 
-如果有额外的敏感环境变量需要从 trace/report 里脱敏，可以用 `MOSS_SECRET_ENV_NAMES` 配置逗号分隔的变量名，或启动时重复传 `--secret-env-name NAME`。
-
-### OpenAI 兼容接口
-
-如果要改用 OpenAI-compatible `/responses` 服务，显式传 `--provider openai`：
+切换 provider 用 `--provider <name>` 或 `.env` 里的 `MOSS_PROVIDER`。每个 provider 的 key/base/model 可用对应的 `MOSS_<PROVIDER>_API_KEY` / `MOSS_<PROVIDER>_API_BASE` / `MOSS_<PROVIDER>_MODEL` 配置，或用 `--model` / `--base-url` 临时覆盖（API key 只从环境变量读取）。`.env` 解析器只读字面量，不展开 `$VAR`。
 
 ```bash
 uv run moss --provider openai
-```
-
-默认 OpenAI 兼容接口使用 right.codes 的 Codex endpoint：
-
-```bash
-MOSS_OPENAI_API_BASE="https://www.right.codes/codex/v1"
-MOSS_RIGHT_CODES_API_KEY="your-right-codes-key"
-MOSS_OPENAI_MODEL="gpt-4o"
-```
-
-也可以改成其他 OpenAI-compatible 服务：
-
-```bash
-MOSS_OPENAI_API_BASE="https://your-api.example/v1"
-MOSS_OPENAI_API_KEY="your-api-key"
-MOSS_OPENAI_MODEL="gpt-4o"
-```
-
-### Anthropic 兼容接口
-
-如果要改用 Anthropic-compatible 服务，显式传 `--provider anthropic`：
-
-```bash
 uv run moss --provider anthropic
-```
-
-默认 Anthropic 兼容接口使用 right.codes 的 Claude endpoint：
-
-```bash
-MOSS_ANTHROPIC_API_BASE="https://www.right.codes/claude/v1"
-MOSS_RIGHT_CODES_API_KEY="your-right-codes-key"
-MOSS_ANTHROPIC_MODEL="claude-sonnet-4-5-20250929"
-```
-
-如果你的服务端对多个兼容接口复用了同一套密钥，`moss` 也支持从 `MOSS_ANTHROPIC_API_KEY` 回退到 `ANTHROPIC_API_KEY`、`MOSS_RIGHT_CODES_API_KEY`、`RIGHT_CODES_API_KEY`、`MOSS_OPENAI_API_KEY` 或 `OPENAI_API_KEY`。
-
-### Ollama
-
-如果要改用本地 Ollama，显式传 `--provider ollama`：
-
-```bash
-ollama serve
-ollama pull qwen3:8b
 uv run moss --provider ollama --model qwen3:8b
 ```
 
-## 常用交互命令
+需要额外脱敏的敏感变量名，用 `MOSS_SECRET_ENV_NAMES`（逗号分隔）或重复传 `--secret-env-name NAME`。
 
-- `/help`：查看内置命令
-- `/memory`：查看提炼后的工作记忆
-- `/session`：查看当前会话文件路径
-- `/reset`：清空当前会话状态
-- `/exit` 或 `/quit`：退出 REPL
+## 交互命令
 
-任务执行期间，moss 会把每一步（正在思考第几步、调用了哪个工具、结果是否正常）实时打印到 stderr，方便你看清它在做什么；最终答案走 stdout，因此 one-shot 模式的输出仍然可以直接管道使用。任务跑到一半按 `Ctrl-C` 只会取消当前这一轮，回到提示符，而不是退出整个程序。
+`/help` 查看命令 · `/memory` 查看工作记忆 · `/session` 查看会话路径 · `/reset` 清空会话 · `/exit` 退出。
 
 ## 安全与持久化
 
-`moss` 不会默认把所有动作都放开。像 shell 执行、文件写入这类高风险操作，会受审批模式控制：
+shell 执行、文件写入等高风险操作受审批模式控制：`--approval ask` / `auto` / `never`。所有文件类工具都锚定在 workspace root 之下（拒绝 `../` 与符号链接逃逸），落盘/展示的文本先过脱敏。
 
-- `--approval ask`
-- `--approval auto`
-- `--approval never`
-
-每次运行结束后，都会在 `.moss/runs/<run_id>/` 下写出这些文件：
-
-- `task_state.json`
-- `trace.jsonl`
-- `report.json`
-
-这些内容默认只保存在本地，不需要跟仓库一起提交。
+每次运行在 `.moss/runs/<run_id>/` 下写出 `task_state.json` / `trace.jsonl` / `report.json`；会话存在 `.moss/sessions/`。这些都在本地，已被 gitignore。
 
 ## 开发
-
-常用本地检查：
 
 ```bash
 uv run pytest tests -q
 uv run ruff check moss tests scripts
 ```
 
-内部代码现在按较轻的边界拆分：`moss/evaluation/` 放 benchmark 和 metrics，`moss/providers/` 放模型 provider client，`moss/features/` 放可选运行时能力。新代码应直接使用这些包路径；旧的 `moss.evaluator`、`moss.metrics`、`moss.models` 和 `moss.memory` import 不再作为公共入口保留。
+架构说明见 [CLAUDE.md](CLAUDE.md)。内部按轻边界拆分：`moss/evaluation/`（benchmark 与 metrics）、`moss/providers/`（模型 client）、`moss/features/`（可选运行时能力）；新代码直接用这些包路径。
+
+## License
+
+[MIT](LICENSE)
