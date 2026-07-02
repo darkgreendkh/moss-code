@@ -38,7 +38,9 @@ cli.py (装配/REPL/进度渲染)
 ```
 
 支撑模块：
-- `workspace.py`：仓库快照（git 状态 + 白名单文档），进 prompt prefix；`MAX_TOOL_OUTPUT=16000`、`MAX_HISTORY=32000` 在这里
+- `workspace.py`：仓库快照（git 状态 + 白名单文档 + 文件级 `(mtime_ns, size)` 快照/diff），进 prompt prefix
+- `token_budget.py`：token 估算与全部文本裁剪（`clip_to_budget` 按预算二分；`clip`/`middle` 硬切片，`MAX_TOOL_OUTPUT=16000`、`MAX_HISTORY=32000`）；`clock.py`：统一 UTC 时间戳 `now()`
+- `output_parser.py`：模型输出 → `("tool"|"final"|"retry", payload)` 的纯函数解析层
 - `prompt_prefix.py`：稳定前缀构建。**prompt cache key 用 `stable_hash`（只覆盖身份/规则/Tools/Skills 段），不用整段 hash**——否则 agent 自己写文件会导致 workspace 段变化、缓存键每轮抖动
 - `features/memory.py`：分层记忆（working / episodic notes / durable topics），文件摘要带 freshness 失效
 - `session_store.py`：会话持久化到 `.moss/sessions/`；delegate 子 agent 的会话隔离在 `.moss/delegates/`（不能污染 `--resume latest`）

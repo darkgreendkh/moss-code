@@ -106,3 +106,45 @@ def clip_to_budget(text, limit, measure=len, keep="head", marker="..."):
         else:
             hi = mid - 1
     return best
+
+
+# ---- 字符级硬裁剪（不带 token 估算的快路径） ----
+# clip/middle 和上面的 clip_to_budget 语义不同：clip_to_budget 按计量函数
+# 二分裁剪、保证结果 <= limit；clip 是廉价硬切片，结果为 limit 个字符再拼一条
+# 截断说明（会略超 limit）。工具输出裁剪走 clip（性能敏感、每轮多次调用），
+# prompt 预算走 clip_to_budget。暂不合并，合并会改变两边的既有契约。
+MAX_TOOL_OUTPUT = 16000
+MAX_HISTORY = 32000
+
+
+def clip(text, limit=MAX_TOOL_OUTPUT, keep="head"):
+    """把工具原始输出压到硬字符上限内。
+
+    `keep` 决定保留哪一端，因为不同工具的关键信息位置不同：
+    - "head"   → 保留开头（读文件、列目录：信息在前）。
+    - "tail"   → 保留结尾（报错/日志：关键信息在末尾）。
+    - "middle" → 两端都留、砍中间（shell：exit_code 在顶部、stderr 在底部）。
+    """
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    cut = len(text) - limit
+    note = f"[truncated {cut} chars]"
+    if keep == "tail":
+        return f"...{note}\n" + text[-limit:]
+    if keep == "middle":
+        left = limit // 2
+        right = limit - left
+        return text[:left] + f"\n...{note}...\n" + text[-right:]
+    return text[:limit] + f"\n...{note}"
+
+
+def middle(text, limit):
+    text = str(text).replace("\n", " ")
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    left = (limit - 3) // 2
+    right = limit - 3 - left
+    return text[:left] + "..." + text[-right:]

@@ -14,7 +14,8 @@ import textwrap
 from .config import load_project_env, provider_env
 from .providers.clients import AnthropicCompatibleModelClient, OllamaModelClient, OpenAICompatibleModelClient
 from .runtime import Moss, SessionStore
-from .workspace import WorkspaceContext, middle
+from .token_budget import middle
+from .workspace import WorkspaceContext
 
 DEFAULT_SECRET_ENV_NAMES = (
     "MOSS_OPENAI_API_KEY",

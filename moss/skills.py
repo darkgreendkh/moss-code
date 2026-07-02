@@ -10,7 +10,7 @@ Skill 是放在 `<root>/.moss/skills/*.md` 里的 markdown 文件：frontmatter 
 
 from pathlib import Path
 
-from .workspace import clip
+from .token_budget import clip
 
 SKILLS_SUBDIR = ".moss/skills"
 

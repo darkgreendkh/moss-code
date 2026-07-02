@@ -10,8 +10,9 @@ from datetime import datetime
 import re
 from pathlib import Path
 
+from ..clock import now
 from ..security import REDACTED_VALUE
-from ..workspace import clip, now
+from ..token_budget import clip
 
 WORKING_FILE_LIMIT = 8
 EPISODIC_NOTE_LIMIT = 12

@@ -3,9 +3,10 @@
 import time
 
 from .checkpoint import CHECKPOINT_NONE_STATUS, CHECKPOINT_PARTIAL_STALE_STATUS, CHECKPOINT_WORKSPACE_MISMATCH_STATUS
+from .clock import now
 from .output_parser import parse_model_output
 from .task_state import TaskState
-from .workspace import clip, now
+from .token_budget import clip
 
 
 class AgentLoop:

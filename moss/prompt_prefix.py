@@ -5,7 +5,7 @@ import json
 import textwrap
 from dataclasses import asdict, dataclass, is_dataclass
 
-from .workspace import now
+from .clock import now
 
 
 @dataclass

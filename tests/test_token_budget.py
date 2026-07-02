@@ -1,4 +1,4 @@
-from moss.token_budget import clip_to_budget, estimate_tokens
+from moss.token_budget import MAX_TOOL_OUTPUT, clip, clip_to_budget, estimate_tokens, middle
 
 
 def test_estimate_tokens_counts_cjk_denser_than_latin():
@@ -40,3 +40,34 @@ def test_clip_to_budget_keep_head_tail_middle():
 
 def test_clip_to_budget_returns_text_when_already_within_budget():
     assert clip_to_budget("short", 100, measure=len) == "short"
+
+
+def test_clip_under_limit_is_unchanged():
+    assert clip("short", limit=100) == "short"
+
+
+def test_clip_keep_head_appends_truncation_note():
+    result = clip("abcdef", limit=3)
+    assert result.startswith("abc")
+    assert "[truncated 3 chars]" in result
+
+
+def test_clip_keep_middle_preserves_both_ends():
+    text = "HEAD" + "x" * 100 + "TAIL"
+    result = clip(text, limit=10, keep="middle")
+    assert result.startswith("HEAD")
+    assert result.endswith("TAIL")
+    assert "[truncated" in result
+
+
+def test_clip_default_limit_is_max_tool_output():
+    assert clip("x" * (MAX_TOOL_OUTPUT + 10)).startswith("x" * 100)
+
+
+def test_middle_collapses_newlines_and_keeps_ends():
+    text = "start" + "\n" * 5 + "y" * 50 + "end"
+    result = middle(text, 20)
+    assert len(result) == 20
+    assert result.startswith("start")
+    assert result.endswith("end")
+    assert "\n" not in result

@@ -23,7 +23,9 @@ from . import skills as skilllib
 from .tool_context import ToolContext
 from .tool_executor import ToolExecutor, approval_summary
 from . import tools as toolkit
-from .workspace import MAX_HISTORY, WorkspaceContext, capture_snapshot, clip, diff_snapshots, now
+from .clock import now
+from .token_budget import MAX_HISTORY, clip
+from .workspace import WorkspaceContext, capture_snapshot, diff_snapshots
 
 DEFAULT_SHELL_ENV_ALLOWLIST = (
     # POSIX-ish

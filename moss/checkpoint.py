@@ -2,8 +2,9 @@
 
 import uuid
 
+from .clock import now
 from .features import memory as memorylib
-from .workspace import clip, now
+from .token_budget import clip
 
 # 每执行一步工具就会生成一个 checkpoint，且它们全都存在 session JSON 里、
 # 每次保存都整份重写。不设上限的话，一个长期的 REPL 会话里 checkpoint 会无限

@@ -8,52 +8,14 @@ import subprocess
 import textwrap
 import hashlib
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
-MAX_TOOL_OUTPUT = 16000
-MAX_HISTORY = 32000
+from .token_budget import clip
+
 # 这些文件最可能直接影响 agent 的行动方式。
 # 我们不会预加载整个仓库，只会先给模型一小份“导航包”。
 DOC_NAMES = ("AGENTS.md", "README.md", "pyproject.toml", "package.json")
 IGNORED_PATH_NAMES = {".git", ".moss", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "venv"}
-
-
-def now():
-    return datetime.now(timezone.utc).isoformat()
-
-
-def clip(text, limit=MAX_TOOL_OUTPUT, keep="head"):
-    """把工具原始输出压到硬字符上限内。
-
-    `keep` 决定保留哪一端，因为不同工具的关键信息位置不同：
-    - "head"   → 保留开头（读文件、列目录：信息在前）。
-    - "tail"   → 保留结尾（报错/日志：关键信息在末尾）。
-    - "middle" → 两端都留、砍中间（shell：exit_code 在顶部、stderr 在底部）。
-    """
-    text = str(text)
-    if len(text) <= limit:
-        return text
-    cut = len(text) - limit
-    note = f"[truncated {cut} chars]"
-    if keep == "tail":
-        return f"...{note}\n" + text[-limit:]
-    if keep == "middle":
-        left = limit // 2
-        right = limit - left
-        return text[:left] + f"\n...{note}...\n" + text[-right:]
-    return text[:limit] + f"\n...{note}"
-
-
-def middle(text, limit):
-    text = str(text).replace("\n", " ")
-    if len(text) <= limit:
-        return text
-    if limit <= 3:
-        return text[:limit]
-    left = (limit - 3) // 2
-    right = limit - 3 - left
-    return text[:left] + "..." + text[-right:]
 
 
 def capture_snapshot(root):

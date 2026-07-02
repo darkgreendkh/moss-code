@@ -5,8 +5,8 @@ import json
 import re
 from dataclasses import dataclass
 
+from .token_budget import clip
 from .tools import ToolRunOutput, classify_shell_command
-from .workspace import clip
 
 
 # 工具输出超上限时，保留哪一端取决于关键信息的位置。
