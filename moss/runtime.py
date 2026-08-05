@@ -26,6 +26,7 @@ from .clock import now
 from .token_budget import MAX_HISTORY, clip
 from . import ignore as ignorelib
 from . import repo_map as repo_maplib
+from . import stall as stalllib
 from . import trace_events
 from .workspace import (
     SnapshotResult,
@@ -47,6 +48,8 @@ DEFAULT_SHELL_ENV_ALLOWLIST = (
 )
 # 就近指令文档进 history 的上限。它是 append-only 的事件，太长会挤掉真正的对话。
 MAX_INSTRUCTION_DOC_CHARS = 2000
+# 留给停滞检测的工具结果窗口。比检测窗口大一些，no_progress 要看"更早读过哪些路径"。
+STALL_EVENT_HISTORY = 40
 DEFAULT_FEATURE_FLAGS = {
     "memory": True,
     "relevant_memory": True,
@@ -92,6 +95,10 @@ class Moss:
         self.cancel_token = threading.Event()
         # 只读工具批内并发。默认关闭：先灰度，评测证明收益后再翻默认值。
         self.parallel_tools = bool(parallel_tools)
+        # 停滞检测用的工具结果窗口（workspace_changed / tool_error_code 不在 history 里）。
+        self._tool_outcomes = []
+        # 同一类停滞只干预一次：重复喊同一句话既费 token 又没有新信息。
+        self.stall_notices_sent = set()
         self.session_store = session_store
         self.approval_policy = approval_policy
         self.max_steps = max_steps
@@ -620,12 +627,32 @@ class Moss:
 
     def repeated_tool_call(self, name, args):
         # agent 很常见的一种坏循环，是在没有新信息的情况下反复发起同一调用。
-        # 这里提前挡掉最简单的这种循环。
+        # 这里提前挡掉最简单的这种循环；更复杂的环（A→B→A、错误风暴、
+        # 只读不改）交给 stall.detect_stall 在每轮结束后统一判定。
         tool_events = [item for item in self.session["history"] if item["role"] == "tool"]
-        if len(tool_events) < 2:
-            return False
-        recent = tool_events[-2:]
-        return all(item["name"] == name and item["args"] == args for item in recent)
+        return stalllib.is_repeated_call(tool_events, name, args)
+
+    def stall_events(self):
+        """给停滞检测用的最近工具事件序列。
+
+        从 history 取 name/args，从每次执行的 metadata 取 workspace_changed
+        和 tool_error_code——后两者不在 history 里，所以单独攒一份。
+        """
+        return list(self._tool_outcomes)
+
+    def record_tool_outcome(self, name, args, metadata):
+        self._tool_outcomes.append(
+            {
+                "name": name,
+                "args": args,
+                "workspace_changed": bool((metadata or {}).get("workspace_changed")),
+                "tool_error_code": str((metadata or {}).get("tool_error_code", "") or ""),
+            }
+        )
+        del self._tool_outcomes[: -STALL_EVENT_HISTORY]
+
+    def detect_stall(self):
+        return stalllib.detect_stall(self.stall_events())
 
     @staticmethod
     def new_task_id():

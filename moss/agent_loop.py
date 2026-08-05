@@ -336,6 +336,7 @@ class AgentLoop:
             # 并发阶段被推迟的副作用在这里按 index 顺序补做。
             agent.update_memory_after_tool(action.name, action.args, content)
             agent.record_process_note_for_tool(action.name, metadata)
+            agent.record_tool_outcome(action.name, action.args, metadata)
             agent.emit_progress(
                 "tool_result",
                 {
@@ -387,7 +388,27 @@ class AgentLoop:
                 "duration_ms": int((time.monotonic() - batch_started_at) * 1000),
             },
         )
+        self._check_stall(task_state)
         return len(actions)
+
+    def _check_stall(self, task_state):
+        """每批结束后查一次停滞，命中就注入结构化干预。
+
+        注入的不是"拒绝执行"，而是"你在重复什么 / 已知失败原因 / 可以怎么换路"——
+        单纯拒绝只会让模型换个参数再试一次，浪费的还是同一份预算。
+        同一类信号只干预一次：重复喊同一句话既费 token 又没有新信息。
+        """
+        agent = self.agent
+        signal = agent.detect_stall()
+        if signal is None or signal.kind in agent.stall_notices_sent:
+            return
+        agent.stall_notices_sent.add(signal.kind)
+        agent.emit_trace(
+            task_state,
+            trace_events.STALL_DETECTED,
+            {"kind": signal.kind, "detail": signal.detail, "window": signal.window},
+        )
+        agent.record({"role": "system", "content": signal.notice(), "created_at": now()})
 
     def _run_actions(self, actions, parallel):
         """纯执行阶段：返回和 actions 等长、同序的 [(结果, 耗时ms)]。"""

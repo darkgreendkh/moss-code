@@ -166,3 +166,32 @@ def test_batch_traces_report_count_and_duration(tmp_path):
     finished = [event for event in _trace(agent) if event["event"] == "tools_batch_finished"]
     assert finished[0]["count"] == 3
     assert 0 <= finished[0]["duration_ms"] <= elapsed_ms
+
+
+def test_ab_loop_gets_a_structured_intervention_once(tmp_path):
+    """卡住时要告诉模型"你在重复什么、可以怎么换路"，而不是单纯拒绝执行。"""
+    cycle = (
+        '<tool>{"name":"read_file","args":{"path":"a.py"}}</tool>',
+        '<tool>{"name":"read_file","args":{"path":"b.py"}}</tool>',
+    )
+    agent = _build_agent(
+        tmp_path,
+        [*cycle, *cycle, *cycle, "<final>Done.</final>"],
+        max_steps=8,
+    )
+
+    agent.ask("go in circles")
+
+    stalls = [event for event in _trace(agent) if event["event"] == "stall_detected"]
+    notices = [
+        item
+        for item in agent.session["history"]
+        if item.get("role") == "system" and "stuck" in item.get("content", "")
+    ]
+    kinds = [event["kind"] for event in stalls]
+    assert "ab_loop" in kinds
+    # 同一类信号只干预一次：重复喊同一句话既费 token 又没有新信息。
+    # 不同类可以各来一次——它们给出的是不同的诊断。
+    assert len(kinds) == len(set(kinds))
+    assert len(notices) == len(kinds)
+    assert all("<final>" in notice["content"] for notice in notices)
