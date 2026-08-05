@@ -2079,7 +2079,7 @@ def test_explicit_memory_promotion_rejects_secret_shaped_and_transient_lines(tmp
     assert {record.source_refs[0].run_id for record in records} == {agent.current_task_state.run_id}
 
 
-def test_explicit_memory_promotion_supersedes_matching_durable_fact(tmp_path):
+def test_explicit_memory_promotion_flags_close_contradiction_for_review(tmp_path):
     agent = build_agent(
         tmp_path,
         [
@@ -2096,10 +2096,12 @@ def test_explicit_memory_promotion_supersedes_matching_durable_fact(tmp_path):
     text = dependency_path.read_text(encoding="utf-8")
 
     assert "Python runtime is 3.12." in text
-    assert "Python runtime is 3.11." not in text
-    assert report["durable_superseded"] == [
-        "dependency-facts: Python runtime is 3.11. -> Python runtime is 3.12.",
-    ]
+    assert "Python runtime is 3.11." in text
+    assert report["durable_superseded"] == []
+    from moss.features.memory_store import MemoryStore
+
+    records = MemoryStore(tmp_path / ".moss" / "memory", workspace_root=tmp_path).recallable_records()
+    assert {record.status for record in records} == {"needs_review"}
 
 
 def test_explicit_memory_promotion_dedupes_duplicate_durable_note(tmp_path):

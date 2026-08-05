@@ -685,7 +685,9 @@ def _render_note(note):
     trust = str(note.get("trust", "model")).strip() or "model"
     source = str(note.get("source", "")).strip() or "unknown"
     source_label = f" source={source}" if source != "unknown" else ""
-    return f"[trust={trust}{source_label}] {note.get('text', '')}"
+    review_reason = note.get("review_reason", "")
+    review_label = "（可能已过期）" if review_reason == "stale" else "（存在冲突）" if review_reason == "conflict" else ""
+    return f"[trust={trust}{source_label}] {note.get('text', '')}{review_label}"
 
 
 def _retrieval_candidates_with_explain(state, query, limit=3, workspace_root=None):
@@ -733,10 +735,10 @@ def _retrieval_candidates_with_explain(state, query, limit=3, workspace_root=Non
                 doc_id,
                 {
                     "tag": note.get("tags", []),
-                    "subject": note.get("source", ""),
+                    "subject": f"{note.get('subject', '')} {note.get('source', '')}",
                     "text": note.get("text", ""),
                 },
-                weight=_trust_weight(note.get("trust", "user")),
+                weight=_trust_weight(note.get("trust", "user")) * (0.5 if note.get("status") == "needs_review" else 1.0),
                 ts=_parse_timestamp(note.get("created_at")) or None,
             )
 
@@ -909,11 +911,19 @@ class LayeredMemory:
                 f"- [episodic trust={note.get('trust', 'model')} source={source}] {note.get('text', '')}"
             )
         if self.durable_store is not None:
-            for record in self.durable_store.store.active_records():
-                sources = _render_source_refs(record.source_refs)
+            for note in self.durable_store.store.all_notes():
+                sources = _note_source(note)
+                review_reason = note.get("review_reason", "")
+                review_label = (
+                    " （可能已过期）"
+                    if review_reason == "stale"
+                    else " （存在冲突）"
+                    if review_reason == "conflict"
+                    else ""
+                )
                 lines.append(
-                    f"- [{record.id} scope={record.scope} trust={record.trust} source={sources}] "
-                    f"{record.topic}: {record.text}"
+                    f"- [{note['id']} scope={note['scope']} trust={note['trust']} source={sources}] "
+                    f"{note['source']}: {note['text']}{review_label}"
                 )
         if len(lines) == 1:
             lines.append("- none")
@@ -967,7 +977,7 @@ class LayeredMemory:
         )
         if duplicate is not None:
             return None, "duplicate"
-        subject = " ".join(sorted(_tokenize(text))[:6]) or text.lower()[:120]
+        subject = store.subject_for(text)
         record = make_record(
             scope=scope,
             scope_key=scope_key,
@@ -979,7 +989,7 @@ class LayeredMemory:
             source_refs=tuple(source_refs),
             observed_at=observed_at,
         )
-        store.append(record)
+        record = store.append_resolving_conflicts(record)
         self.state = normalize_memory_state(self.state, self.workspace_root)
         return record, ""
 
@@ -1042,16 +1052,6 @@ class LayeredMemory:
         )
         self.state = normalize_memory_state(self.state, self.workspace_root)
         return promoted, superseded
-
-
-def _render_source_refs(source_refs):
-    labels = []
-    for source in source_refs:
-        label = source.path or source.run_id or "unknown"
-        if source.event_seq is not None:
-            label = f"{label}#{source.event_seq}"
-        labels.append(label)
-    return ",".join(labels) or "unknown"
 
 
 def _note_source(note):

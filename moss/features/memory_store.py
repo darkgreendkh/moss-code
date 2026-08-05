@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -29,6 +30,10 @@ _SUBJECT_PATTERNS = (
     re.compile(r"^(.+?)是.+$"),
     re.compile(r"^(.+?)使用.+$"),
 )
+_SUBJECT_TOKEN_PATTERN = re.compile(r"[a-z0-9_./-]+|[\u3400-\u9fff]+", re.I)
+_SUBJECT_STOP_WORDS = frozenset({"a", "an", "the", "is", "are", "be", "to", "的", "是", "使用"})
+_TRUST_RANK = {"tool": 0, "model": 1, "user": 2}
+_NEGATION_PATTERN = re.compile(r"\b(?:not|never|no|disabled?|forbidden)\b|(?:不|禁止|不可|禁用)", re.I)
 
 
 def _atomic_write(path, text):
@@ -56,13 +61,65 @@ def project_scope_key(workspace_root):
     return hashlib.sha256(str(root).encode("utf-8")).hexdigest()
 
 
-def _subject_for(text):
+def _normalize_subject_text(text):
+    tokens = [
+        token.lower()
+        for token in _SUBJECT_TOKEN_PATTERN.findall(str(text))
+        if token.lower() not in _SUBJECT_STOP_WORDS
+    ]
+    return " ".join(tokens[:6])
+
+
+def _subject_for(text, aliases=None):
     text = str(text).strip()
     for pattern in _SUBJECT_PATTERNS:
         match = pattern.match(text)
         if match:
-            return " ".join(match.group(1).lower().split())
-    return " ".join(text.lower().split())[:120]
+            subject = _normalize_subject_text(match.group(1))
+            return (aliases or {}).get(subject, subject)
+    subject = _normalize_subject_text(text)
+    return (aliases or {}).get(subject, subject)
+
+
+def _parse_time(value):
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _texts_conflict(first, second):
+    first_text = " ".join(str(first).lower().split())
+    second_text = " ".join(str(second).lower().split())
+    if first_text == second_text:
+        return False
+    if bool(_NEGATION_PATTERN.search(first_text)) != bool(_NEGATION_PATTERN.search(second_text)):
+        return True
+    split_pattern = re.compile(r"\s+(?:is|are|uses?|should)\s+|是|使用", re.I)
+    first_parts = split_pattern.split(first_text, maxsplit=1)
+    second_parts = split_pattern.split(second_text, maxsplit=1)
+    return len(first_parts) == len(second_parts) == 2 and first_parts[1] != second_parts[1]
+
+
+def _rebuild_record(record, *, subject=None, supersedes=None, status=None):
+    return make_record(
+        scope=record.scope,
+        scope_key=record.scope_key,
+        topic=record.topic,
+        subject=record.subject if subject is None else subject,
+        text=record.text,
+        tags=record.tags,
+        trust=record.trust,
+        source_refs=record.source_refs,
+        created_at=record.created_at,
+        observed_at=record.observed_at,
+        confidence=record.confidence,
+        status=record.status if status is None else status,
+        supersedes=record.supersedes if supersedes is None else supersedes,
+        hit_count=record.hit_count,
+        used_count=record.used_count,
+        legacy=record.legacy,
+    )
 
 
 class MemoryStore:
@@ -75,6 +132,7 @@ class MemoryStore:
         self.topics_dir = self.root / "topics"
         self.procedural_dir = self.root / "procedural"
         self.episodic_dir = self.root / "episodic"
+        self.aliases_path = self.root / "aliases.md"
 
     def _read_events(self):
         if not self.records_path.exists():
@@ -151,6 +209,87 @@ class MemoryStore:
     def active_records(self):
         return [record for record in self.all_records() if record.status == "active"]
 
+    def recallable_records(self):
+        return [record for record in self.all_records() if record.status in {"active", "needs_review"}]
+
+    def aliases(self):
+        if not self.aliases_path.exists():
+            return {}
+        aliases = {}
+        for raw in self.aliases_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip().lstrip("- ")
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            terms = [_normalize_subject_text(term) for term in line.split("=")]
+            terms = [term for term in terms if term]
+            if not terms:
+                continue
+            canonical = terms[0]
+            for term in terms:
+                aliases[term] = canonical
+        return aliases
+
+    def subject_for(self, text):
+        return _subject_for(text, self.aliases())
+
+    def append_resolving_conflicts(self, record):
+        """Append a new fact while preserving one active winner per subject.
+
+        Equal-trust contradictions observed within one hour stay queryable as
+        `needs_review`; otherwise trust wins first, then observation time.
+        """
+        record = _rebuild_record(record, subject=self.subject_for(record.text))
+        peers = [
+            old
+            for old in self.active_records()
+            if old.scope == record.scope
+            and old.scope_key == record.scope_key
+            and old.topic == record.topic
+            and self.subject_for(old.subject) == record.subject
+        ]
+        if not peers:
+            self.append(record)
+            return record
+        old = max(peers, key=lambda item: (_parse_time(item.observed_at), item.created_at))
+        old_rank = _TRUST_RANK.get(old.trust, 0)
+        new_rank = _TRUST_RANK.get(record.trust, 0)
+        seconds_apart = abs(_parse_time(record.observed_at) - _parse_time(old.observed_at))
+        if new_rank == old_rank and seconds_apart < 3600 and _texts_conflict(old.text, record.text):
+            reviewed = replace(record, status="needs_review")
+            self.append_many([replace(old, status="needs_review"), reviewed])
+            return reviewed
+        if new_rank > old_rank or (
+            new_rank == old_rank and _parse_time(record.observed_at) > _parse_time(old.observed_at)
+        ):
+            replacement = _rebuild_record(record, supersedes=(old.id,))
+            self.append_many([replacement, replace(old, status="superseded")])
+            return replacement
+        superseded = replace(record, status="superseded")
+        self.append(superseded)
+        return superseded
+
+    def refresh_freshness(self):
+        if self.workspace_root is None:
+            return []
+        stale = []
+        root = self.workspace_root.resolve()
+        for record in self.active_records():
+            for source in record.source_refs:
+                if not source.path or not source.content_sha:
+                    continue
+                path = (root / source.path).resolve()
+                try:
+                    path.relative_to(root)
+                    current_sha = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+                except (OSError, ValueError):
+                    current_sha = ""
+                if current_sha != source.content_sha:
+                    stale.append(replace(record, status="needs_review"))
+                    break
+        if stale:
+            self.append_many(stale)
+        return stale
+
     def get(self, record_id):
         return next((record for record in self.all_records() if record.id == str(record_id)), None)
 
@@ -192,9 +331,10 @@ class MemoryStore:
         return len(compacted)
 
     def topic_slugs(self):
-        return sorted({record.topic for record in self.active_records()})
+        return sorted({record.topic for record in self.recallable_records()})
 
     def all_notes(self):
+        self.refresh_freshness()
         return [
             {
                 "id": record.id,
@@ -208,9 +348,28 @@ class MemoryStore:
                 "status": record.status,
                 "scope": record.scope,
                 "source_refs": [source.to_dict() for source in record.source_refs],
+                "review_reason": self._review_reason(record),
             }
-            for record in self.active_records()
+            for record in self.recallable_records()
         ]
+
+    def _review_reason(self, record):
+        if record.status != "needs_review":
+            return ""
+        if self.workspace_root is not None:
+            root = self.workspace_root.resolve()
+            for source in record.source_refs:
+                if not source.path or not source.content_sha:
+                    continue
+                path = (root / source.path).resolve()
+                try:
+                    path.relative_to(root)
+                    current_sha = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+                except (OSError, ValueError):
+                    current_sha = ""
+                if current_sha != source.content_sha:
+                    return "stale"
+        return "conflict"
 
     def promote(self, promotions, *, source_refs=(), trust="user"):
         promoted = []
@@ -223,7 +382,7 @@ class MemoryStore:
             exact = next((record for record in self.active_records() if record.text == text), None)
             if exact is not None:
                 continue
-            subject = _subject_for(text)
+            subject = self.subject_for(text)
             old = next(
                 (
                     record
@@ -232,27 +391,27 @@ class MemoryStore:
                 ),
                 None,
             )
-            if old is not None:
-                new = self.update(old.id, text, source_refs=source_refs, trust=trust)
+            tags = old.tags if old is not None else TOPIC_METADATA.get(
+                topic, (topic.replace("-", " ").title(), "", (topic,))
+            )[2]
+            new = make_record(
+                scope="project",
+                scope_key=scope_key,
+                topic=topic,
+                subject=subject,
+                text=text,
+                tags=tags,
+                trust=trust,
+                source_refs=tuple(source_refs),
+            )
+            new = self.append_resolving_conflicts(new)
+            if old is not None and old.id in new.supersedes:
                 superseded.append(f"{topic}: {old.text} -> {new.text}")
-            else:
-                tags = TOPIC_METADATA.get(topic, (topic.replace("-", " ").title(), "", (topic,)))[2]
-                new = make_record(
-                    scope="project",
-                    scope_key=scope_key,
-                    topic=topic,
-                    subject=subject,
-                    text=text,
-                    tags=tags,
-                    trust=trust,
-                    source_refs=tuple(source_refs),
-                )
-                self.append(new)
             promoted.append(f"{topic}: {new.text}")
         return promoted, superseded
 
     def rebuild_projections(self):
-        active = self.active_records()
+        active = self.recallable_records()
         grouped = {}
         for record in active:
             grouped.setdefault(record.topic, []).append(record)
@@ -311,7 +470,7 @@ class MemoryStore:
                         scope="project",
                         scope_key=scope_key,
                         topic=topic,
-                        subject=_subject_for(text),
+                        subject=self.subject_for(text),
                         text=text,
                         tags=tags,
                         trust="user",
