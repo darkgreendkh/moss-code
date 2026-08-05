@@ -33,16 +33,44 @@ STATUS_ENTRY_LIMIT = 20
 # 否则模型看到的 status 会落后于它自己刚做的改动。
 GIT_FACTS_TTL_S = 0.5
 
+# 增量快照里的“墓碑”值：git 说这个路径变了，但它已经不在磁盘上。
+MISSING_ENTRY = ("missing", 0)
 
-def capture_snapshot(root):
-    """扫一遍工作区，记录每个文件的 (mtime_ns, size)。
 
-    变更检测只需要“文件有没有动过”，不需要内容 hash。
-    用 stat 的 (mtime_ns, size) 元组代替 sha256，避免对每个文件读整份内容——
-    在几百个文件的仓库里这一步能把 risky 工具的开销从秒级降到毫秒级。
+@dataclass(frozen=True)
+class SnapshotResult:
+    """一次快照的完整结果。
+
+    `entries` 是给 diff 用的 path -> (mtime_ns, size)；`untracked` 只在 git 策略下
+    有值，用来把“本来就没被跟踪的新文件”和“原本干净、刚被改脏的文件”区分开——
+    增量快照的 key 集合只覆盖变更集，光看 diff 两者都表现为“新出现的 key”。
     """
+
+    entries: dict = field(default_factory=dict)
+    strategy: str = "walk"
+    # None 表示“这次快照没有 git 信息”——此时 diff 只能按 key 差异判断，
+    # 新出现的 key 一律算 created。空集合和 None 语义不同，别合并。
+    untracked: frozenset = None
+
+
+def _lstat_entry(path):
+    """对单个路径取快照值。
+
+    符号链接记 ("symlink", target 的 hash) 而不是被跳过：原来的实现直接 continue，
+    于是“把某个文件换成指向仓库外的软链”这种改动在快照里完全不可见。
+    """
+    stat = path.lstat()
+    if hasattr(stat, "st_mode") and Path(path).is_symlink():
+        try:
+            target = str(path.readlink())
+        except OSError:
+            target = ""
+        return ("symlink", hashlib.sha256(target.encode("utf-8")).hexdigest()[:16])
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _walk_snapshot(root, ignore):
     snapshot = {}
-    root = Path(root)
     stack = [root]
     while stack:
         current = stack.pop()
@@ -51,38 +79,147 @@ def capture_snapshot(root):
         except (OSError, PermissionError):
             continue
         for entry in entries:
+            try:
+                key = entry.relative_to(root).as_posix()
+            except ValueError:
+                continue
             if entry.name in IGNORED_PATH_NAMES:
                 continue
             try:
+                is_symlink = entry.is_symlink()
                 # 不跟随符号链接目录：符号链接指回祖先目录会导致遍历死循环，
                 # 让 risky 工具直接卡死——对 agent 来说是最糟糕的体验。
-                if entry.is_symlink():
+                # 但链接本身要记一笔，否则换掉链接目标就成了隐身改动。
+                is_dir = entry.is_dir() and not is_symlink
+                if ignore is not None and ignore.match(key, is_dir=is_dir):
                     continue
-                if entry.is_dir():
+                if is_symlink:
+                    snapshot[key] = _lstat_entry(entry)
+                    continue
+                if is_dir:
                     stack.append(entry)
                     continue
                 if not entry.is_file():
                     continue
-                stat = entry.stat()
-                key = entry.relative_to(root).as_posix()
-                snapshot[key] = (stat.st_mtime_ns, stat.st_size)
+                snapshot[key] = _lstat_entry(entry)
             except (OSError, ValueError):
                 continue
     return snapshot
 
 
-def diff_snapshots(before, after):
-    """对比两份快照，返回 (changed_paths, summaries)，summaries 形如 created:/deleted:/modified:path。"""
+def _git_changed_paths(root):
+    """拿 git 的变更集。返回 (paths, untracked)；git 不可用时返回 None。"""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "-z", "--untracked-files=all"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+    except Exception:
+        return None
+    paths = []
+    untracked = set()
+    fields = [item for item in result.stdout.split("\0") if item]
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        code, path = entry[:2], entry[3:]
+        if code.startswith("R") or code.startswith("C"):
+            # 重命名/复制的原路径单独占一个 \0 字段。
+            if index < len(fields):
+                paths.append(fields[index])
+                index += 1
+        paths.append(path)
+        if code.startswith("??"):
+            untracked.add(path)
+    return paths, untracked
+
+
+def capture_snapshot(root, *, ignore=None, strategy="auto", git_changed=None, detailed=False):
+    """给工作区拍一张快照，记录每个文件的 (mtime_ns, size)。
+
+    变更检测只需要“文件有没有动过”，不需要内容 hash。
+    用 stat 的 (mtime_ns, size) 元组代替 sha256，避免对每个文件读整份内容——
+    在几百个文件的仓库里这一步能把 risky 工具的开销从秒级降到毫秒级。
+
+    strategy:
+      - "git"：只对 git 报告的变更路径 lstat，开销从 O(全仓) 降到 O(变更集)；
+      - "walk"：全量遍历，作为没有 git 时的退路；
+      - "auto"：能用 git 就用 git，否则 walk。
+    `git_changed` 让调用方补充一批必须覆盖的路径（比如上一张快照里的 key），
+    否则前后两张快照的 key 集合对不齐，删除会被漏掉。
+    """
+    root = Path(root)
+    resolved_strategy = strategy
+    snapshot = None
+    untracked = None
+    if strategy in {"git", "auto"}:
+        changed = _git_changed_paths(root) if (root / ".git").exists() else None
+        if changed is not None:
+            paths, untracked_paths = changed
+            untracked = frozenset(untracked_paths)
+            resolved_strategy = "git"
+            snapshot = {}
+            for rel in sorted(set(paths) | set(git_changed or ())):
+                rel = rel.rstrip("/")
+                if not rel:
+                    continue
+                if ignore is not None and ignore.match(rel):
+                    continue
+                candidate = root / rel
+                try:
+                    snapshot[rel] = _lstat_entry(candidate)
+                except OSError:
+                    # 路径已经没了。增量快照下不能简单地“不记录”：删除之前这个文件
+                    # 是干净的，压根没进过上一张快照，两边都缺 key 就等于漏报。
+                    # 记一个显式的墓碑，让 diff 能认出这是删除。
+                    snapshot[rel] = MISSING_ENTRY
+        elif strategy == "git":
+            # 显式要求 git 却拿不到变更集：退回 walk，并在结果里如实标注，
+            # 否则评测口径会把“没扫到”误读成“没改动”。
+            resolved_strategy = "walk_only"
+    if snapshot is None:
+        snapshot = _walk_snapshot(root, ignore)
+        if resolved_strategy != "walk_only":
+            resolved_strategy = "walk"
+    if detailed:
+        return SnapshotResult(entries=snapshot, strategy=resolved_strategy, untracked=untracked)
+    return snapshot
+
+
+def diff_snapshots(before, after, *, untracked=None):
+    """对比两份快照，返回 (changed_paths, summaries)，summaries 形如 created:/deleted:/modified:path。
+
+    `untracked` 是 after 时刻 git 认为未跟踪的路径集合。增量快照下，一个原本干净的
+    已跟踪文件被改脏后才第一次出现在快照里，光看 key 差异会被误判成 created；
+    有了这个集合就能把它正确标成 modified。
+    """
     changed_paths = []
     summaries = []
+
+    def gone(value):
+        return value is None or value == MISSING_ENTRY
+
     for path in sorted(set(before) | set(after)):
-        if before.get(path) == after.get(path):
+        old = before.get(path)
+        new = after.get(path)
+        # 注意不能把“两边都 gone”一律跳过：增量快照里一个干净文件被删除时，
+        # before 压根没有这个 key（old is None），after 是墓碑，这正是要报的删除。
+        # 真正的重复墓碑会被 old == new 提前挡掉。
+        if old == new:
             continue
         changed_paths.append(path)
-        if path not in before:
-            summaries.append(f"created:{path}")
-        elif path not in after:
+        if gone(new):
             summaries.append(f"deleted:{path}")
+        elif gone(old):
+            created = untracked is None or path in untracked
+            summaries.append(f"{'created' if created else 'modified'}:{path}")
         else:
             summaries.append(f"modified:{path}")
     return changed_paths, summaries

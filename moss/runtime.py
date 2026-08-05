@@ -23,7 +23,8 @@ from .tool_executor import ToolExecutor, approval_summary
 from . import tools as toolkit
 from .clock import now
 from .token_budget import MAX_HISTORY, clip
-from .workspace import WorkspaceContext, capture_snapshot, diff_snapshots
+from . import ignore as ignorelib
+from .workspace import SnapshotResult, WorkspaceContext, capture_snapshot, diff_snapshots
 
 DEFAULT_SHELL_ENV_ALLOWLIST = (
     # POSIX-ish
@@ -67,6 +68,8 @@ class Moss:
         self.workspace = workspace
         self.root = Path(workspace.repo_root)
         self.invocation_cwd = Path(getattr(workspace, "invocation_cwd", None) or workspace.cwd)
+        self._ignore_rules = None
+        self._last_snapshot = SnapshotResult()
         self.session_store = session_store
         self.approval_policy = approval_policy
         self.max_steps = max_steps
@@ -384,11 +387,39 @@ class Moss:
         self.run_store.append_trace(task_state, payload)
         return payload
 
+    def workspace_ignore_rules(self):
+        """快照/地图共用的一套忽略口径，按 root 缓存。
+
+        每次 risky 工具都重新解析 .gitignore 是纯浪费；而两处口径不一致会让
+        模型看到的目录树和 diff 里的路径对不上。
+        """
+        if self._ignore_rules is None:
+            self._ignore_rules = ignorelib.IgnoreRules.load(
+                self.root,
+                extra_patterns=ignorelib.parse_exclude_globs(os.environ.get("MOSS_SNAPSHOT_EXCLUDE", "")),
+            )
+        return self._ignore_rules
+
     def capture_workspace_snapshot(self):
         # 实现下沉到 workspace.py：快照语义属于工作区，不属于控制循环。
-        return capture_snapshot(self.root)
+        # 增量策略下 key 集合只覆盖变更集，所以要把上一张快照的 key 一起带上，
+        # 否则“文件被删掉”会因为两边都没有这个 key 而漏报。
+        result = capture_snapshot(
+            self.root,
+            ignore=self.workspace_ignore_rules(),
+            strategy=os.environ.get("MOSS_SNAPSHOT_STRATEGY", "auto") or "auto",
+            git_changed=tuple(self._last_snapshot.entries),
+            detailed=True,
+        )
+        self._last_snapshot = result
+        return result.entries
 
-    diff_workspace_snapshots = staticmethod(diff_snapshots)
+    def diff_workspace_snapshots(self, before, after):
+        return diff_snapshots(before, after, untracked=self._last_snapshot.untracked)
+
+    def snapshot_strategy(self):
+        """最近一次快照实际走的策略，进 report 供评测口径识别降级情况。"""
+        return self._last_snapshot.strategy
 
     def create_checkpoint(self, task_state, user_message, trigger):
         return checkpointlib.create_checkpoint(self, task_state, user_message, trigger)

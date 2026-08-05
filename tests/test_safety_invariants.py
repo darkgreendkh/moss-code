@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 from unittest.mock import patch
 
@@ -244,3 +245,40 @@ def test_configured_secret_env_names_are_redacted_in_trace_and_report(tmp_path):
     assert gh_pat not in report_text
     assert trace_text.count("<redacted>") >= 4
     assert report_text.count("<redacted>") >= 4
+
+
+def test_incremental_snapshot_still_rejects_path_escape(tmp_path):
+    """快照改成增量之后，路径锚定这条安全线不能跟着松掉。"""
+    (tmp_path / "outside.txt").write_text("outside\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    agent = build_agent(tmp_path, [])
+
+    agent.capture_workspace_snapshot()
+
+    assert "path escapes workspace" in agent.run_tool("write_file", {"path": "../evil.txt", "content": "x"})
+    assert not (tmp_path.parent / "evil.txt").exists()
+
+
+def test_same_size_rewrite_is_caught_by_the_git_changed_set(tmp_path):
+    """(mtime_ns, size) 认不出同尺寸覆盖写，靠 git 变更集兜底。"""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    target = tmp_path / "same.txt"
+    target.write_text("aaaa\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=tmp_path, check=True)
+    original = target.stat()
+
+    agent = build_agent(tmp_path, [])
+    before = agent.capture_workspace_snapshot()
+
+    target.write_text("bbbb\n", encoding="utf-8")
+    # 把 mtime 还原成写入前的样子：这正是 (mtime_ns, size) 的盲区。
+    os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
+    after = agent.capture_workspace_snapshot()
+
+    changed, summaries = agent.diff_workspace_snapshots(before, after)
+
+    assert changed == ["same.txt"]
+    assert summaries == ["modified:same.txt"]
