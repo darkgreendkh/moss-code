@@ -795,6 +795,9 @@ class ContextManager:
                 "rendered_chars": rendered["relevant_memory"].rendered_chars,
                 "rendered_notes": list(rendered["relevant_memory"].details.get("rendered_notes", [])),
                 "rendered_count": int(rendered["relevant_memory"].details.get("rendered_count", 0)),
+                "retrieval_explain": list(
+                    getattr(getattr(self.agent, "memory", None), "last_retrieval_explain", [])
+                ),
             },
             "history": {
                 "raw_chars": rendered["history"].raw_chars,

@@ -7,6 +7,7 @@ session history 负责保存完整事件流；这个模块只保存更小的一�
 
 import hashlib
 from datetime import datetime
+import os
 import re
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from ..clock import now
 from .. import security as securitylib
 from ..security import REDACTED_VALUE
 from ..token_budget import clip
+from ..retrieval import BM25Index
 
 WORKING_FILE_LIMIT = 8
 EPISODIC_NOTE_LIMIT = 12
@@ -162,6 +164,12 @@ class DurableMemoryStore:
                 ranked.append(((exact_tag_match, keyword_overlap, recency), note))
         ranked.sort(key=lambda item: item[0], reverse=True)
         return [note for _, note in ranked[:limit]]
+
+    def all_notes(self):
+        notes = []
+        for topic in self.load_index():
+            notes.extend(self.load_topic_notes(topic["topic"]))
+        return notes
 
     def _write_index(self, topics):
         self.root.mkdir(parents=True, exist_ok=True)
@@ -607,35 +615,78 @@ def summarize_read_result(result, limit=180):
     return clip(summary, limit)
 
 
-def retrieval_candidates(state, query, limit=3, workspace_root=None):
+def _memory_decay_days():
+    try:
+        return max(0.0, float(os.environ.get("MOSS_MEMORY_DECAY_DAYS", "7")))
+    except ValueError:
+        return 7.0
+
+
+def _retrieval_candidates_with_explain(state, query, limit=3, workspace_root=None):
     state = normalize_memory_state(state, workspace_root)
-    query_tokens = _tokenize(query)
-    ranked = []
+    index = BM25Index(tokenize=_tokenize, decay_days=_memory_decay_days())
+    candidates = {}
     for note in state["episodic_notes"]:
-        # 召回逻辑故意保持简单透明：先看 tag 精确命中，
-        # 再看关键词重叠，最后看新旧程度。这里不引入 embedding。
-        note_tags = {tag.lower() for tag in note.get("tags", [])}
-        note_tokens = _tokenize(note.get("text", "")) | _tokenize(note.get("source", "")) | note_tags
-        exact_tag_match = int(bool(query_tokens & note_tags))
-        keyword_overlap = len(query_tokens & note_tokens)
-        if exact_tag_match == 0 and keyword_overlap == 0:
-            continue
-        recency = _parse_timestamp(note.get("created_at"))
-        note_index = int(note.get("note_index", 0))
-        ranked.append(((exact_tag_match, keyword_overlap, recency, note_index), note))
+        doc_id = f"episodic:{int(note.get('note_index', 0))}"
+        candidates[doc_id] = note
+        index.add(
+            doc_id,
+            {
+                "tag": note.get("tags", []),
+                "path": note.get("source", ""),
+                "text": note.get("text", ""),
+            },
+            ts=_parse_timestamp(note.get("created_at")) or None,
+        )
+
+    for path, summary in state["file_summaries"].items():
+        note = {
+            "text": summary.get("summary", ""),
+            "tags": [path],
+            "source": path,
+            "created_at": summary.get("created_at", ""),
+            "kind": "file_summary",
+        }
+        doc_id = f"file:{path}"
+        candidates[doc_id] = note
+        index.add(
+            doc_id,
+            {"path": path, "text": note["text"]},
+            ts=_parse_timestamp(note["created_at"]) or None,
+        )
 
     if workspace_root is not None:
         durable_store = DurableMemoryStore(Path(workspace_root) / ".moss" / "memory")
-        for note in durable_store.retrieval_candidates(query, limit=limit):
-            note_tags = {tag.lower() for tag in note.get("tags", [])}
-            note_tokens = _tokenize(note.get("text", "")) | _tokenize(note.get("source", "")) | note_tags
-            exact_tag_match = int(bool(query_tokens & note_tags))
-            keyword_overlap = len(query_tokens & note_tokens)
-            recency = _parse_timestamp(note.get("created_at"))
-            ranked.append(((exact_tag_match, keyword_overlap, recency, -1), note))
+        for position, note in enumerate(durable_store.all_notes()):
+            doc_id = f"durable:{position}:{note.get('source', '')}"
+            candidates[doc_id] = note
+            index.add(
+                doc_id,
+                {
+                    "tag": note.get("tags", []),
+                    "subject": note.get("source", ""),
+                    "text": note.get("text", ""),
+                },
+                weight=1.2,
+                ts=_parse_timestamp(note.get("created_at")) or None,
+            )
 
-    ranked.sort(key=lambda item: item[0], reverse=True)
-    return [note for _, note in ranked[:limit]]
+    # 自动召回的候选集本来就很小，且历史记忆会经过时间衰减；这里不额外
+    # 设绝对阈值，避免一条数月前但仍相关的约定因为分数很小而被误删。
+    # 显式 memory_search 会使用 min_score 做 abstention。
+    hits = index.search(query, limit=limit)
+    explain = [
+        {"doc_id": hit.doc_id, "score": hit.score, "breakdown": dict(hit.breakdown)}
+        for hit in hits
+    ]
+    return [candidates[hit.doc_id] for hit in hits], explain
+
+
+def retrieval_candidates(state, query, limit=3, workspace_root=None):
+    candidates, _ = _retrieval_candidates_with_explain(
+        state, query, limit=limit, workspace_root=workspace_root
+    )
+    return candidates
 
 
 def retrieval_view(state, query, limit=3, workspace_root=None):
@@ -694,6 +745,7 @@ class LayeredMemory:
         self.workspace_root = workspace_root
         self.state = normalize_memory_state(state, workspace_root)
         self.durable_store = DurableMemoryStore(Path(workspace_root) / ".moss" / "memory") if workspace_root is not None else None
+        self.last_retrieval_explain = []
 
     def to_dict(self):
         self.state = normalize_memory_state(self.state, self.workspace_root)
@@ -748,7 +800,10 @@ class LayeredMemory:
         return invalidated
 
     def retrieval_candidates(self, query, limit=3):
-        return retrieval_candidates(self.state, query, limit=limit, workspace_root=self.workspace_root)
+        candidates, self.last_retrieval_explain = _retrieval_candidates_with_explain(
+            self.state, query, limit=limit, workspace_root=self.workspace_root
+        )
+        return candidates
 
     def retrieval_view(self, query, limit=3):
         return retrieval_view(self.state, query, limit=limit, workspace_root=self.workspace_root)
