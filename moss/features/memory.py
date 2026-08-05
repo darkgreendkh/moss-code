@@ -6,6 +6,7 @@ session history 负责保存完整事件流；这个模块只保存更小的一�
 """
 
 import hashlib
+import json
 from datetime import datetime
 import os
 import re
@@ -18,7 +19,7 @@ from ..security import REDACTED_VALUE
 from ..token_budget import clip, estimate_tokens
 from ..retrieval import BM25Index
 from .memory_store import MemoryStore, project_scope_key
-from .memory_records import make_record
+from .memory_records import SourceRef, make_record
 
 WORKING_FILE_LIMIT = 8
 DEFAULT_EPISODIC_TOKEN_BUDGET = 1000
@@ -1236,6 +1237,117 @@ def _note_source(note):
             labels.append(label)
         return ",".join(labels)
     return note.get("source", "") or "unknown"
+
+
+def _levenshtein_similarity(first, second):
+    first = str(first)
+    second = str(second)
+    if first == second:
+        return 1.0
+    if not first or not second:
+        return 0.0
+    previous = list(range(len(second) + 1))
+    for row, left in enumerate(first, start=1):
+        current = [row]
+        for column, right in enumerate(second, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[column] + 1,
+                    previous[column - 1] + (left != right),
+                )
+            )
+        previous = current
+    return 1.0 - previous[-1] / max(len(first), len(second))
+
+
+def _event_action(event):
+    args = dict(event.get("args", {}) or {})
+    if args.get("command"):
+        return str(args["command"])
+    if args.get("path"):
+        return f"{event.get('name', 'tool')}({args['path']})"
+    return f"{event.get('name', 'tool')}({json.dumps(args, sort_keys=True, ensure_ascii=False)})"
+
+
+def _event_failed(event):
+    return (
+        str(event.get("tool_status", "")) in {"error", "partial_success", "rejected"}
+        or int(event.get("exit_code", 0) or 0) != 0
+    )
+
+
+def _distilled_record(text, events, *, workspace_root, tags):
+    run_id = str(events[0].get("run_id", ""))
+    sources = tuple(
+        SourceRef(
+            run_id=str(event.get("run_id", run_id)),
+            event_seq=int(event.get("sequence", 0) or 0) or None,
+        )
+        for event in events
+    )
+    return make_record(
+        scope="project",
+        scope_key=project_scope_key(workspace_root or "."),
+        topic="procedural",
+        subject="procedure " + str(events[-1].get("name", "tool")),
+        text=clip(text, 500),
+        tags=("procedural", *tags),
+        trust="model",
+        source_refs=sources,
+        observed_at=str(events[-1].get("created_at", "")) or None,
+    )
+
+
+def distill_run(trace_events, *, mode="rule", workspace_root=None, model_summarizer=None):
+    """Extract reusable procedural memories from one run's trace.
+
+    `model` mode accepts a future aux-model summarizer; until one is supplied it
+    deliberately falls back to the auditable rule result instead of inventing a
+    free-form lesson.
+    """
+    if mode == "off":
+        return []
+    if mode not in {"rule", "model"}:
+        raise ValueError("reflect mode must be off, rule, or model")
+    tool_events = [event for event in trace_events if event.get("event") == "tool_executed"]
+    records = []
+    for event in tool_events:
+        error_code = str(event.get("tool_error_code", ""))
+        if error_code not in {"capability_denied", "approval_denied"}:
+            continue
+        action = _event_action(event)
+        text = f"Convention: do not retry {action} after {error_code}."
+        records.append(
+            _distilled_record(
+                text,
+                [event],
+                workspace_root=workspace_root,
+                tags=("denied-operation", error_code),
+            )
+        )
+    for first, second in zip(tool_events, tool_events[1:]):
+        if first.get("name") != second.get("name") or not _event_failed(first) or _event_failed(second):
+            continue
+        first_args = json.dumps(first.get("args", {}), sort_keys=True, ensure_ascii=False)
+        second_args = json.dumps(second.get("args", {}), sort_keys=True, ensure_ascii=False)
+        if _levenshtein_similarity(first_args, second_args) <= 0.6:
+            continue
+        reason = str(first.get("result", "error")).strip().splitlines()[0] or "error"
+        text = f"{_event_action(first)} failed ({clip(reason, 120)}); {_event_action(second)} succeeded."
+        if mode == "model" and model_summarizer is not None:
+            summarized = str(model_summarizer(text, max_tokens=200) or "").strip()
+            if summarized:
+                text = summarized
+        records.append(
+            _distilled_record(
+                text,
+                [first, second],
+                workspace_root=workspace_root,
+                tags=("failure-success", str(first.get("name", "tool"))),
+            )
+        )
+    return records
 
 
 # ---- runtime 集成：记忆写入与 durable 提炼策略 ----

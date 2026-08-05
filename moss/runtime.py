@@ -94,6 +94,7 @@ class Moss:
         allowed_network_hosts=None,
         tool_protocol="auto",
         context_mode="rerender",
+        reflect_mode="rule",
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -125,6 +126,9 @@ class Moss:
         if context_mode not in {"rerender", "append_only"}:
             raise ValueError("context_mode must be rerender or append_only")
         self.context_mode = context_mode
+        if reflect_mode not in {"off", "rule", "model"}:
+            raise ValueError("reflect_mode must be off, rule, or model")
+        self.reflect_mode = reflect_mode
         self.sandbox_plan = sandboxlib.announce(sandboxlib.detect(sandbox))
         # 审批决定的记忆：{(工具, 风险, 路径桶): 是否允许}。刻意只存在内存里，
         # 会话结束即失效——落盘的"上次批过"会变成永久后门。
@@ -193,6 +197,7 @@ class Moss:
         self.last_durable_promotions = []
         self.last_durable_rejections = []
         self.last_durable_superseded = []
+        self.last_procedural_distilled = []
         self._last_tool_result_metadata = {}
         self._last_prefix_refresh = {
             "workspace_changed": False,
@@ -795,7 +800,20 @@ class Moss:
         self.last_durable_promotions = promoted
         self.last_durable_rejections = rejections
         self.last_durable_superseded = superseded
+        self.last_procedural_distilled = self.distill_current_run()
         return promoted, rejections, superseded
+
+    def distill_current_run(self):
+        if self.reflect_mode == "off" or self.current_task_state is None:
+            return []
+        records = memorylib.distill_run(
+            self.run_store.read_trace(self.current_task_state.run_id),
+            mode=self.reflect_mode,
+            workspace_root=self.root,
+        )
+        stored = [self.memory.durable_store.store.append_procedural(record) for record in records]
+        self.session["memory"] = self.memory.to_dict()
+        return [record.id for record in stored]
 
     def ask(self, user_message):
         from .agent_loop import AgentLoop
@@ -972,6 +990,7 @@ class Moss:
             "durable_promotions": list(self.last_durable_promotions),
             "durable_rejections": list(self.last_durable_rejections),
             "durable_superseded": list(self.last_durable_superseded),
+            "procedural_distilled": list(self.last_procedural_distilled),
             "usage": self.last_run_budget.snapshot() if self.last_run_budget else {},
             # 沙箱状态进 report：降级必须看得见，评测口径也要能区分。
             "sandbox": self.sandbox_plan.to_dict(),
@@ -1024,6 +1043,7 @@ class Moss:
             depth=self.depth + 1,
             max_depth=self.max_depth,
             read_only=True,
+            reflect_mode="off",
             secret_env_names=self.secret_env_names,
             shell_env_allowlist=self.shell_env_allowlist,
         )

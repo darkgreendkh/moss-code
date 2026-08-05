@@ -442,6 +442,7 @@ def build_agent(args):
             feature_flags=feature_flags,
             tool_protocol=tool_protocol,
             context_mode=context_mode,
+            reflect_mode=getattr(args, "reflect", "rule"),
         )
     return Moss(
         model_client=model,
@@ -461,6 +462,7 @@ def build_agent(args):
         feature_flags=feature_flags,
         tool_protocol=tool_protocol,
         context_mode=context_mode,
+        reflect_mode=getattr(args, "reflect", "rule"),
     )
 
 
@@ -558,6 +560,12 @@ def build_arg_parser():
         choices=("rerender", "append_only"),
         default="rerender",
         help="Render compressed history each turn or keep stable append-only messages.",
+    )
+    parser.add_argument(
+        "--reflect",
+        choices=("off", "rule", "model"),
+        default="rule",
+        help="Distill procedural memory at run completion; model uses an aux summarizer when available.",
     )
     parser.add_argument("--max-new-tokens", type=int, default=4096, help="Maximum model output tokens per step.")
     # 多维预算。默认全 None：不设就完全按老行为跑，只有 --max-steps 生效。

@@ -323,6 +323,39 @@ class MemoryStore:
                     notes.append(note)
         return notes
 
+    def append_procedural(self, record):
+        if record.topic != "procedural":
+            raise ValueError("procedural memory must use the procedural topic")
+        duplicate = next(
+            (
+                existing
+                for existing in self.recallable_records()
+                if existing.topic == "procedural" and existing.text == record.text
+            ),
+            None,
+        )
+        if duplicate is not None:
+            return duplicate
+        self.append(record)
+        sources = ", ".join(
+            f"{source.run_id}#{source.event_seq}" if source.event_seq is not None else source.run_id
+            for source in record.source_refs
+        )
+        body = "\n".join(
+            [
+                f"# Procedural Memory {record.id}",
+                "",
+                f"- trust: {record.trust}",
+                f"- source_refs: {sources}",
+                f"- observed_at: {record.observed_at}",
+                "",
+                record.text,
+                "",
+            ]
+        )
+        _atomic_write(self.procedural_dir / f"{record.id}.md", body)
+        return record
+
     def get(self, record_id):
         return next((record for record in self.all_records() if record.id == str(record_id)), None)
 
