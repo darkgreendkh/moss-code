@@ -16,6 +16,7 @@ from .. import security as securitylib
 from ..security import REDACTED_VALUE
 from ..token_budget import clip
 from ..retrieval import BM25Index
+from .memory_store import MemoryStore
 
 WORKING_FILE_LIMIT = 8
 EPISODIC_NOTE_LIMIT = 12
@@ -61,7 +62,7 @@ def default_memory_state():
     }
 
 
-class DurableMemoryStore:
+class LegacyDurableMemoryStore:
     def __init__(self, root):
         self.root = Path(root)
         self.index_path = self.root / "MEMORY.md"
@@ -235,6 +236,44 @@ class DurableMemoryStore:
         for topic, notes in topic_notes.items():
             self._write_topic(topic, notes)
         return results, superseded
+
+
+class DurableMemoryStore:
+    """Compatibility facade over the v2 record store and one-release fallback."""
+
+    def __init__(self, root):
+        self.root = Path(root)
+        if str(os.environ.get("MOSS_MEMORY_V2", "on")).strip().lower() in {"off", "0", "false", "no"}:
+            self.store = LegacyDurableMemoryStore(self.root)
+            self.v2 = False
+        else:
+            workspace_root = self.root.parent.parent if self.root.name == "memory" else None
+            self.store = MemoryStore(self.root, workspace_root=workspace_root)
+            self.store.migrate_legacy()
+            self.v2 = True
+
+    def topic_slugs(self):
+        return self.store.topic_slugs()
+
+    def all_notes(self):
+        if hasattr(self.store, "all_notes"):
+            return self.store.all_notes()
+        notes = []
+        for topic in self.store.load_index():
+            notes.extend(self.store.load_topic_notes(topic["topic"]))
+        return notes
+
+    def load_index(self):
+        return LegacyDurableMemoryStore(self.root).load_index()
+
+    def load_topic_notes(self, topic):
+        return LegacyDurableMemoryStore(self.root).load_topic_notes(topic)
+
+    def retrieval_candidates(self, query, limit=3):
+        return LegacyDurableMemoryStore(self.root).retrieval_candidates(query, limit=limit)
+
+    def promote(self, promotions):
+        return self.store.promote(promotions)
 
 
 def _ensure_list(value):
