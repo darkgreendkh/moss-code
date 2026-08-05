@@ -54,7 +54,7 @@ def test_provider_profile_loads_project_env_before_reading_deepseek_config(tmp_p
         "\n".join(
             [
                 "MOSS_DEEPSEEK_API_KEY=sk-project-deepseek",
-                "MOSS_DEEPSEEK_MODEL=deepseek-v4-pro",
+                "MOSS_DEEPSEEK_MODEL=deepseek-v4-flash",
                 "MOSS_DEEPSEEK_API_BASE=https://api.deepseek.com/anthropic",
             ]
         )
@@ -75,19 +75,27 @@ def test_provider_profile_loads_project_env_before_reading_deepseek_config(tmp_p
 
     assert profile["status"] == "ready"
     assert profile["api_key"] == "sk-project-deepseek"
-    assert profile["model"] == "deepseek-v4-pro"
+    assert profile["model"] == "deepseek-v4-flash"
     assert profile["base_url"] == "https://api.deepseek.com/anthropic"
 
 
-def test_provider_profile_uses_right_codes_shared_key_for_gpt(tmp_path, monkeypatch):
+def test_provider_profile_for_gpt_requires_its_own_key(tmp_path, monkeypatch):
+    # 不再跨 provider 回落：只有 Anthropic 的 key 时 gpt 必须是 blocked，
+    # 否则会带着注定 401 的 key 去请求官方 api.openai.com。
     monkeypatch.chdir(tmp_path)
 
-    with patch.dict(os.environ, {"MOSS_RIGHT_CODES_API_KEY": "sk-right-codes"}, clear=True):
+    with patch.dict(os.environ, {"MOSS_ANTHROPIC_API_KEY": "sk-anthropic"}, clear=True):
+        blocked = _provider_profile("gpt")
+
+    assert blocked["status"] == "blocked"
+
+    with patch.dict(os.environ, {"MOSS_OPENAI_API_KEY": "sk-openai"}, clear=True):
         profile = _provider_profile("gpt")
 
     assert profile["status"] == "ready"
-    assert profile["api_key"] == "sk-right-codes"
-    assert profile["model"] == "gpt-4o"
+    assert profile["api_key"] == "sk-openai"
+    assert profile["model"] == "gpt-5-5"
+    assert profile["base_url"] == "https://api.openai.com/v1"
 
 
 def test_run_memory_ablation_v2_writes_expected_artifact(tmp_path):

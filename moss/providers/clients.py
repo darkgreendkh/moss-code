@@ -126,18 +126,25 @@ def _extract_openai_text(data):
     if data.get("output_text"):
         return data["output_text"]
 
-    for item in data.get("output", []):
-        for content in item.get("content", []):
-            if isinstance(content, dict):
-                if content.get("type") in {"function_call", "tool_call"}:
-                    function = content.get("function", {}) if isinstance(content.get("function"), dict) else {}
-                    name = content.get("name") or function.get("name")
-                    arguments = content.get("arguments") if content.get("arguments") is not None else function.get("arguments")
-                    if name:
-                        return _render_native_tool_call(name, arguments)
-                text = content.get("text")
-                if text:
-                    return text
+    # 同 `_extract_anthropic_text`：工具调用要先整体扫一遍，
+    # 否则夹在前面的开场白文本会把后面的 tool_call 吃掉。
+    nested = [
+        content
+        for item in data.get("output", [])
+        for content in item.get("content", [])
+        if isinstance(content, dict)
+    ]
+    for content in nested:
+        if content.get("type") in {"function_call", "tool_call"}:
+            function = content.get("function", {}) if isinstance(content.get("function"), dict) else {}
+            name = content.get("name") or function.get("name")
+            arguments = content.get("arguments") if content.get("arguments") is not None else function.get("arguments")
+            if name:
+                return _render_native_tool_call(name, arguments)
+    for content in nested:
+        text = content.get("text")
+        if text:
+            return text
 
     choices = data.get("choices", [])
     if choices:
@@ -280,7 +287,7 @@ class OpenAICompatibleModelClient:
         self.timeout = timeout
         # 当前只在明确支持 prompt cache 语义的后端上启用这条链路，
         # 避免对不支持的后端传一个“看起来统一、其实没意义”的伪参数。
-        self.supports_prompt_cache = any(host in self.base_url for host in ("openai.com", "right.codes"))
+        self.supports_prompt_cache = "openai.com" in self.base_url
         self.supports_native_tools = True
         self.native_tool_format = "openai_responses"
         self.last_completion_metadata = {}
@@ -403,10 +410,17 @@ class OpenAICompatibleModelClient:
 
 
 def _extract_anthropic_text(data):
-    for item in data.get("content", []):
-        if isinstance(item, dict) and item.get("type") == "tool_use":
+    # 必须先整体扫一遍 tool_use 再回落到 text：模型常常先吐一句开场白
+    # （"I'll explore the project structure..."），再跟上真正的 tool_use，
+    # content 顺序就是 ["text", "tool_use"]。若在同一个循环里按顺序返回，
+    # 拿到的是那句开场白，output_parser 认不出 <tool> 就当成最终答案，
+    # 整个 run 会在第一步工具之后直接收尾（DeepSeek 上必现）。
+    blocks = [item for item in data.get("content", []) if isinstance(item, dict)]
+    for item in blocks:
+        if item.get("type") == "tool_use":
             return _render_native_tool_call(item.get("name"), item.get("input", {}))
-        if isinstance(item, dict) and item.get("type") == "text":
+    for item in blocks:
+        if item.get("type") == "text":
             text = item.get("text")
             if isinstance(text, str) and text:
                 return text

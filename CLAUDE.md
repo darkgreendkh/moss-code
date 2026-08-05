@@ -70,9 +70,9 @@ cli.py (装配/REPL/进度渲染)
 
 | provider | 默认模型 | 协议 |
 | --- | --- | --- |
-| deepseek | `deepseek-chat` | Anthropic-compatible `/messages` |
-| openai | `gpt-4o` | OpenAI-compatible `/responses` |
-| anthropic | `claude-sonnet-4-5-20250929` | Anthropic-compatible `/messages` |
+| deepseek | `deepseek-v4-pro` | Anthropic-compatible `/messages` |
+| openai | `gpt-5-5` | OpenAI-compatible `/responses` |
+| anthropic | `claude-opus-5` | Anthropic-compatible `/messages` |
 | ollama | `qwen3:8b` | Ollama `/api/generate` |
 
 CLI 默认：`--max-steps 25`、`--max-new-tokens 4096`、`--approval ask`。ContextManager 预算以**估算 token** 为单位（见 `token_budget.py`，CJK 约 1 char/token、拉丁约 4 chars/token；测试可注入 `measure=len` 走字符级以稳定断言）：总预算 12000 token（section 预算 prefix 3000 / memory 1000 / relevant 800 / history 6000）。

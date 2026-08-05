@@ -26,8 +26,6 @@ DEFAULT_SECRET_ENV_NAMES = (
     "ANTHROPIC_AUTH_TOKEN",
     "MOSS_DEEPSEEK_API_KEY",
     "DEEPSEEK_API_KEY",
-    "MOSS_RIGHT_CODES_API_KEY",
-    "RIGHT_CODES_API_KEY",
     "GITHUB_PAT",
     "GH_PAT",
 )
@@ -58,11 +56,11 @@ HELP_DETAILS = textwrap.dedent(
 
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
-DEFAULT_OPENAI_MODEL = "gpt-4o"
-DEFAULT_OPENAI_BASE_URL = "https://www.right.codes/codex/v1"
-DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929"
-DEFAULT_ANTHROPIC_BASE_URL = "https://www.right.codes/claude/v1"
-DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+DEFAULT_OPENAI_MODEL = "gpt-5-5"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_ANTHROPIC_MODEL = "claude-opus-5"
+DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/anthropic"
 DEFAULT_PROVIDER = "deepseek"
 PROVIDER_CHOICES = ("ollama", "openai", "anthropic", "deepseek")
@@ -129,10 +127,9 @@ def _build_model_client(args):
     if provider == "openai":
         model = _effective_model(args, provider)
         base_url = getattr(args, "base_url", None) or provider_env("MOSS_OPENAI_API_BASE", ("OPENAI_API_BASE",), DEFAULT_OPENAI_BASE_URL)
-        api_key = provider_env(
-            "MOSS_OPENAI_API_KEY",
-            ("OPENAI_API_KEY", "MOSS_RIGHT_CODES_API_KEY", "RIGHT_CODES_API_KEY", "MOSS_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
-        )
+        # 只回落到本 provider 自己的 key：base URL 指向官方 endpoint 后，
+        # 拿别家的 key 去请求必定 401，跨 provider 回落只会把错误藏成"认证失败"。
+        api_key = provider_env("MOSS_OPENAI_API_KEY", ("OPENAI_API_KEY",))
         return OpenAICompatibleModelClient(
             model=model,
             base_url=base_url,
@@ -143,10 +140,7 @@ def _build_model_client(args):
     if provider == "anthropic":
         model = _effective_model(args, provider)
         base_url = getattr(args, "base_url", None) or provider_env("MOSS_ANTHROPIC_API_BASE", ("ANTHROPIC_API_BASE",), DEFAULT_ANTHROPIC_BASE_URL)
-        api_key = provider_env(
-            "MOSS_ANTHROPIC_API_KEY",
-            ("ANTHROPIC_API_KEY", "MOSS_RIGHT_CODES_API_KEY", "RIGHT_CODES_API_KEY", "MOSS_OPENAI_API_KEY", "OPENAI_API_KEY"),
-        )
+        api_key = provider_env("MOSS_ANTHROPIC_API_KEY", ("ANTHROPIC_API_KEY",))
         return AnthropicCompatibleModelClient(
             model=model,
             base_url=base_url,

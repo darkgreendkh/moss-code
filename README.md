@@ -35,12 +35,12 @@ python -m moss                                # 已安装时的等价入口
 
 | provider | 默认模型 | 默认 base URL | 说明 |
 | --- | --- | --- | --- |
-| `deepseek`（默认） | `deepseek-chat` | `https://api.deepseek.com/anthropic` | Anthropic-compatible `/messages` |
-| `openai` | `gpt-4o` | `https://www.right.codes/codex/v1` | OpenAI-compatible `/responses` |
-| `anthropic` | `claude-sonnet-4-5-20250929` | `https://www.right.codes/claude/v1` | Anthropic-compatible `/messages` |
+| `deepseek`（默认） | `deepseek-v4-pro` | `https://api.deepseek.com/anthropic` | Anthropic-compatible `/messages` |
+| `openai` | `gpt-5-5` | `https://api.openai.com/v1` | OpenAI-compatible `/responses` |
+| `anthropic` | `claude-opus-5` | `https://api.anthropic.com/v1` | Anthropic-compatible `/messages` |
 | `ollama` | `qwen3:8b` | `http://127.0.0.1:11434` | 本地 Ollama |
 
-切换 provider 用 `--provider <name>` 或 `.env` 里的 `MOSS_PROVIDER`。每个 provider 的 key/base/model 可用对应的 `MOSS_<PROVIDER>_API_KEY` / `MOSS_<PROVIDER>_API_BASE` / `MOSS_<PROVIDER>_MODEL` 配置，或用 `--model` / `--base-url` 临时覆盖（API key 只从环境变量读取）。`.env` 解析器只读字面量，不展开 `$VAR`。
+默认 base URL 全部指向各家官方 endpoint。切换 provider 用 `--provider <name>` 或 `.env` 里的 `MOSS_PROVIDER`。每个 provider 的 key/base/model 可用对应的 `MOSS_<PROVIDER>_API_KEY` / `MOSS_<PROVIDER>_API_BASE` / `MOSS_<PROVIDER>_MODEL` 配置，或用 `--model` / `--base-url` 临时覆盖（API key 只从环境变量读取，且各 provider 只认自己的 key，不跨 provider 回落）。要走自建网关或第三方兼容服务，改 `MOSS_<PROVIDER>_API_BASE` 即可。`.env` 解析器只读字面量，不展开 `$VAR`。
 
 ```bash
 uv run moss --provider openai

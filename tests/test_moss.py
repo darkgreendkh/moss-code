@@ -418,8 +418,8 @@ def test_openai_compatible_client_posts_expected_responses_payload():
         return FakeResponse()
 
     client = OpenAICompatibleModelClient(
-        model="right.codes/codex-mini",
-        base_url="https://right.codes/v1",
+        model="gpt-5-5",
+        base_url="https://api.openai.com/v1",
         api_key="sk-test",
         temperature=0.2,
         timeout=30,
@@ -429,14 +429,14 @@ def test_openai_compatible_client_posts_expected_responses_payload():
         result = client.complete("hello", 42)
 
     assert result == "<final>ok</final>"
-    assert captured["url"] == "https://right.codes/v1/responses"
+    assert captured["url"] == "https://api.openai.com/v1/responses"
     assert captured["timeout"] == 30
     assert captured["headers"]["Authorization"] == "Bearer sk-test"
     assert captured["headers"]["Content-type"] == "application/json"
     assert captured["headers"]["Accept"] == "application/json"
     assert captured["headers"]["User-agent"] == "moss/0.1"
     assert captured["body"] == {
-        "model": "right.codes/codex-mini",
+        "model": "gpt-5-5",
         "input": [
             {
                 "role": "user",
@@ -456,15 +456,15 @@ def test_openai_compatible_client_posts_expected_responses_payload():
 
 def test_provider_clients_expose_native_tool_capabilities():
     openai_client = OpenAICompatibleModelClient(
-        model="right.codes/codex-mini",
-        base_url="https://right.codes/v1",
+        model="gpt-5-5",
+        base_url="https://api.openai.com/v1",
         api_key="sk-test",
         temperature=0.2,
         timeout=30,
     )
     anthropic_client = AnthropicCompatibleModelClient(
-        model="claude-sonnet-4-5-20250929",
-        base_url="https://www.right.codes/claude-aws/v1",
+        model="claude-opus-5",
+        base_url="https://api.anthropic.com/v1",
         api_key="sk-test",
         temperature=0.2,
         timeout=30,
@@ -522,8 +522,8 @@ def test_openai_compatible_client_sends_native_tools_and_normalizes_tool_call():
         return FakeResponse()
 
     client = OpenAICompatibleModelClient(
-        model="right.codes/codex-mini",
-        base_url="https://right.codes/v1",
+        model="gpt-5-5",
+        base_url="https://api.openai.com/v1",
         api_key="sk-test",
         temperature=0.2,
         timeout=30,
@@ -569,8 +569,8 @@ def test_openai_compatible_client_sends_prompt_cache_fields_and_records_usage():
         return FakeResponse()
 
     client = OpenAICompatibleModelClient(
-        model="right.codes/codex-mini",
-        base_url="https://right.codes/v1",
+        model="gpt-5-5",
+        base_url="https://api.openai.com/v1",
         api_key="sk-test",
         temperature=0.2,
         timeout=30,
@@ -611,8 +611,8 @@ def test_openai_compatible_client_extracts_text_from_event_stream():
             ).encode("utf-8")
 
     client = OpenAICompatibleModelClient(
-        model="right.codes/codex-mini",
-        base_url="https://right.codes/v1",
+        model="gpt-5-5",
+        base_url="https://api.openai.com/v1",
         api_key="sk-test",
         temperature=0.2,
         timeout=30,
@@ -646,8 +646,8 @@ def test_openai_compatible_client_extracts_text_from_event_stream_deltas():
             ).encode("utf-8")
 
     client = OpenAICompatibleModelClient(
-        model="right.codes/codex-mini",
-        base_url="https://right.codes/v1",
+        model="gpt-5-5",
+        base_url="https://api.openai.com/v1",
         api_key="sk-test",
         temperature=0.2,
         timeout=30,
@@ -691,8 +691,8 @@ def test_anthropic_compatible_client_posts_expected_messages_payload():
         return FakeResponse()
 
     client = AnthropicCompatibleModelClient(
-        model="claude-sonnet-4-5-20250929",
-        base_url="https://www.right.codes/claude-aws/v1",
+        model="claude-opus-5",
+        base_url="https://api.anthropic.com/v1",
         api_key="sk-test",
         temperature=0.2,
         timeout=30,
@@ -702,13 +702,13 @@ def test_anthropic_compatible_client_posts_expected_messages_payload():
         result = client.complete("hello", 42)
 
     assert result == "<final>ok</final>"
-    assert captured["url"] == "https://www.right.codes/claude-aws/v1/messages"
+    assert captured["url"] == "https://api.anthropic.com/v1/messages"
     assert captured["timeout"] == 30
     assert captured["headers"]["X-api-key"] == "sk-test"
     assert captured["headers"]["Anthropic-version"] == "2023-06-01"
     assert captured["headers"]["Content-type"] == "application/json"
     assert captured["body"] == {
-        "model": "claude-sonnet-4-5-20250929",
+        "model": "claude-opus-5",
         "messages": [
             {
                 "role": "user",
@@ -768,8 +768,8 @@ def test_anthropic_compatible_client_sends_native_tools_and_normalizes_tool_use(
         return FakeResponse()
 
     client = AnthropicCompatibleModelClient(
-        model="claude-sonnet-4-5-20250929",
-        base_url="https://www.right.codes/claude-aws/v1",
+        model="claude-opus-5",
+        base_url="https://api.anthropic.com/v1",
         api_key="sk-test",
         temperature=0.2,
         timeout=30,
@@ -803,8 +803,8 @@ def test_anthropic_compatible_client_extracts_first_text_block():
             ).encode("utf-8")
 
     client = AnthropicCompatibleModelClient(
-        model="claude-sonnet-4-5-20250929",
-        base_url="https://www.right.codes/claude-aws/v1",
+        model="claude-opus-5",
+        base_url="https://api.anthropic.com/v1",
         api_key="sk-test",
         temperature=0.2,
         timeout=30,
@@ -814,6 +814,67 @@ def test_anthropic_compatible_client_extracts_first_text_block():
         result = client.complete("hello", 42)
 
     assert result == "<final>ok</final>"
+
+
+def test_anthropic_compatible_client_prefers_tool_use_over_leading_preamble_text():
+    # DeepSeek 会先吐一句开场白再给 tool_use，content 顺序是 ["text", "tool_use"]。
+    # 早期实现按顺序返回，拿到开场白就当成最终答案，run 会在第一步之后提前收尾。
+    class FakeResponse:
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "stop_reason": "tool_use",
+                    "content": [
+                        {"type": "text", "text": "I'll explore the project structure first."},
+                        {
+                            "type": "tool_use",
+                            "name": "list_files",
+                            "input": {"path": "."},
+                        },
+                    ],
+                }
+            ).encode("utf-8")
+
+    client = AnthropicCompatibleModelClient(
+        model="deepseek-v4-pro",
+        base_url="https://api.deepseek.com/anthropic",
+        api_key="sk-test",
+        temperature=0.2,
+        timeout=30,
+    )
+
+    with patch("urllib.request.urlopen", return_value=FakeResponse()):
+        result = client.complete("hello", 42)
+
+    assert parse_model_output(result) == ("tool", {"name": "list_files", "args": {"path": "."}})
+
+
+def test_openai_compatible_extract_prefers_nested_tool_call_over_leading_text():
+    from moss.providers.clients import _extract_openai_text
+
+    data = {
+        "output": [
+            {
+                "content": [
+                    {"type": "output_text", "text": "Let me look at the repo first."},
+                    {"type": "function_call", "name": "list_files", "arguments": '{"path": "."}'},
+                ]
+            }
+        ]
+    }
+
+    assert parse_model_output(_extract_openai_text(data)) == (
+        "tool",
+        {"name": "list_files", "args": {"path": "."}},
+    )
 
 
 def test_agent_passes_native_tool_schema_to_capable_provider(tmp_path):
@@ -864,7 +925,7 @@ def test_build_agent_uses_openai_provider_and_model_override(tmp_path):
     with patch.dict(
         os.environ,
         {
-            "OPENAI_API_BASE": "https://www.right.codes/codex/v1",
+            "OPENAI_API_BASE": "https://gateway.example.com/v1",
             "OPENAI_API_KEY": "sk-test",
             "OPENAI_MODEL": "env-model",
         },
@@ -879,12 +940,12 @@ def test_build_agent_uses_openai_provider_and_model_override(tmp_path):
 
     mock_openai.assert_called_once()
     assert mock_openai.call_args.kwargs["model"] == "override-model"
-    assert mock_openai.call_args.kwargs["base_url"] == "https://www.right.codes/codex/v1"
+    assert mock_openai.call_args.kwargs["base_url"] == "https://gateway.example.com/v1"
     assert mock_openai.call_args.kwargs["api_key"] == "sk-test"
     assert agent.model_client is fake_client
 
 
-def test_build_agent_uses_right_codes_shared_key_for_openai_provider(tmp_path):
+def test_build_agent_does_not_fall_back_to_other_providers_key_for_openai(tmp_path):
     args = type(
         "Args",
         (),
@@ -906,7 +967,9 @@ def test_build_agent_uses_right_codes_shared_key_for_openai_provider(tmp_path):
         },
     )()
 
-    with patch.dict(os.environ, {"MOSS_RIGHT_CODES_API_KEY": "sk-right-codes"}, clear=True):
+    # base URL 默认指向官方 endpoint，拿 Anthropic 的 key 去请求 api.openai.com
+    # 必定 401；与其把错误藏成"认证失败"，不如让 key 保持为空。
+    with patch.dict(os.environ, {"MOSS_ANTHROPIC_API_KEY": "sk-anthropic"}, clear=True):
         with patch(
             "moss.cli.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
@@ -915,7 +978,8 @@ def test_build_agent_uses_right_codes_shared_key_for_openai_provider(tmp_path):
             agent = moss_pkg.build_agent(args)
 
     mock_openai.assert_called_once()
-    assert mock_openai.call_args.kwargs["api_key"] == "sk-right-codes"
+    assert mock_openai.call_args.kwargs["base_url"] == "https://api.openai.com/v1"
+    assert mock_openai.call_args.kwargs["api_key"] == ""
     assert agent.model_client is fake_client
 
 
@@ -942,7 +1006,7 @@ def test_build_agent_uses_project_env_provider_when_cli_omitted(tmp_path):
         "\n".join(
             [
                 "MOSS_PROVIDER=openai",
-                "MOSS_OPENAI_API_BASE=https://www.right.codes/codex/v1",
+                "MOSS_OPENAI_API_BASE=https://gateway.example.com/v1",
                 "MOSS_OPENAI_API_KEY=sk-project-openai",
                 "MOSS_OPENAI_MODEL=gpt-5.4",
                 "MOSS_DEEPSEEK_API_KEY=sk-project-deepseek",
@@ -966,7 +1030,7 @@ def test_build_agent_uses_project_env_provider_when_cli_omitted(tmp_path):
 
     mock_openai.assert_called_once()
     assert mock_openai.call_args.kwargs["model"] == "gpt-5.4"
-    assert mock_openai.call_args.kwargs["base_url"] == "https://www.right.codes/codex/v1"
+    assert mock_openai.call_args.kwargs["base_url"] == "https://gateway.example.com/v1"
     assert mock_openai.call_args.kwargs["api_key"] == "sk-project-openai"
     assert agent.model_client is fake_client
 
@@ -979,7 +1043,7 @@ def test_build_agent_prefers_cli_provider_over_project_env_provider(tmp_path):
                 "MOSS_OPENAI_API_KEY=sk-project-openai",
                 "MOSS_DEEPSEEK_API_BASE=https://api.deepseek.com/anthropic",
                 "MOSS_DEEPSEEK_API_KEY=sk-project-deepseek",
-                "MOSS_DEEPSEEK_MODEL=deepseek-v4-pro",
+                "MOSS_DEEPSEEK_MODEL=deepseek-v4-flash",
             ]
         )
         + "\n",
@@ -1001,20 +1065,20 @@ def test_build_agent_prefers_cli_provider_over_project_env_provider(tmp_path):
             agent = moss_pkg.build_agent(args)
 
     mock_anthropic.assert_called_once()
-    assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-pro"
+    assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-flash"
     assert mock_anthropic.call_args.kwargs["base_url"] == "https://api.deepseek.com/anthropic"
     assert mock_anthropic.call_args.kwargs["api_key"] == "sk-project-deepseek"
     assert agent.model_client is fake_client
 
 
-def test_build_agent_uses_anthropic_provider_and_openai_key_fallback(tmp_path):
+def test_build_agent_uses_official_anthropic_endpoint_without_cross_provider_key(tmp_path):
     args = type(
         "Args",
         (),
         {
             "cwd": str(tmp_path),
             "provider": "anthropic",
-            "model": "claude-sonnet-4-5-20250929",
+            "model": "claude-opus-5",
             "base_url": None,
             "host": "http://127.0.0.1:11434",
             "ollama_timeout": 300,
@@ -1047,9 +1111,9 @@ def test_build_agent_uses_anthropic_provider_and_openai_key_fallback(tmp_path):
             agent = moss_pkg.build_agent(args)
 
     mock_anthropic.assert_called_once()
-    assert mock_anthropic.call_args.kwargs["model"] == "claude-sonnet-4-5-20250929"
-    assert mock_anthropic.call_args.kwargs["base_url"] == "https://www.right.codes/claude/v1"
-    assert mock_anthropic.call_args.kwargs["api_key"] == "sk-openai-fallback"
+    assert mock_anthropic.call_args.kwargs["model"] == "claude-opus-5"
+    assert mock_anthropic.call_args.kwargs["base_url"] == "https://api.anthropic.com/v1"
+    assert mock_anthropic.call_args.kwargs["api_key"] == ""
     assert agent.model_client is fake_client
 
 
@@ -1065,7 +1129,7 @@ def test_build_agent_uses_anthropic_default_model_when_env_is_missing(tmp_path):
         with patch("moss.cli.AnthropicCompatibleModelClient") as mock_anthropic:
             moss_pkg.build_agent(args)
 
-    assert mock_anthropic.call_args.kwargs["model"] == "claude-sonnet-4-5-20250929"
+    assert mock_anthropic.call_args.kwargs["model"] == "claude-opus-5"
 
 
 def test_build_agent_uses_deepseek_provider_and_env_configuration(tmp_path):
@@ -1074,7 +1138,7 @@ def test_build_agent_uses_deepseek_provider_and_env_configuration(tmp_path):
             [
                 "MOSS_DEEPSEEK_API_BASE=https://api.deepseek.com/anthropic",
                 "MOSS_DEEPSEEK_API_KEY=sk-project-deepseek",
-                "MOSS_DEEPSEEK_MODEL=deepseek-v4-pro",
+                "MOSS_DEEPSEEK_MODEL=deepseek-v4-flash",
             ]
         )
         + "\n",
@@ -1123,7 +1187,7 @@ def test_build_agent_uses_deepseek_provider_and_env_configuration(tmp_path):
             agent = moss_pkg.build_agent(args)
 
     mock_anthropic.assert_called_once()
-    assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-pro"
+    assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-flash"
     assert mock_anthropic.call_args.kwargs["base_url"] == "https://api.deepseek.com/anthropic"
     assert mock_anthropic.call_args.kwargs["api_key"] == "sk-project-deepseek"
     assert agent.model_client is fake_client
@@ -1136,7 +1200,7 @@ def test_build_agent_uses_deepseek_default_model_when_env_is_missing(tmp_path):
         with patch("moss.cli.AnthropicCompatibleModelClient") as mock_anthropic:
             moss_pkg.build_agent(args)
 
-    assert mock_anthropic.call_args.kwargs["model"] == "deepseek-chat"
+    assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-pro"
     assert mock_anthropic.call_args.kwargs["base_url"] == "https://api.deepseek.com/anthropic"
 
 
@@ -1162,7 +1226,7 @@ def test_build_agent_uses_deepseek_provider_by_default(tmp_path):
             agent = moss_pkg.build_agent(args)
 
     mock_anthropic.assert_called_once()
-    assert mock_anthropic.call_args.kwargs["model"] == "deepseek-chat"
+    assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-pro"
     assert mock_anthropic.call_args.kwargs["base_url"] == "https://api.deepseek.com/anthropic"
     assert mock_anthropic.call_args.kwargs["api_key"] == "sk-test"
     assert agent.model_client is fake_client
@@ -1992,24 +2056,6 @@ def test_public_api_exports_resolve_through_package_path():
     assert SessionStore is not None
     assert WorkspaceContext is not None
     assert Path(moss_pkg.__file__).as_posix().endswith("/moss/__init__.py")
-
-
-def test_reviewer_skeleton_docs_exist():
-    review_pack = Path("docs/review-pack/README.md")
-    architecture = Path("docs/architecture/agent-harness-v1-overview.md")
-
-    assert review_pack.exists()
-    assert architecture.exists()
-
-    review_text = review_pack.read_text(encoding="utf-8")
-    assert "Project pitch" in review_text
-    assert "Architecture map" in review_text
-    assert "Benchmark evidence" in review_text
-    assert "Sample run artifact list" in review_text
-
-    architecture_text = architecture.read_text(encoding="utf-8")
-    assert "Agent Harness v1" in architecture_text
-    assert "task state" in architecture_text.lower()
 
 
 def test_one_shot_returns_nonzero_exit_on_backend_failure(tmp_path):

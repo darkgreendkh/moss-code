@@ -680,16 +680,13 @@ def _provider_summary_from_artifact(payload):
 def _provider_profile(provider):
     load_project_env(Path.cwd())
     if provider == "gpt":
-        api_key = provider_env(
-            "MOSS_OPENAI_API_KEY",
-            ("OPENAI_API_KEY", "MOSS_RIGHT_CODES_API_KEY", "RIGHT_CODES_API_KEY", "MOSS_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
-        )
+        api_key = provider_env("MOSS_OPENAI_API_KEY", ("OPENAI_API_KEY",))
         if not api_key:
-            return {"provider": provider, "status": "blocked", "reason": "MOSS_OPENAI_API_KEY, OPENAI_API_KEY, or shared right.codes key missing"}
+            return {"provider": provider, "status": "blocked", "reason": "MOSS_OPENAI_API_KEY or OPENAI_API_KEY missing"}
         return {
             "provider": provider,
             "status": "ready",
-            "model": provider_env("MOSS_OPENAI_MODEL", ("OPENAI_MODEL",), "gpt-4o"),
+            "model": provider_env("MOSS_OPENAI_MODEL", ("OPENAI_MODEL",), "gpt-5-5"),
             "base_url": provider_env("MOSS_OPENAI_API_BASE", ("OPENAI_API_BASE",), "https://api.openai.com/v1"),
             "api_key": api_key,
         }
@@ -700,21 +697,18 @@ def _provider_profile(provider):
         return {
             "provider": provider,
             "status": "ready",
-            "model": provider_env("MOSS_DEEPSEEK_MODEL", ("DEEPSEEK_MODEL",), "deepseek-chat"),
+            "model": provider_env("MOSS_DEEPSEEK_MODEL", ("DEEPSEEK_MODEL",), "deepseek-v4-pro"),
             "base_url": provider_env("MOSS_DEEPSEEK_API_BASE", ("DEEPSEEK_API_BASE",), "https://api.deepseek.com/anthropic"),
             "api_key": api_key,
         }
-    api_key = provider_env(
-        "MOSS_ANTHROPIC_API_KEY",
-        ("ANTHROPIC_API_KEY", "MOSS_RIGHT_CODES_API_KEY", "RIGHT_CODES_API_KEY", "MOSS_OPENAI_API_KEY", "OPENAI_API_KEY"),
-    )
+    api_key = provider_env("MOSS_ANTHROPIC_API_KEY", ("ANTHROPIC_API_KEY",))
     if not api_key:
         return {"provider": "claude", "status": "blocked", "reason": "MOSS_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY missing"}
     return {
         "provider": "claude",
         "status": "ready",
-        "model": provider_env("MOSS_ANTHROPIC_MODEL", ("ANTHROPIC_MODEL",), "claude-sonnet-4-5-20250929"),
-        "base_url": provider_env("MOSS_ANTHROPIC_API_BASE", ("ANTHROPIC_API_BASE",), "https://www.right.codes/claude/v1"),
+        "model": provider_env("MOSS_ANTHROPIC_MODEL", ("ANTHROPIC_MODEL",), "claude-opus-5"),
+        "base_url": provider_env("MOSS_ANTHROPIC_API_BASE", ("ANTHROPIC_API_BASE",), "https://api.anthropic.com/v1"),
         "api_key": api_key,
     }
 
