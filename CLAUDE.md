@@ -38,14 +38,22 @@ cli.py (装配/REPL/进度渲染)
 ```
 
 支撑模块：
-- `workspace.py`：仓库快照（git 状态 + 白名单文档 + 文件级 `(mtime_ns, size)` 快照/diff），进 prompt prefix
+- `workspace.py`：仓库快照（git 事实 + 分层发现的项目文档 + 文件级 `(mtime_ns, size)` 快照/diff），进 prompt prefix。
+  git 采集走 `collect_git_facts`（status+log 两个子进程 + 500ms TTL 缓存，risky 工具后强制失效）；
+  快照默认 `strategy="auto"`：有 git 就只对变更集 lstat，否则全量 walk。
+  `fingerprint()` 带 `WORKSPACE_FINGERPRINT_VERSION` 前缀，且用文档**全文** digest（不是被裁剪的 preview）
+- `ignore.py`：手写 `.gitignore` 匹配器。快照与 repo map 共用同一套忽略口径，
+  **安全判定（路径锚定）不依赖它**，只用来少扫/少展示
+- `repo_map.py`：目录骨架 + 符号索引（Python 走 stdlib `ast`，其它语言走行首前缀），
+  缓存在 `.moss/cache/repo_map.json`；`rank_relevant_files` 给出每轮的 `Likely relevant files` 起点锚
+- `trace_events.py`：trace 事件名常量（`instruction_loaded` / `instruction_conflict` / `repo_map_built` / `anchor_miss`）
 - `token_budget.py`：token 估算与全部文本裁剪（`clip_to_budget` 按预算二分；`clip`/`middle` 硬切片，`MAX_TOOL_OUTPUT=16000`、`MAX_HISTORY=32000`）；`clock.py`：统一 UTC 时间戳 `now()`
 - `output_parser.py`：模型输出 → `("tool"|"final"|"retry", payload)` 的纯函数解析层
 - `prompt_prefix.py`：稳定前缀构建。**prompt cache key 用 `stable_hash`（只覆盖身份/规则/Tools/Skills 段），不用整段 hash**——否则 agent 自己写文件会导致 workspace 段变化、缓存键每轮抖动
 - `features/memory.py`：分层记忆（working / episodic notes / durable topics），文件摘要带 freshness 失效；也承载记忆写入/durable 提炼策略（`update_memory_after_tool`/`extract_durable_promotions` 等，Moss 只薄委托）
 - `session_store.py`：会话持久化到 `.moss/sessions/`；delegate 子 agent 的会话隔离在 `.moss/delegates/`（不能污染 `--resume latest`）
 - `security.py`：secret 检测/脱敏；`run_shell` 只继承 `DEFAULT_SHELL_ENV_ALLOWLIST` 里的环境变量（**含 Windows 必需的 COMSPEC/SYSTEMROOT 等，删了 run_shell 在 Windows 上直接崩**）
-- `config.py`：`.env` 加载。坏行跳过并警告，不允许让整个启动崩掉
+- `config.py`：`.env` 加载（坏行跳过并警告，不允许让整个启动崩掉）；`.moss/config.json` 装结构化配置（如 `repo_context.doc_names`）
 - `skills.py`：`.moss/skills/*.md`（frontmatter: name/description，正文按 `use_skill` 懒加载）
 - `evaluation/`：benchmark 与 ablation，不属于运行时路径
 
@@ -59,7 +67,7 @@ cli.py (装配/REPL/进度渲染)
 4. **所有落盘/展示的文本先过脱敏**：`redact_artifact` / `redact_text`，secret 名单来自 `DEFAULT_SECRET_ENV_NAMES` + `MOSS_SECRET_ENV_NAMES` + `--secret-env-name`。
 5. **路径锚定**：所有文件类工具经 `Moss.path()`，resolve 后必须在 workspace root 之下（防 `../` 和符号链接逃逸）。遍历工作区时不跟随符号链接目录（防死循环）。
 6. **工具是显式注册的白名单**（`BASE_TOOL_SPECS`），risky 工具走审批（`ask`/`auto`/`never`）；审批提示只展示摘要（`tool_executor.approval_summary`：写文件类展示脱敏 diff、shell 展示风险分级），不 dump 完整 args。
-7. **快照 diff 用 `(mtime_ns, size)`**，不做内容 hash——risky 工具每次调用前后各扫一遍工作区，性能敏感。
+7. **快照 diff 用 `(mtime_ns, size)`**，不做内容 hash——risky 工具每次调用前后各扫一遍工作区，性能敏感。已知盲区：walk 策略下同尺寸覆盖写 + mtime 还原判不出来（git 策略靠变更集兜底），chmod 也不可见。
 8. **注释风格**：中文、解释"为什么存在/在链路里的位置"，新代码保持一致。
 
 ## 配置
@@ -75,12 +83,15 @@ cli.py (装配/REPL/进度渲染)
 | anthropic | `claude-opus-5` | Anthropic-compatible `/messages` |
 | ollama | `qwen3:8b` | Ollama `/api/generate` |
 
+仓库上下文相关的开关（见 `.env.example`）：`MOSS_REPO_MAP`（默认 on，一键回退）、`MOSS_REPO_MAP_BUDGET`（默认 800 token）、`MOSS_SNAPSHOT_STRATEGY`（`git`/`walk`/`auto`，默认 auto）、`MOSS_SNAPSHOT_EXCLUDE`（逗号分隔 glob）。
+
 CLI 默认：`--max-steps 25`、`--max-new-tokens 4096`、`--approval ask`。ContextManager 预算以**估算 token** 为单位（见 `token_budget.py`，CJK 约 1 char/token、拉丁约 4 chars/token；测试可注入 `measure=len` 走字符级以稳定断言）：总预算 12000 token（section 预算 prefix 3000 / memory 1000 / relevant 800 / history 6000）。
 
 ## 本地状态目录（全部 gitignored）
 
 ```
 .moss/sessions/    用户会话（--resume latest 按 mtime 取最新）
+.moss/cache/       repo map 等派生缓存（可随时删，会自动重建）
 .moss/delegates/   delegate 子 agent 的一次性会话（隔离，防污染 latest）
 .moss/runs/<id>/   单次运行审计工件：task_state.json / trace.jsonl / report.json
 .moss/skills/      技能 markdown
