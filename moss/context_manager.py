@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from .model_request import Block, Message, ModelRequest, PromptBundle
 from .token_budget import clip_to_budget, estimate_tokens
 
 
@@ -228,6 +229,26 @@ class ContextManager:
             over_budget_unrecoverable=over_budget_unrecoverable,
         )
         return prompt, metadata
+
+    def build_bundle(self, user_message):
+        """返回结构化请求，同时保留与旧 prompt 完全一致的扁平文本。"""
+        prompt, metadata = self.build(user_message)
+        native_tools = None
+        if getattr(self.agent.model_client, "supports_native_tools", False):
+            native_tools = self.agent.native_tool_definitions()
+        request = ModelRequest(
+            messages=(
+                Message(
+                    role="user",
+                    blocks=(Block(prompt, kind="request", trust="user"),),
+                ),
+            ),
+            tools=tuple(native_tools or ()),
+            max_new_tokens=int(getattr(self.agent, "max_new_tokens", 4096)),
+            cache_key=getattr(getattr(self.agent, "prefix_state", None), "stable_hash", None),
+            protocol="text",
+        )
+        return PromptBundle(request=request, text=request.flatten(), metadata=metadata)
 
     def _render_sections_without_reduction(self, section_texts, selected_notes=None, anchors=()):
         selected_notes = selected_notes or []

@@ -2,6 +2,7 @@
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 from .checkpoint import CHECKPOINT_NONE_STATUS, CHECKPOINT_PARTIAL_STALE_STATUS, CHECKPOINT_WORKSPACE_MISMATCH_STATUS
 from .budget import RunBudget, graceful_final, usage_from_metadata  # noqa: F401
@@ -115,7 +116,9 @@ class AgentLoop:
             task_state.record_attempt()
             agent.write_task_state(task_state)
             prompt_started_at = time.monotonic()
-            prompt, prompt_metadata = agent._build_prompt_and_metadata(user_message)
+            prompt_bundle = agent._build_prompt_bundle_and_metadata(user_message)
+            prompt = prompt_bundle.text
+            prompt_metadata = prompt_bundle.metadata
             agent.emit_trace(
                 task_state,
                 "prompt_built",
@@ -179,20 +182,24 @@ class AgentLoop:
                 # 只有后端明确支持时，才把稳定前缀的 hash 作为 cache key 发出去。
                 prompt_cache_key = prompt_metadata.get("prompt_cache_key")
                 prompt_cache_retention = "in_memory"
-            native_tools = None
-            if getattr(agent.model_client, "supports_native_tools", False):
-                native_tools = agent.native_tool_definitions()
+            model_request = replace(
+                prompt_bundle.request,
+                cache_key=prompt_cache_key,
+            )
             agent.emit_progress("thinking", {"step": tool_steps + 1, "max_steps": agent.max_steps})
             task_state.record_model_turn()
             model_started_at = time.monotonic()
             try:
-                raw = agent.model_client.complete(
-                    prompt,
-                    agent.max_new_tokens,
-                    prompt_cache_key=prompt_cache_key,
-                    prompt_cache_retention=prompt_cache_retention,
-                    tools=native_tools,
-                )
+                if hasattr(agent.model_client, "complete_request"):
+                    raw = agent.model_client.complete_request(model_request)
+                else:
+                    raw = agent.model_client.complete(
+                        prompt,
+                        agent.max_new_tokens,
+                        prompt_cache_key=prompt_cache_key,
+                        prompt_cache_retention=prompt_cache_retention,
+                        tools=model_request.tools,
+                    )
             except Exception as exc:
                 # 模型后端出错（网络中断、超时、5xx）不应该让整个 run 带着一堆
                 # 半成品工件崩掉。这里把它收敛成一次「失败但已收尾」的运行：

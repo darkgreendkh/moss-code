@@ -9,6 +9,7 @@ import sys
 import threading
 import warnings
 import uuid
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -482,9 +483,14 @@ class Moss:
         return metadata
 
     def _build_prompt_and_metadata(self, user_message):
+        bundle = self._build_prompt_bundle_and_metadata(user_message)
+        return bundle.text, bundle.metadata
+
+    def _build_prompt_bundle_and_metadata(self, user_message):
         refresh = self.refresh_prefix()
         self.resume_state = self.evaluate_resume_state()
-        prompt, metadata = self.context_manager.build(user_message)
+        bundle = self.context_manager.build_bundle(user_message)
+        metadata = dict(bundle.metadata)
         # 这里把“这轮 prompt 是怎么拼出来的”连同缓存相关状态一起记下来，
         # 后面 trace/report 才能解释清楚：为什么这一轮 prefix 变了、缓存有没有命中。
         metadata.update(
@@ -516,7 +522,7 @@ class Moss:
             }
         )
         metadata.update(self.detected_secret_env_summary())
-        return prompt, metadata
+        return replace(bundle, metadata=metadata)
 
     def emit_progress(self, event, payload=None):
         # 把「agent 现在在做什么」推给可选的观察者。observer 只负责展示，

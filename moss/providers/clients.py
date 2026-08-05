@@ -31,6 +31,15 @@ class FakeModelClient:
             raise RuntimeError("fake model ran out of outputs")
         return self.outputs.pop(0)
 
+    def complete_request(self, request):
+        return self.complete(
+            request.flatten(),
+            request.max_new_tokens,
+            prompt_cache_key=request.cache_key,
+            prompt_cache_retention="in_memory" if request.cache_key else None,
+            tools=request.tools,
+        )
+
 
 class OllamaModelClient:
     def __init__(self, model, host, temperature, top_p, timeout):
@@ -83,6 +92,9 @@ class OllamaModelClient:
         if data.get("error"):
             raise RuntimeError(f"Ollama error: {data['error']}")
         return data.get("response", "")
+
+    def complete_request(self, request):
+        return self.complete(request.flatten(), request.max_new_tokens)
 
 
 def _normalize_versioned_base_url(base_url):
@@ -432,6 +444,15 @@ class OpenAICompatibleModelClient:
         }
         return _extract_openai_text(data)
 
+    def complete_request(self, request):
+        return self.complete(
+            request.flatten(),
+            request.max_new_tokens,
+            prompt_cache_key=request.cache_key,
+            prompt_cache_retention="in_memory" if request.cache_key else None,
+            tools=request.tools,
+        )
+
 
 def _extract_anthropic_text(data):
     # 必须先整体扫一遍 tool_use 再回落到 text：模型常常先吐一句开场白
@@ -539,3 +560,12 @@ class AnthropicCompatibleModelClient:
         if text:
             return text
         raise RuntimeError("Anthropic-compatible error: could not extract text from response")
+
+    def complete_request(self, request):
+        return self.complete(
+            request.flatten(),
+            request.max_new_tokens,
+            prompt_cache_key=request.cache_key,
+            prompt_cache_retention="in_memory" if request.cache_key else None,
+            tools=request.tools,
+        )
