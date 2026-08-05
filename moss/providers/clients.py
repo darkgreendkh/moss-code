@@ -11,6 +11,8 @@ from http.client import RemoteDisconnected
 import urllib.error
 import urllib.request
 
+from .capabilities import capabilities_for
+
 OPENAI_COMPATIBLE_USER_AGENT = "moss/0.1"
 
 
@@ -55,6 +57,9 @@ class FakeModelClient:
     def __init__(self, outputs):
         self.outputs = list(outputs)
         self.prompts = []
+        self.provider = str(getattr(self, "provider", "fake") or "fake")
+        self.model = str(getattr(self, "model", "fake") or "fake")
+        self.capabilities = getattr(self, "capabilities", capabilities_for(self.provider, self.model))
         self.supports_prompt_cache = False
         self.supports_native_tools = bool(getattr(self, "supports_native_tools", False))
         self.native_tool_format = str(getattr(self, "native_tool_format", "") or "")
@@ -81,6 +86,8 @@ class FakeModelClient:
 class OllamaModelClient:
     def __init__(self, model, host, temperature, top_p, timeout):
         self.model = model
+        self.provider = "ollama"
+        self.capabilities = capabilities_for(self.provider, model)
         self.host = host.rstrip("/")
         self.temperature = temperature
         self.top_p = top_p
@@ -352,16 +359,16 @@ def parse_anthropic_usage(data):
 
 
 class OpenAICompatibleModelClient:
-    def __init__(self, model, base_url, api_key, temperature, timeout):
+    def __init__(self, model, base_url, api_key, temperature, timeout, provider="openai"):
         self.model = model
+        self.provider = provider
+        self.capabilities = capabilities_for(provider, model)
         self.base_url = _normalize_versioned_base_url(base_url)
         self.api_key = api_key
         self.temperature = temperature
         self.timeout = timeout
-        # 当前只在明确支持 prompt cache 语义的后端上启用这条链路，
-        # 避免对不支持的后端传一个“看起来统一、其实没意义”的伪参数。
-        self.supports_prompt_cache = "openai.com" in self.base_url
-        self.supports_native_tools = True
+        self.supports_prompt_cache = self.capabilities.supports_cache
+        self.supports_native_tools = self.capabilities.supports_native_tools
         self.native_tool_format = "openai_responses"
         self.last_completion_metadata = {}
 
@@ -406,6 +413,7 @@ class OpenAICompatibleModelClient:
             ],
             "max_output_tokens": max_new_tokens,
             "stream": False,
+            "store": False,
         }
         if self.temperature is not None:
             payload["temperature"] = self.temperature
@@ -519,14 +527,16 @@ def _extract_anthropic_text(data):
 
 
 class AnthropicCompatibleModelClient:
-    def __init__(self, model, base_url, api_key, temperature, timeout):
+    def __init__(self, model, base_url, api_key, temperature, timeout, provider="anthropic"):
         self.model = model
+        self.provider = provider
+        self.capabilities = capabilities_for(provider, model)
         self.base_url = _normalize_versioned_base_url(base_url)
         self.api_key = api_key
         self.temperature = temperature
         self.timeout = timeout
-        self.supports_prompt_cache = False
-        self.supports_native_tools = True
+        self.supports_prompt_cache = self.capabilities.supports_cache
+        self.supports_native_tools = self.capabilities.supports_native_tools
         self.native_tool_format = "anthropic_messages"
         self.last_completion_metadata = {}
 
@@ -539,9 +549,7 @@ class AnthropicCompatibleModelClient:
         tools=None,
         _model_request=None,
     ):
-        # 为了保持统一接口，runtime 仍然会传缓存参数进来；
-        # 这里只是显式丢弃，因为当前 Anthropic-compatible 路径没有接缓存复用。
-        del prompt_cache_key, prompt_cache_retention
+        del prompt_cache_retention
         self.last_completion_metadata = {}
         payload = {
             "model": self.model,
@@ -568,7 +576,20 @@ class AnthropicCompatibleModelClient:
                 if block.text
             ]
         if tools:
-            payload["tools"] = list(tools)
+            payload["tools"] = [dict(tool) for tool in tools]
+        cache_enabled = bool(
+            _model_request is not None
+            and prompt_cache_key
+            and self.capabilities.supports_cache
+            and self.capabilities.cache_style == "anthropic_breakpoint"
+        )
+        if cache_enabled:
+            if payload.get("system"):
+                payload["system"][-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+            if payload.get("tools"):
+                payload["tools"][-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+            if len(payload["messages"]) >= 2 and payload["messages"][-2].get("content"):
+                payload["messages"][-2]["content"][-1]["cache_control"] = {"type": "ephemeral"}
 
         headers = {
             "Content-Type": "application/json",

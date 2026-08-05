@@ -8,6 +8,7 @@ from .checkpoint import CHECKPOINT_NONE_STATUS, CHECKPOINT_PARTIAL_STALE_STATUS,
 from .budget import RunBudget, graceful_final, usage_from_metadata  # noqa: F401
 from .clock import now
 from .output_parser import parse_model_actions, truncate_after_final
+from .providers.capabilities import probe
 from . import trace_events
 from .task_state import STATUS_RUNNING, TaskState
 from .token_budget import clip, estimate_tokens
@@ -178,7 +179,13 @@ class AgentLoop:
             )
             prompt_cache_key = None
             prompt_cache_retention = None
-            if agent.feature_enabled("prompt_cache") and getattr(agent.model_client, "supports_prompt_cache", False):
+            capabilities = getattr(agent.model_client, "capabilities", None)
+            supports_cache = (
+                capabilities.supports_cache
+                if capabilities is not None
+                else getattr(agent.model_client, "supports_prompt_cache", False)
+            )
+            if agent.feature_enabled("prompt_cache") and supports_cache:
                 # 只有后端明确支持时，才把稳定前缀的 hash 作为 cache key 发出去。
                 prompt_cache_key = prompt_metadata.get("prompt_cache_key")
                 prompt_cache_retention = "in_memory"
@@ -209,6 +216,16 @@ class AgentLoop:
                 # 正常向上冒泡，由 CLI 决定回到提示符还是退出。
                 return self._finish_model_error(task_state, user_message, exc, run_started_at, model_started_at)
             completion_metadata = dict(getattr(agent.model_client, "last_completion_metadata", {}) or {})
+            if capabilities is not None:
+                detected = probe(agent.model_client, completion_metadata)
+                if detected != capabilities:
+                    agent.model_client.capabilities = detected
+                    agent.model_client.supports_prompt_cache = detected.supports_cache
+                    agent.emit_trace(
+                        task_state,
+                        trace_events.CACHE_CAPABILITY_DETECTED,
+                        {"cache_style": detected.cache_style},
+                    )
             if completion_metadata:
                 # 把后端返回的 usage/cache 统计并回 prompt_metadata，
                 # 方便统一写入 report 和 trace。

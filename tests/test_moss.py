@@ -501,6 +501,7 @@ def test_openai_compatible_client_posts_expected_responses_payload():
         ],
         "max_output_tokens": 42,
         "stream": False,
+        "store": False,
         "temperature": 0.2,
     }
 
@@ -1050,6 +1051,16 @@ def test_build_arg_parser_accepts_deepseek_provider(tmp_path):
     args = moss_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "deepseek"])
 
     assert args.provider == "deepseek"
+
+
+def test_no_prompt_cache_cli_flag_disables_runtime_feature(tmp_path):
+    args = moss_pkg.build_arg_parser().parse_args(
+        ["--cwd", str(tmp_path), "--provider", "ollama", "--no-prompt-cache"]
+    )
+
+    agent = moss_pkg.build_agent(args)
+
+    assert agent.feature_enabled("prompt_cache") is False
 
 
 def test_build_agent_uses_project_env_provider_when_cli_omitted(tmp_path):

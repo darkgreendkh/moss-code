@@ -27,6 +27,7 @@ RUN_INTERRUPTED = "run_interrupted"
 
 # 提示词缓存（spec-04 §4.4）
 TOOL_REGISTRY_DRIFT = "tool_registry_drift"
+CACHE_CAPABILITY_DETECTED = "cache_capability_detected"
 
 __all__ = [
     "TOOLS_BATCH_STARTED",
@@ -40,6 +41,7 @@ __all__ = [
     "BUDGET_EXCEEDED",
     "RUN_INTERRUPTED",
     "TOOL_REGISTRY_DRIFT",
+    "CACHE_CAPABILITY_DETECTED",
     "INSTRUCTION_LOADED",
     "INSTRUCTION_CONFLICT",
     "REPO_MAP_BUILT",
