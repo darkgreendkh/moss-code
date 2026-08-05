@@ -23,7 +23,7 @@ def test_flatten_joins_system_and_message_blocks_in_stable_order():
     assert request.flatten() == "IDENTITY\n\nRULES\n\nWORKSPACE\n\nHISTORY\n\nREQUEST"
 
 
-def test_context_bundle_flatten_matches_legacy_prompt_byte_for_byte(tmp_path):
+def test_context_bundle_flatten_matches_its_structured_text(tmp_path):
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
     agent = Moss(
         model_client=FakeModelClient([]),
@@ -33,11 +33,13 @@ def test_context_bundle_flatten_matches_legacy_prompt_byte_for_byte(tmp_path):
     )
     agent.record({"role": "assistant", "content": "earlier", "created_at": "2026-08-05T00:00:00Z"})
 
-    legacy_text, legacy_metadata = agent.context_manager.build("do it")
+    _, legacy_metadata = agent.context_manager.build("do it")
     bundle = agent.context_manager.build_bundle("do it")
 
-    assert bundle.text == legacy_text
-    assert bundle.request.flatten() == legacy_text
+    assert bundle.text == bundle.request.flatten()
+    assert bundle.text.index("Workspace:") < bundle.text.index("Transcript:")
+    assert bundle.text.index("Transcript:") < bundle.text.index("Memory:")
+    assert bundle.text.rstrip().endswith("Current user request:\ndo it")
     assert bundle.metadata == legacy_metadata
 
 

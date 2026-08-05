@@ -19,6 +19,10 @@ class PromptPrefix:
     # 都会改 `git status` -> workspace 段变 -> 整段 hash 变 -> 缓存路由键每轮抖动，
     # 恰好在「多步编辑」这个最该命中缓存的场景里把缓存打散。
     stable_hash: str
+    # 结构化 provider payload 用这两个字段做权限分层；text 仍是二者拼接，
+    # 所以旧的字符串 prompt 与 hash 契约不变。
+    stable_text: str
+    workspace_text: str
     workspace_fingerprint: str
     tool_signature: str
     skill_signature: str
@@ -137,12 +141,15 @@ def build_prompt_prefix(workspace, tools, skills=None, built_at=None):
     ).strip()
     # 易变尾：workspace 快照（含 git status / recent_commits），每轮可能变。
     # 拼在稳定头之后，整段 text == 改动前逐字节一致（旧模板里 workspace 也在最后）。
-    text = f"{head}\n\n{workspace.text()}"
+    workspace_text = workspace.text()
+    text = f"{head}\n\n{workspace_text}"
     signature = tool_signature(tools)
     return PromptPrefix(
         text=text,
         hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         stable_hash=hashlib.sha256(head.encode("utf-8")).hexdigest(),
+        stable_text=head,
+        workspace_text=workspace_text,
         workspace_fingerprint=workspace.fingerprint(),
         tool_signature=signature,
         skill_signature=skill_signature(skills),

@@ -14,6 +14,43 @@ import urllib.request
 OPENAI_COMPATIBLE_USER_AGENT = "moss/0.1"
 
 
+def _message_text(message):
+    return "\n\n".join(block.text for block in message.blocks if block.text).strip()
+
+
+def _openai_structured_input(model_request):
+    items = []
+    if model_request.system:
+        items.append(
+            {
+                "role": "developer",
+                "content": [
+                    {"type": "input_text", "text": block.text}
+                    for block in model_request.system
+                    if block.text
+                ],
+            }
+        )
+    for message in model_request.messages:
+        text = _message_text(message)
+        if not text:
+            continue
+        role = message.role if message.role in {"user", "assistant"} else "user"
+        items.append({"role": role, "content": [{"type": "input_text", "text": text}]})
+    return items
+
+
+def _anthropic_structured_messages(model_request):
+    messages = []
+    for message in model_request.messages:
+        text = _message_text(message)
+        if not text:
+            continue
+        role = "assistant" if message.role == "assistant" else "user"
+        messages.append({"role": role, "content": [{"type": "text", "text": text}]})
+    return messages
+
+
 class FakeModelClient:
     def __init__(self, outputs):
         self.outputs = list(outputs)
@@ -328,7 +365,15 @@ class OpenAICompatibleModelClient:
         self.native_tool_format = "openai_responses"
         self.last_completion_metadata = {}
 
-    def complete(self, prompt, max_new_tokens, prompt_cache_key=None, prompt_cache_retention=None, tools=None):
+    def complete(
+        self,
+        prompt,
+        max_new_tokens,
+        prompt_cache_key=None,
+        prompt_cache_retention=None,
+        tools=None,
+        _model_request=None,
+    ):
         """向 OpenAI-compatible `/responses` 接口发起一次模型调用。
 
         为什么存在：
@@ -348,7 +393,7 @@ class OpenAICompatibleModelClient:
         self.last_completion_metadata = {}
         payload = {
             "model": self.model,
-            "input": [
+            "input": _openai_structured_input(_model_request) if _model_request is not None else [
                 {
                     "role": "user",
                     "content": [
@@ -451,6 +496,7 @@ class OpenAICompatibleModelClient:
             prompt_cache_key=request.cache_key,
             prompt_cache_retention="in_memory" if request.cache_key else None,
             tools=request.tools,
+            _model_request=request,
         )
 
 
@@ -484,14 +530,22 @@ class AnthropicCompatibleModelClient:
         self.native_tool_format = "anthropic_messages"
         self.last_completion_metadata = {}
 
-    def complete(self, prompt, max_new_tokens, prompt_cache_key=None, prompt_cache_retention=None, tools=None):
+    def complete(
+        self,
+        prompt,
+        max_new_tokens,
+        prompt_cache_key=None,
+        prompt_cache_retention=None,
+        tools=None,
+        _model_request=None,
+    ):
         # 为了保持统一接口，runtime 仍然会传缓存参数进来；
         # 这里只是显式丢弃，因为当前 Anthropic-compatible 路径没有接缓存复用。
         del prompt_cache_key, prompt_cache_retention
         self.last_completion_metadata = {}
         payload = {
             "model": self.model,
-            "messages": [
+            "messages": _anthropic_structured_messages(_model_request) if _model_request is not None else [
                 {
                     "role": "user",
                     "content": [
@@ -507,6 +561,12 @@ class AnthropicCompatibleModelClient:
         }
         if self.temperature is not None:
             payload["temperature"] = self.temperature
+        if _model_request is not None and _model_request.system:
+            payload["system"] = [
+                {"type": "text", "text": block.text}
+                for block in _model_request.system
+                if block.text
+            ]
         if tools:
             payload["tools"] = list(tools)
 
@@ -568,4 +628,5 @@ class AnthropicCompatibleModelClient:
             prompt_cache_key=request.cache_key,
             prompt_cache_retention="in_memory" if request.cache_key else None,
             tools=request.tools,
+            _model_request=request,
         )

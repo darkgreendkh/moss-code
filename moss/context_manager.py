@@ -157,6 +157,7 @@ class ContextManager:
             rendered = self._render_sections_without_reduction(
                 section_texts, selected_notes=selected_notes, anchors=anchors
             )
+            self._last_rendered = rendered
             prompt = self._assemble_prompt(rendered)
             metadata = self._metadata(
                 prompt=prompt,
@@ -228,27 +229,75 @@ class ContextManager:
             section_texts=section_texts,
             over_budget_unrecoverable=over_budget_unrecoverable,
         )
+        self._last_rendered = rendered
         return prompt, metadata
 
     def build_bundle(self, user_message):
-        """返回结构化请求，同时保留与旧 prompt 完全一致的扁平文本。"""
-        prompt, metadata = self.build(user_message)
+        """把预算后的 sections 放进有信任边界的结构化请求。"""
+        _, metadata = self.build(user_message)
+        rendered = self._last_rendered
+        rendered_prefix = rendered["prefix"].rendered
+        stable_text, workspace_text = self._split_rendered_prefix(rendered_prefix)
         native_tools = None
         if getattr(self.agent.model_client, "supports_native_tools", False):
             native_tools = self.agent.native_tool_definitions()
-        request = ModelRequest(
-            messages=(
+        system = (
+            Block(stable_text, kind="rules", trust="platform", cache=True),
+        ) if stable_text else ()
+        messages = []
+        if workspace_text:
+            messages.append(
                 Message(
                     role="user",
-                    blocks=(Block(prompt, kind="request", trust="user"),),
+                    blocks=(Block(workspace_text, kind="workspace", source="workspace", trust="tool"),),
+                )
+            )
+        history_text = rendered["history"].rendered
+        history_trust = "tool" if "<tool_result" in history_text else "model"
+        messages.append(
+            Message(
+                role="tool" if history_trust == "tool" else "assistant",
+                blocks=(Block(history_text, kind="history", source="session", trust=history_trust),),
+            )
+        )
+        messages.append(
+            Message(
+                role="user",
+                blocks=(
+                    Block(rendered["memory"].rendered, kind="memory", source="memory", trust="model"),
+                    Block(
+                        rendered["relevant_memory"].rendered,
+                        kind="relevant",
+                        source="retrieval",
+                        trust="model",
+                    ),
+                    Block(
+                        rendered[CURRENT_REQUEST_SECTION].rendered,
+                        kind="request",
+                        trust="user",
+                    ),
                 ),
-            ),
+            )
+        )
+        request = ModelRequest(
+            system=system,
+            messages=tuple(messages),
             tools=tuple(native_tools or ()),
             max_new_tokens=int(getattr(self.agent, "max_new_tokens", 4096)),
             cache_key=getattr(getattr(self.agent, "prefix_state", None), "stable_hash", None),
             protocol="text",
         )
         return PromptBundle(request=request, text=request.flatten(), metadata=metadata)
+
+    def _split_rendered_prefix(self, rendered_prefix):
+        stable_text = str(getattr(getattr(self.agent, "prefix_state", None), "stable_text", ""))
+        if stable_text and rendered_prefix.startswith(stable_text):
+            return stable_text, rendered_prefix[len(stable_text):].lstrip()
+        marker = "\n\nWorkspace:"
+        if marker in rendered_prefix:
+            head, tail = rendered_prefix.split(marker, 1)
+            return head, "Workspace:" + tail
+        return rendered_prefix, ""
 
     def _render_sections_without_reduction(self, section_texts, selected_notes=None, anchors=()):
         selected_notes = selected_notes or []
