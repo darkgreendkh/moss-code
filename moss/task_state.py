@@ -23,6 +23,7 @@ STOP_REASON_DELEGATE_FAILED = "delegate_failed"
 STOP_REASON_PERSISTENCE_ERROR = "persistence_error"
 STOP_REASON_RESUME_LOAD_ERROR = "resume_load_error"
 STOP_REASON_INTERRUPTED = "interrupted"
+STOP_REASON_BUDGET_EXCEEDED = "budget_exceeded"
 
 
 @dataclass
@@ -110,6 +111,10 @@ class TaskState:
 
     def stop_model_error(self, final_answer=""):
         return self.stop(STOP_REASON_MODEL_ERROR, status=STATUS_FAILED, final_answer=final_answer)
+
+    def stop_budget_exceeded(self, final_answer=""):
+        # 预算耗尽是"按计划停下"，不是失败：status 保持 stopped。
+        return self.stop(STOP_REASON_BUDGET_EXCEEDED, final_answer=final_answer)
 
     def stop_interrupted(self, final_answer=""):
         return self.stop(STOP_REASON_INTERRUPTED, status=STATUS_FAILED, final_answer=final_answer)

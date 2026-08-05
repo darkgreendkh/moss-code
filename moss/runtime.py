@@ -26,6 +26,7 @@ from .clock import now
 from .token_budget import MAX_HISTORY, clip
 from . import ignore as ignorelib
 from . import repo_map as repo_maplib
+from . import budget as budgetlib
 from . import stall as stalllib
 from . import trace_events
 from .workspace import (
@@ -78,6 +79,7 @@ class Moss:
         feature_flags=None,
         allowed_tools=None,
         parallel_tools=False,
+        run_budget_limits=None,
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -95,6 +97,10 @@ class Moss:
         self.cancel_token = threading.Event()
         # 只读工具批内并发。默认关闭：先灰度，评测证明收益后再翻默认值。
         self.parallel_tools = bool(parallel_tools)
+        # 多维预算的上限（步数之外还有 token / 时间 / 金额）。默认全 None，
+        # 行为与加预算前完全一致。
+        self.run_budget_limits = dict(run_budget_limits or {})
+        self.last_run_budget = None
         # 停滞检测用的工具结果窗口（workspace_changed / tool_error_code 不在 history 里）。
         self._tool_outcomes = []
         # 同一类停滞只干预一次：重复喊同一句话既费 token 又没有新信息。
@@ -632,6 +638,29 @@ class Moss:
         tool_events = [item for item in self.session["history"] if item["role"] == "tool"]
         return stalllib.is_repeated_call(tool_events, name, args)
 
+    def new_run_budget(self):
+        """给一次运行开一份预算账本。"""
+        limits = dict(self.run_budget_limits)
+        return budgetlib.RunBudget(max_steps=0, **limits)
+
+    def price_for_usage(self, input_tokens, output_tokens):
+        """把 token 数换算成金额；查不到价格返回 None。
+
+        返回 None 而不是 0：把未知当成 0 会让金额上限永远不触发，
+        正好在最该拦的时候不拦。价目表在 spec-08 的 evaluation/pricing.py 落地，
+        这里先留出接入点。
+        """
+        pricing = getattr(self.model_client, "pricing", None)
+        if not pricing:
+            return None
+        try:
+            return (
+                float(input_tokens) * float(pricing["input_usd_per_1k"]) / 1000.0
+                + float(output_tokens) * float(pricing["output_usd_per_1k"]) / 1000.0
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
     def stall_events(self):
         """给停滞检测用的最近工具事件序列。
 
@@ -684,6 +713,7 @@ class Moss:
             "durable_promotions": list(self.last_durable_promotions),
             "durable_rejections": list(self.last_durable_rejections),
             "durable_superseded": list(self.last_durable_superseded),
+            "usage": self.last_run_budget.snapshot() if self.last_run_budget else {},
             "redacted_env": self.detected_secret_env_summary(),
         }
 

@@ -4,11 +4,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from .checkpoint import CHECKPOINT_NONE_STATUS, CHECKPOINT_PARTIAL_STALE_STATUS, CHECKPOINT_WORKSPACE_MISMATCH_STATUS
+from .budget import RunBudget, graceful_final, usage_from_metadata  # noqa: F401
 from .clock import now
 from .output_parser import parse_model_actions, truncate_after_final
 from . import trace_events
 from .task_state import STATUS_RUNNING, TaskState
-from .token_budget import clip
+from .token_budget import clip, estimate_tokens
 
 # 并发只读工具的上限。固定 4：再多也受限于磁盘和后端延迟，
 # 而线程数越多，出问题时越难复现。
@@ -91,6 +92,7 @@ class AgentLoop:
         tool_steps = 0
         attempts = 0
         max_attempts = max(agent.max_steps * 3, agent.max_steps + 4)
+        budget = agent.new_run_budget()
 
         # 这是 agent 的主循环，可以按“感知 -> 决策 -> 行动 -> 记录”来理解：
         # 1. 感知：重新组 prompt，把当前状态整理给模型看
@@ -99,6 +101,12 @@ class AgentLoop:
         # 4. 记录：把结果写回 history / task_state / trace / memory
         # 然后进入下一轮，直到停机条件满足
         while tool_steps < agent.max_steps and attempts < max_attempts:
+            budget.consume(elapsed_s=time.monotonic() - run_started_at)
+            exceeded = budget.hard_exceeded()
+            if exceeded:
+                # 硬超限：不再调用模型。这时候再发一次请求，
+                # 很可能正好把预算捅穿，而收尾本身也需要余量。
+                return self._finish_budget_exceeded(task_state, user_message, budget, exceeded, run_started_at)
             attempts += 1
             task_state.record_attempt()
             agent.write_task_state(task_state)
@@ -196,6 +204,22 @@ class AgentLoop:
                 prompt_metadata.update(completion_metadata)
             agent.last_completion_metadata = completion_metadata
             agent.last_prompt_metadata = prompt_metadata
+            input_tokens, output_tokens, estimated = usage_from_metadata(
+                completion_metadata, prompt=prompt, completion=raw, measure=estimate_tokens
+            )
+            budget.consume(
+                steps=1,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                elapsed_s=time.monotonic() - run_started_at,
+                usd=agent.price_for_usage(input_tokens, output_tokens),
+                estimated=estimated,
+            )
+            agent.last_run_budget = budget
+            soft = budget.soft_exceeded()
+            if soft:
+                agent.emit_trace(task_state, trace_events.BUDGET_SOFT_EXCEEDED, {"dimension": soft})
+                agent.record({"role": "system", "content": budget.soft_notice(soft), "created_at": now()})
             actions, dropped = truncate_after_final(parse_model_actions(raw))
             kind = actions[0].kind if actions else "retry"
             agent.emit_trace(
@@ -425,6 +449,38 @@ class AgentLoop:
         with ThreadPoolExecutor(max_workers=min(PARALLEL_MAX_WORKERS, len(actions))) as pool:
             # map 保序：即使后提交的先跑完，结果也按提交顺序返回。
             return list(pool.map(run_one, actions))
+
+    def _finish_budget_exceeded(self, task_state, user_message, budget, dimension, run_started_at):
+        """预算耗尽时的优雅收尾：规则生成总结，不再花模型调用。"""
+        agent = self.agent
+        final = graceful_final(task_state, dimension)
+        agent.emit_trace(
+            task_state,
+            trace_events.BUDGET_EXCEEDED,
+            {"dimension": dimension, **budget.snapshot()},
+        )
+        task_state.stop_budget_exceeded(final)
+        agent.record({"role": "assistant", "content": final, "created_at": now()})
+        agent.promote_durable_memory(user_message, final)
+        agent.write_task_state(task_state)
+        checkpoint = agent.create_checkpoint(task_state, user_message, trigger="budget_exceeded")
+        agent.emit_trace(
+            task_state,
+            "checkpoint_created",
+            {"checkpoint_id": checkpoint["checkpoint_id"], "trigger": "budget_exceeded"},
+        )
+        agent.emit_trace(
+            task_state,
+            "run_finished",
+            {
+                "status": task_state.status,
+                "stop_reason": task_state.stop_reason,
+                "final_answer": final,
+                "run_duration_ms": int((time.monotonic() - run_started_at) * 1000),
+            },
+        )
+        agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
+        return final
 
     def _finish_interrupted(self, user_message, exc, run_started_at):
         """把一次中断收敛成一次已收尾的失败运行。

@@ -385,6 +385,12 @@ def build_agent(args):
     # 这里是 CLI 到 runtime 的装配点：
     # 先采集工作区快照和加载项目级环境，再整理 secret 名单、模型后端和 session。
     workspace = WorkspaceContext.build(args.cwd)
+    run_budget_limits = {
+        "max_input_tokens": getattr(args, "max_input_tokens", None),
+        "max_output_tokens": getattr(args, "max_output_tokens", None),
+        "max_wall_clock_s": getattr(args, "max_seconds", None),
+        "max_usd": getattr(args, "max_usd", None),
+    }
     load_project_env(workspace.repo_root)
     configured_secret_names = _configured_secret_names(args)
     store = SessionStore(workspace.repo_root + "/.moss/sessions")
@@ -403,6 +409,7 @@ def build_agent(args):
             max_new_tokens=args.max_new_tokens,
             secret_env_names=configured_secret_names,
             parallel_tools=getattr(args, "parallel_tools", "off") == "on",
+            run_budget_limits=run_budget_limits,
         )
     return Moss(
         model_client=model,
@@ -413,6 +420,7 @@ def build_agent(args):
         max_new_tokens=args.max_new_tokens,
         secret_env_names=configured_secret_names,
         parallel_tools=getattr(args, "parallel_tools", "off") == "on",
+        run_budget_limits=run_budget_limits,
     )
 
 
@@ -455,6 +463,11 @@ def build_arg_parser():
         help="Run a batch of read-only tool calls concurrently. Risky tools always run serially.",
     )
     parser.add_argument("--max-new-tokens", type=int, default=4096, help="Maximum model output tokens per step.")
+    # 多维预算。默认全 None：不设就完全按老行为跑，只有 --max-steps 生效。
+    parser.add_argument("--max-input-tokens", type=int, default=None, help="Stop the run after this many input tokens.")
+    parser.add_argument("--max-output-tokens", type=int, default=None, help="Stop the run after this many output tokens.")
+    parser.add_argument("--max-seconds", type=float, default=None, help="Stop the run after this much wall-clock time.")
+    parser.add_argument("--max-usd", type=float, default=None, help="Stop the run after this much estimated spend.")
     parser.add_argument("--temperature", type=float, default=0.2, help="Sampling temperature sent to Ollama.")
     parser.add_argument("--top-p", type=float, default=0.9, help="Top-p sampling value sent to Ollama.")
     return parser
