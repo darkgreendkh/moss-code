@@ -101,6 +101,10 @@ class Moss:
         # 行为与加预算前完全一致。
         self.run_budget_limits = dict(run_budget_limits or {})
         self.last_run_budget = None
+        # 当前计划（update_plan 写入）。它同时进 task_state 和 prompt 尾部。
+        self.current_plan = []
+        self._plan_step_started_at = 0
+        self._plan_pressure_reported = set()
         # 停滞检测用的工具结果窗口（workspace_changed / tool_error_code 不在 history 里）。
         self._tool_outcomes = []
         # 同一类停滞只干预一次：重复喊同一句话既费 token 又没有新信息。
@@ -638,6 +642,45 @@ class Moss:
         tool_events = [item for item in self.session["history"] if item["role"] == "tool"]
         return stalllib.is_repeated_call(tool_events, name, args)
 
+    def set_plan(self, plan):
+        """把模型给的计划写进 task_state，并落 trace。
+
+        计划是"显式的意图声明"：跑偏时能对照它看出偏在哪一步，
+        而不是只能靠步数上限兜底。plan_drift 的判定在 spec-08 离线做，
+        主循环只负责把它记下来。
+        """
+        self.current_plan = list(plan or [])
+        task_state = self.current_task_state
+        if task_state is not None:
+            task_state.plan = list(self.current_plan)
+            self.emit_trace(task_state, trace_events.PLAN_UPDATED, {"steps": list(self.current_plan)})
+        # 换了计划就重新开始算某一步的消耗，否则新计划一上来就被判压力过大。
+        self._plan_step_started_at = self.current_task_state.tool_steps if task_state else 0
+        self._plan_pressure_reported = set()
+        return self.current_plan
+
+    def render_plan_text(self):
+        return toolkit.render_plan(self.current_plan)
+
+    def check_plan_pressure(self):
+        """某个 in_progress 步骤吃掉的步数远超均摊预算时，建议重规划。
+
+        软预算而不是硬拦截：计划本来就会变，真正的问题是"卡在同一步却不承认"。
+        """
+        plan = self.current_plan
+        task_state = self.current_task_state
+        if not plan or task_state is None:
+            return None
+        current = next((step for step in plan if step["status"] == "in_progress"), None)
+        if current is None or current["id"] in self._plan_pressure_reported:
+            return None
+        allowance = max(1, self.max_steps // max(1, len(plan))) * 2
+        spent = task_state.tool_steps - self._plan_step_started_at
+        if spent < allowance:
+            return None
+        self._plan_pressure_reported.add(current["id"])
+        return {"step_id": current["id"], "title": current["title"], "spent_steps": spent}
+
     def new_run_budget(self):
         """给一次运行开一份预算账本。"""
         limits = dict(self.run_budget_limits)
@@ -734,6 +777,7 @@ class Moss:
             spawn_delegate=self.spawn_delegate,
             skills_provider=lambda: self.skills,
             cancel_token=self.cancel_token,
+            plan_writer=self.set_plan,
         )
 
     def delegate_session_store(self):

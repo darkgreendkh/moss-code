@@ -46,6 +46,8 @@ class TaskState:
     model_turns: int = 0
     tool_calls: int = 0
     verification_requested: bool = False
+    # 显式计划（update_plan 写入）。跑偏时能对照它看出偏在哪一步。
+    plan: list = None
 
     @classmethod
     def create(cls, task_id, user_request, run_id=""):
@@ -70,6 +72,7 @@ class TaskState:
             model_turns=int(data.get("model_turns", 0)),
             tool_calls=int(data.get("tool_calls", 0)),
             verification_requested=bool(data.get("verification_requested", False)),
+            plan=list(data.get("plan", []) or []),
         )
 
     def record_attempt(self):
@@ -141,4 +144,5 @@ class TaskState:
             "model_turns": self.model_turns,
             "tool_calls": self.tool_calls,
             "verification_requested": self.verification_requested,
+            "plan": list(self.plan or []),
         }

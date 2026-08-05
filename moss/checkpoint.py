@@ -143,15 +143,22 @@ def _interrupted_run_lines(interrupted_runs):
 def render_checkpoint_text(agent):
     checkpoint = current_checkpoint(agent)
     interrupted_runs = list(agent.resume_state.get("interrupted_runs", []) or [])
+    # 计划渲染在最前面：它是模型自己写的意图声明，放在 checkpoint 段顶部
+    # 最容易被对照着看"我说要做的和我正在做的一致吗"。
+    plan_text = agent.render_plan_text() if hasattr(agent, "render_plan_text") else ""
     if not checkpoint:
+        lines = []
+        if plan_text:
+            lines.append(plan_text)
         if interrupted_runs:
-            lines = [
-                "Task checkpoint:",
-                f"- Resume status: {agent.resume_state.get('status', CHECKPOINT_NONE_STATUS)}",
-                "- Interrupted runs: " + " | ".join(_interrupted_run_lines(interrupted_runs)),
-            ]
-            return "\n".join(lines)
-        return ""
+            lines.extend(
+                [
+                    "Task checkpoint:",
+                    f"- Resume status: {agent.resume_state.get('status', CHECKPOINT_NONE_STATUS)}",
+                    "- Interrupted runs: " + " | ".join(_interrupted_run_lines(interrupted_runs)),
+                ]
+            )
+        return "\n".join(lines)
     lines = [
         "Task checkpoint:",
         f"- Resume status: {agent.resume_state.get('status', CHECKPOINT_NONE_STATUS)}",
@@ -172,6 +179,8 @@ def render_checkpoint_text(agent):
     summary = str(checkpoint.get("summary", "")).strip()
     if summary:
         lines.append(f"- Summary: {summary}")
+    if plan_text:
+        return plan_text + "\n\n" + "\n".join(lines)
     return "\n".join(lines)
 
 

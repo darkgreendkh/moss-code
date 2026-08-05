@@ -2251,3 +2251,64 @@ def test_pending_user_message_rejoins_history_on_the_next_run(tmp_path):
     assert not any(item.get("pending") for item in agent.session["history"])
     prompt = agent.prompt("third request")
     assert "first request" in prompt
+
+
+def test_update_plan_writes_the_plan_into_task_state_and_prompt(tmp_path):
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"update_plan","args":{"steps":['
+            '{"id":"1","title":"read the parser","status":"in_progress"},'
+            '{"id":"2","title":"add a test","status":"pending"}]}}</tool>',
+            "<final>Done.</final>",
+        ],
+    )
+
+    assert agent.ask("plan the work") == "Done."
+
+    assert [step["title"] for step in agent.current_task_state.plan] == [
+        "read the parser",
+        "add a test",
+    ]
+    prompt = agent.prompt("next")
+    assert "Plan:" in prompt
+    assert "[~] 1. read the parser" in prompt
+    assert "[ ] 2. add a test" in prompt
+
+    events = [
+        json.loads(line)
+        for line in agent.run_store.trace_path(agent.current_task_state).read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["event"] for event in events].count("plan_updated") == 1
+
+
+def test_update_plan_is_forgiving_about_shape(tmp_path):
+    """计划是给模型自己看的备忘，为格式问题拒绝整次调用得不偿失。"""
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"update_plan","args":{"steps":['
+            '{"title":"no id here","status":"bogus"},'
+            '{"title":"","status":"done"}]}}</tool>',
+            "<final>Done.</final>",
+        ],
+    )
+
+    agent.ask("plan the work")
+
+    plan = agent.current_task_state.plan
+    assert len(plan) == 1
+    assert plan[0]["id"] == "1"
+    assert plan[0]["status"] == "pending"
+
+
+def test_update_plan_rejects_a_plan_with_no_usable_step(tmp_path):
+    agent = build_agent(
+        tmp_path,
+        ['<tool>{"name":"update_plan","args":{"steps":[]}}</tool>', "<final>Done.</final>"],
+    )
+
+    agent.ask("plan the work")
+
+    tool_entries = [item for item in agent.session["history"] if item.get("role") == "tool"]
+    assert "invalid arguments" in tool_entries[0]["content"]

@@ -413,7 +413,29 @@ class AgentLoop:
             },
         )
         self._check_stall(task_state)
+        self._check_plan_pressure(task_state)
         return len(actions)
+
+    def _check_plan_pressure(self, task_state):
+        """某一步吃掉的步数远超均摊预算时，建议模型重规划。
+
+        软提示而不是硬拦截：计划本来就会变，真正的问题是"卡在同一步却不承认"。
+        """
+        agent = self.agent
+        pressure = agent.check_plan_pressure()
+        if not pressure:
+            return
+        agent.emit_trace(task_state, trace_events.PLAN_PRESSURE, pressure)
+        agent.record(
+            {
+                "role": "system",
+                "content": (
+                    f"Runtime notice: plan step {pressure['step_id']} ({pressure['title']}) has taken "
+                    f"{pressure['spent_steps']} tool steps. Update the plan with update_plan if the approach changed."
+                ),
+                "created_at": now(),
+            }
+        )
 
     def _check_stall(self, task_state):
         """每批结束后查一次停滞，命中就注入结构化干预。

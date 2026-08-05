@@ -161,6 +161,12 @@ BASE_TOOL_SPECS = {
         risky=False,
         description="Search the workspace with rg or a simple fallback.",
     ),
+    "update_plan": ToolSpec(
+        name="update_plan",
+        fields={"steps": ToolField("list")},
+        risky=False,
+        description="Replace the current plan. Each step: {id, title, status}.",
+    ),
     "run_shell": ToolSpec(
         name="run_shell",
         fields={
@@ -199,7 +205,14 @@ TOOL_EXAMPLES = {
     "edit_file": '<tool name="edit_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
     "delegate": '<tool>{"name":"delegate","args":{"task":"inspect README.md","max_steps":3}}</tool>',
     "use_skill": '<tool>{"name":"use_skill","args":{"name":"some-skill"}}</tool>',
+    "update_plan": '<tool>{"name":"update_plan","args":{"steps":[{"id":"1","title":"read the parser","status":"in_progress"},{"id":"2","title":"add a test","status":"pending"}]}}</tool>',
 }
+
+# 计划步骤的合法状态。多一个状态就多一种模型会写错的写法，四个够用了。
+PLAN_STATUSES = ("pending", "in_progress", "done", "blocked")
+# 计划规模上限。超过 20 步的"计划"已经不是计划，是把任务复述一遍。
+MAX_PLAN_STEPS = 20
+MAX_PLAN_TITLE_CHARS = 120
 
 
 def _context_skills(context):
@@ -224,6 +237,7 @@ def _json_schema_for_fields(fields):
     type_map = {
         "str": "string",
         "int": "integer",
+        "list": "array",
     }
     for name, field in fields.items():
         json_type = type_map.get(str(field.type), "string")
@@ -315,6 +329,9 @@ def _validate_schema(name, args):
         if field.type == "str":
             if not isinstance(value, str):
                 raise ValueError(f"{field_name} must be a string")
+        elif field.type == "list":
+            if not isinstance(value, (list, tuple)):
+                raise ValueError(f"{field_name} must be a list")
         elif field.type == "int":
             try:
                 number = int(value)
@@ -364,6 +381,14 @@ def validate_tool(context, name, args):
         timeout = int(args.get("timeout", 60))
         if timeout < 1 or timeout > 600:
             raise ValueError("timeout must be in [1, 600]")
+        return
+
+    if name == "update_plan":
+        steps = args.get("steps")
+        if not isinstance(steps, (list, tuple)):
+            raise ValueError("steps must be a list")
+        if not normalize_plan(steps):
+            raise ValueError("steps must contain at least one step with a title")
         return
 
     if name == "write_file":
@@ -556,6 +581,48 @@ def run_shell_command(command, *, cwd, timeout, env, cancel_token=None, poll_int
             raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
 
 
+def normalize_plan(steps):
+    """把模型给的 steps 规整成可渲染的计划。
+
+    宽进严出：id 缺了就补序号、status 写错就退回 pending、title 超长就截断。
+    计划是给模型自己看的备忘，为格式问题拒绝掉整次调用得不偿失。
+    """
+    plan = []
+    for index, raw in enumerate(list(steps or [])[:MAX_PLAN_STEPS], start=1):
+        if not isinstance(raw, dict):
+            raw = {"title": str(raw)}
+        title = str(raw.get("title", "")).strip()
+        if not title:
+            continue
+        status = str(raw.get("status", "pending")).strip().lower()
+        if status not in PLAN_STATUSES:
+            status = "pending"
+        plan.append(
+            {
+                "id": str(raw.get("id", "") or index),
+                "title": title[:MAX_PLAN_TITLE_CHARS],
+                "status": status,
+            }
+        )
+    return plan
+
+
+def render_plan(plan):
+    if not plan:
+        return ""
+    marks = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]", "blocked": "[!]"}
+    lines = ["Plan:"]
+    lines.extend(f"- {marks.get(step['status'], '[ ]')} {step['id']}. {step['title']}" for step in plan)
+    return "\n".join(lines)
+
+
+def tool_update_plan(context, args):
+    plan = normalize_plan(args.get("steps"))
+    context.set_plan(plan)
+    done = sum(1 for step in plan if step["status"] == "done")
+    return f"plan updated: {len(plan)} step(s), {done} done"
+
+
 def tool_write_file(context, args):
     path = context.path(args["path"])
     content = str(args["content"])
@@ -607,4 +674,5 @@ _TOOL_RUNNERS = {
     "run_shell": tool_run_shell,
     "write_file": tool_write_file,
     "edit_file": tool_edit_file,
+    "update_plan": tool_update_plan,
 }
