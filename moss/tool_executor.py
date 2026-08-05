@@ -159,7 +159,14 @@ class ToolExecutor:
     def __init__(self, agent):
         self.agent = agent
 
-    def execute(self, name, args):
+    def execute(self, name, args, defer_side_effects=False):
+        """执行一次工具调用。
+
+        `defer_side_effects=True` 时跳过 memory 写入和 process note——
+        并发批执行会在多个线程里同时调这个函数，而这两处都在写共享状态。
+        调用方负责回到主线程后按 Action.index 顺序补做，
+        这样并发也不会改变记录顺序。
+        """
         agent = self.agent
         if agent.allowed_tools is not None and name not in agent.allowed_tools:
             return ToolExecutionResult(
@@ -262,7 +269,8 @@ class ToolExecutor:
                 elif exit_code != 0:
                     tool_status = "error"
                     tool_error_code = "tool_failed"
-            agent.update_memory_after_tool(name, args, content)
+            if not defer_side_effects:
+                agent.update_memory_after_tool(name, args, content)
             if tool_status in {"ok", "partial_success"} and name in _FILE_TOOLS:
                 # 模型第一次碰到某个子目录时，才把那个目录的就近 AGENTS.md 注进来。
                 agent.note_nearby_instructions(args.get("path", ""))
@@ -277,7 +285,8 @@ class ToolExecutor:
                 diff_summary=diff_summary,
                 extra=extra_metadata,
             )
-            agent.record_process_note_for_tool(name, metadata)
+            if not defer_side_effects:
+                agent.record_process_note_for_tool(name, metadata)
             return ToolExecutionResult(content=content, metadata=metadata)
         except Exception as exc:
             after_snapshot = agent.capture_workspace_snapshot() if tool["risky"] else before_snapshot

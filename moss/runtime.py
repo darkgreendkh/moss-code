@@ -74,6 +74,7 @@ class Moss:
         secret_env_names=None,
         feature_flags=None,
         allowed_tools=None,
+        parallel_tools=False,
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -89,6 +90,8 @@ class Moss:
         self._anchor_checked = False
         # 一次运行的取消信号。中断收尾时置位，run_shell 轮询它来杀掉整个进程组。
         self.cancel_token = threading.Event()
+        # 只读工具批内并发。默认关闭：先灰度，评测证明收益后再翻默认值。
+        self.parallel_tools = bool(parallel_tools)
         self.session_store = session_store
         self.approval_policy = approval_policy
         self.max_steps = max_steps
@@ -589,8 +592,8 @@ class Moss:
 
         return AgentLoop(self).run(user_message)
 
-    def execute_tool(self, name, args):
-        result = self.tool_executor.execute(name, args)
+    def execute_tool(self, name, args, defer_side_effects=False):
+        result = self.tool_executor.execute(name, args, defer_side_effects=defer_side_effects)
         self._last_tool_result_metadata = dict(result.metadata)
         return result
 

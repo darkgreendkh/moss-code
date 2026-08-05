@@ -1,13 +1,18 @@
 """Agent control loop extracted from the runtime facade."""
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from .checkpoint import CHECKPOINT_NONE_STATUS, CHECKPOINT_PARTIAL_STALE_STATUS, CHECKPOINT_WORKSPACE_MISMATCH_STATUS
 from .clock import now
-from .output_parser import parse_model_output
+from .output_parser import parse_model_actions, truncate_after_final
 from . import trace_events
 from .task_state import STATUS_RUNNING, TaskState
 from .token_budget import clip
+
+# 并发只读工具的上限。固定 4：再多也受限于磁盘和后端延迟，
+# 而线程数越多，出问题时越难复现。
+PARALLEL_MAX_WORKERS = 4
 
 
 def _record_instruction_notices(agent, task_state):
@@ -191,7 +196,8 @@ class AgentLoop:
                 prompt_metadata.update(completion_metadata)
             agent.last_completion_metadata = completion_metadata
             agent.last_prompt_metadata = prompt_metadata
-            kind, payload = parse_model_output(raw)
+            actions, dropped = truncate_after_final(parse_model_actions(raw))
+            kind = actions[0].kind if actions else "retry"
             agent.emit_trace(
                 task_state,
                 "model_parsed",
@@ -201,69 +207,28 @@ class AgentLoop:
                     "duration_ms": int((time.monotonic() - model_started_at) * 1000),
                 },
             )
-
-            if kind == "tool":
-                tool_steps += 1
-                name = payload.get("name", "")
-                args = payload.get("args", {})
-                task_state.record_tool_call(name)
-                task_state.record_tool(name)
-                agent.emit_progress("tool", {"name": name, "args": args})
-                tool_started_at = time.monotonic()
-                tool_result = agent.execute_tool(name, args)
-                result = tool_result.content
-                agent.emit_progress(
-                    "tool_result",
-                    {
-                        "name": name,
-                        "status": (tool_result.metadata or {}).get("tool_status", "ok"),
-                        "duration_ms": int((time.monotonic() - tool_started_at) * 1000),
-                    },
-                )
-                agent.record(
-                    {
-                        "role": "tool",
-                        "name": name,
-                        "args": args,
-                        "content": result,
-                        "created_at": now(),
-                    }
-                )
-                if name in ("read_file", "write_file", "edit_file"):
-                    anchor_miss = agent.note_anchor_outcome(args.get("path", ""))
-                    if anchor_miss:
-                        agent.emit_trace(task_state, trace_events.ANCHOR_MISS, anchor_miss)
-                _record_instruction_notices(agent, task_state)
-                agent.write_task_state(task_state)
+            if dropped:
+                # 模型在给出最终答案之后还接着调工具，说明它自己没想清楚。
+                # 不执行，只记一笔，等失败分类学攒够数据再决定要不要转成 retry。
                 agent.emit_trace(
                     task_state,
-                    "tool_executed",
-                    {
-                        "name": name,
-                        "args": args,
-                        "result": clip(result, 500),
-                        "duration_ms": int((time.monotonic() - tool_started_at) * 1000),
-                        **dict(tool_result.metadata or {}),
-                    },
+                    trace_events.BATCH_TRUNCATED,
+                    {"dropped": [action.name or action.kind for action in dropped]},
                 )
-                checkpoint = agent.create_checkpoint(task_state, user_message, trigger="tool_executed")
-                agent.write_task_state(task_state)
-                agent.emit_trace(
-                    task_state,
-                    "checkpoint_created",
-                    {
-                        "checkpoint_id": checkpoint["checkpoint_id"],
-                        "trigger": "tool_executed",
-                    },
-                )
-                continue
 
-            if kind == "retry":
-                agent.record({"role": "assistant", "content": payload, "created_at": now()})
+            tool_actions = [action for action in actions if action.kind == "tool"]
+            if tool_actions:
+                tool_steps += self._execute_tool_batch(task_state, user_message, tool_actions, tool_steps)
+
+            final_action = next((action for action in actions if action.kind == "final"), None)
+            if final_action is None:
+                for action in actions:
+                    if action.kind == "retry":
+                        agent.record({"role": "assistant", "content": action.text, "created_at": now()})
                 agent.write_task_state(task_state)
                 continue
 
-            final = (payload or raw).strip()
+            final = (final_action.text or raw).strip()
             agent.record({"role": "assistant", "content": final, "created_at": now()})
             task_state.finish_success(final)
             agent.promote_durable_memory(user_message, final)
@@ -320,6 +285,125 @@ class AgentLoop:
         )
         agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
         return final
+
+    def _can_run_in_parallel(self, actions):
+        """只有"全是只读工具、且不止一个"的批才允许并发。
+
+        risky 工具一律降级串行：它们要走审批、要前后各拍一次工作区快照，
+        并发执行会让 diff 归属不清——两个写操作同时进行时，谁改了哪个文件
+        在快照里根本分不出来。
+        """
+        agent = self.agent
+        if len(actions) < 2 or not getattr(agent, "parallel_tools", False):
+            return False
+        for action in actions:
+            tool = agent.tools.get(action.name)
+            if tool is None or tool.get("risky", True):
+                return False
+        return True
+
+    def _execute_tool_batch(self, task_state, user_message, actions, tool_steps_so_far):
+        """执行一批工具动作，返回本批消耗的 tool_steps。
+
+        顺序不变量：无论是否并发，写回 history / trace 的顺序恒等于
+        `Action.index` 的顺序，不是完成顺序。这条是录制回放能成立的前提。
+        并发阶段只做纯执行，memory 写入 / record / trace 全部回主线程按序补做。
+        """
+        agent = self.agent
+        budget_left = max(0, agent.max_steps - tool_steps_so_far)
+        actions = sorted(actions, key=lambda action: action.index)[:budget_left]
+        if not actions:
+            return 0
+
+        parallel = self._can_run_in_parallel(actions)
+        agent.emit_trace(
+            task_state,
+            trace_events.TOOLS_BATCH_STARTED,
+            {"count": len(actions), "parallel": parallel},
+        )
+        batch_started_at = time.monotonic()
+
+        for action in actions:
+            task_state.record_tool_call(action.name)
+            agent.emit_progress("tool", {"name": action.name, "args": action.args})
+
+        results = self._run_actions(actions, parallel)
+
+        for action, (result, duration_ms) in zip(actions, results):
+            task_state.record_tool(action.name)
+            content = result.content
+            metadata = dict(result.metadata or {})
+            # 并发阶段被推迟的副作用在这里按 index 顺序补做。
+            agent.update_memory_after_tool(action.name, action.args, content)
+            agent.record_process_note_for_tool(action.name, metadata)
+            agent.emit_progress(
+                "tool_result",
+                {
+                    "name": action.name,
+                    "status": metadata.get("tool_status", "ok"),
+                    "duration_ms": duration_ms,
+                },
+            )
+            entry = {
+                "role": "tool",
+                "name": action.name,
+                "args": action.args,
+                "content": content,
+                "created_at": now(),
+            }
+            if action.call_id:
+                entry["call_id"] = action.call_id
+            agent.record(entry)
+            if action.name in ("read_file", "write_file", "edit_file"):
+                anchor_miss = agent.note_anchor_outcome((action.args or {}).get("path", ""))
+                if anchor_miss:
+                    agent.emit_trace(task_state, trace_events.ANCHOR_MISS, anchor_miss)
+            _record_instruction_notices(agent, task_state)
+            agent.write_task_state(task_state)
+            agent.emit_trace(
+                task_state,
+                "tool_executed",
+                {
+                    "name": action.name,
+                    "args": action.args,
+                    "result": clip(content, 500),
+                    "duration_ms": duration_ms,
+                    **metadata,
+                },
+            )
+            checkpoint = agent.create_checkpoint(task_state, user_message, trigger="tool_executed")
+            agent.write_task_state(task_state)
+            agent.emit_trace(
+                task_state,
+                "checkpoint_created",
+                {"checkpoint_id": checkpoint["checkpoint_id"], "trigger": "tool_executed"},
+            )
+
+        agent.emit_trace(
+            task_state,
+            trace_events.TOOLS_BATCH_FINISHED,
+            {
+                "count": len(actions),
+                "duration_ms": int((time.monotonic() - batch_started_at) * 1000),
+            },
+        )
+        return len(actions)
+
+    def _run_actions(self, actions, parallel):
+        """纯执行阶段：返回和 actions 等长、同序的 [(结果, 耗时ms)]。"""
+        agent = self.agent
+
+        def run_one(action):
+            started_at = time.monotonic()
+            result = agent.execute_tool(action.name, action.args, defer_side_effects=parallel)
+            return result, int((time.monotonic() - started_at) * 1000)
+
+        if not parallel:
+            return [run_one(action) for action in actions]
+
+        with ThreadPoolExecutor(max_workers=min(PARALLEL_MAX_WORKERS, len(actions))) as pool:
+            # map 保序：即使后提交的先跑完，结果也按提交顺序返回。
+            return list(pool.map(run_one, actions))
 
     def _finish_interrupted(self, user_message, exc, run_started_at):
         """把一次中断收敛成一次已收尾的失败运行。
