@@ -166,6 +166,7 @@ class AgentLoop:
             if getattr(agent.model_client, "supports_native_tools", False):
                 native_tools = agent.native_tool_definitions()
             agent.emit_progress("thinking", {"step": tool_steps + 1, "max_steps": agent.max_steps})
+            task_state.record_model_turn()
             model_started_at = time.monotonic()
             try:
                 raw = agent.model_client.complete(
@@ -205,6 +206,7 @@ class AgentLoop:
                 tool_steps += 1
                 name = payload.get("name", "")
                 args = payload.get("args", {})
+                task_state.record_tool_call(name)
                 task_state.record_tool(name)
                 agent.emit_progress("tool", {"name": name, "args": args})
                 tool_started_at = time.monotonic()

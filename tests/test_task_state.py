@@ -73,3 +73,30 @@ def test_task_state_snapshot_keeps_checkpoint_reference_without_body():
     assert snapshot["resume_status"] == "full-valid"
     assert "current_goal" not in snapshot
     assert "next_step" not in snapshot
+
+
+def test_model_turns_and_tool_calls_are_separate_from_tool_steps():
+    """三个口径各回答一个问题，不能互相顶替。"""
+    state = TaskState.create(task_id="t", user_request="x")
+
+    state.record_model_turn()
+    state.record_tool_call("read_file")
+    state.record_tool("read_file")
+    state.record_model_turn()
+    state.record_tool_call("write_file")
+
+    assert state.model_turns == 2
+    # tool_calls 含没进入执行阶段的调用，所以 >= tool_steps。
+    assert state.tool_calls == 2
+    assert state.tool_steps == 1
+
+
+def test_old_task_state_json_without_the_new_fields_still_loads():
+    state = TaskState.from_dict(
+        {"run_id": "r", "task_id": "t", "user_request": "x", "tool_steps": 3}
+    )
+
+    assert state.model_turns == 0
+    assert state.tool_calls == 0
+    assert state.verification_requested is False
+    assert state.tool_steps == 3

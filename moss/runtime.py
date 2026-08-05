@@ -643,6 +643,10 @@ class Moss:
             "final_answer": task_state.final_answer,
             "tool_steps": task_state.tool_steps,
             "attempts": task_state.attempts,
+            # model_turns / tool_calls 是成本与失败率的口径（spec-02 §4.2）。
+            # tool_steps 的语义不动，这两个只加不改，历史指标仍然可比。
+            "model_turns": task_state.model_turns,
+            "tool_calls": task_state.tool_calls,
             "checkpoint_id": task_state.checkpoint_id,
             "resume_status": task_state.resume_status,
             "task_state": task_state.to_dict(),

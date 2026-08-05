@@ -38,6 +38,13 @@ class TaskState:
     final_answer: str = ""
     checkpoint_id: str = ""
     resume_status: str = ""
+    # 记账字段（spec-02 §4.2）。tool_steps 的语义完全不动，这里只增不改：
+    # model_turns 是"模型被调用了几轮"（成本的主口径），
+    # tool_calls 是"工具被调用了几次，含失败的"（用来算失败率/无效调用率）。
+    # 一轮模型输出可能带多个工具调用，所以 tool_calls >= tool_steps。
+    model_turns: int = 0
+    tool_calls: int = 0
+    verification_requested: bool = False
 
     @classmethod
     def create(cls, task_id, user_request, run_id=""):
@@ -59,11 +66,26 @@ class TaskState:
             final_answer=str(data.get("final_answer", "")),
             checkpoint_id=str(data.get("checkpoint_id", "")),
             resume_status=str(data.get("resume_status", "")),
+            model_turns=int(data.get("model_turns", 0)),
+            tool_calls=int(data.get("tool_calls", 0)),
+            verification_requested=bool(data.get("verification_requested", False)),
         )
 
     def record_attempt(self):
         # attempt 统计的是“模型被调用了几轮”，不等于 tool_steps。
         self.attempts += 1
+        return self
+
+    def record_model_turn(self):
+        # 模型调用轮数。attempts 会因为重试等原因和它不一致，
+        # 成本核算要的是"发了几次请求"，所以单独记一份。
+        self.model_turns += 1
+        return self
+
+    def record_tool_call(self, name):
+        # 工具调用总数，含被拒绝/校验失败的那些。失败率的分母。
+        self.tool_calls += 1
+        self.last_tool = str(name or "")
         return self
 
     def record_tool(self, name):
@@ -111,4 +133,7 @@ class TaskState:
             "final_answer": self.final_answer,
             "checkpoint_id": self.checkpoint_id,
             "resume_status": self.resume_status,
+            "model_turns": self.model_turns,
+            "tool_calls": self.tool_calls,
+            "verification_requested": self.verification_requested,
         }
