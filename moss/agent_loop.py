@@ -6,7 +6,7 @@ from .checkpoint import CHECKPOINT_NONE_STATUS, CHECKPOINT_PARTIAL_STALE_STATUS,
 from .clock import now
 from .output_parser import parse_model_output
 from . import trace_events
-from .task_state import TaskState
+from .task_state import STATUS_RUNNING, TaskState
 from .token_budget import clip
 
 
@@ -48,8 +48,19 @@ class AgentLoop:
         self.agent = agent
 
     def run(self, user_message):
-        agent = self.agent
         run_started_at = time.monotonic()
+        try:
+            return self._run(user_message, run_started_at)
+        except BaseException as exc:
+            # 含 KeyboardInterrupt / SystemExit。只做收尾，然后**必然重新抛出**：
+            # 语义不变（Ctrl-C 仍然只取消当前轮），但磁盘上不再留下一个
+            # 永远停在 running、没有 report 的半截 run 目录。
+            self._finish_interrupted(user_message, exc, run_started_at)
+            raise
+
+    def _run(self, user_message, run_started_at):
+        agent = self.agent
+        agent.cancel_token.clear()
         agent.memory.set_task_summary(user_message)
         agent.record({"role": "user", "content": user_message, "created_at": now()})
 
@@ -301,6 +312,54 @@ class AgentLoop:
         )
         agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
         return final
+
+    def _finish_interrupted(self, user_message, exc, run_started_at):
+        """把一次中断收敛成一次已收尾的失败运行。
+
+        为什么单独一条路径：`_finish_model_error` 只覆盖模型后端异常，
+        用户 Ctrl-C、SIGTERM、以及工具里冒出来的意外异常都不走那里，
+        结果是 run 目录停在 running 且没有 report——恢复流程看到的是一个
+        无法判断"跑到哪了"的空壳。
+
+        这个函数自己必须绝不抛异常：它跑在 except 里，再抛就会把原始异常
+        （用户真正想看到的那个）替换掉。
+        """
+        agent = self.agent
+        task_state = getattr(agent, "current_task_state", None)
+        if task_state is None or task_state.status != STATUS_RUNNING:
+            # 还没开始、或已经正常收尾（比如 finally 之后的异常），没什么可补的。
+            return
+        try:
+            agent.cancel_token.set()
+            reason = exc.__class__.__name__
+            final = f"Run interrupted before completion ({reason})."
+            agent.emit_trace(
+                task_state,
+                trace_events.RUN_INTERRUPTED,
+                {"reason": reason, "detail": agent.redact_text(str(exc))[:300]},
+            )
+            task_state.stop_interrupted(final)
+            agent.write_task_state(task_state)
+            checkpoint = agent.create_checkpoint(task_state, user_message, trigger="interrupted")
+            agent.emit_trace(
+                task_state,
+                "checkpoint_created",
+                {"checkpoint_id": checkpoint["checkpoint_id"], "trigger": "interrupted"},
+            )
+            agent.emit_trace(
+                task_state,
+                "run_finished",
+                {
+                    "status": task_state.status,
+                    "stop_reason": task_state.stop_reason,
+                    "final_answer": final,
+                    "run_duration_ms": int((time.monotonic() - run_started_at) * 1000),
+                },
+            )
+            agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
+        except Exception:
+            # 收尾本身失败也不能盖掉原始异常。工件不全总好过丢掉中断原因。
+            pass
 
     def _finish_model_error(self, task_state, user_message, exc, run_started_at, model_started_at):
         """把一次模型后端失败收敛成一次已收尾的失败运行。

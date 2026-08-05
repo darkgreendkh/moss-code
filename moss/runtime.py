@@ -5,6 +5,7 @@ Moss 就是包在模型外面的控制循环：负责组 prompt、解析模型�
 """
 
 import os
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -86,6 +87,8 @@ class Moss:
         self.pending_instruction_notices = []
         self.last_relevant_anchors = []
         self._anchor_checked = False
+        # 一次运行的取消信号。中断收尾时置位，run_shell 轮询它来杀掉整个进程组。
+        self.cancel_token = threading.Event()
         self.session_store = session_store
         self.approval_policy = approval_policy
         self.max_steps = max_steps
@@ -653,6 +656,7 @@ class Moss:
             max_depth=self.max_depth,
             spawn_delegate=self.spawn_delegate,
             skills_provider=lambda: self.skills,
+            cancel_token=self.cancel_token,
         )
 
     def delegate_session_store(self):

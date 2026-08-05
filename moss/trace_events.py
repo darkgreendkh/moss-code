@@ -13,7 +13,29 @@ REPO_MAP_BUILT = "repo_map_built"
 # 模型第一次命中的文件不在地图给出的候选里——地图把它带偏了。
 ANCHOR_MISS = "anchor_miss"
 
+# 主循环（spec-02 §4.8）
+TOOLS_BATCH_STARTED = "tools_batch_started"
+TOOLS_BATCH_FINISHED = "tools_batch_finished"
+BATCH_TRUNCATED = "batch_truncated"
+PLAN_UPDATED = "plan_updated"
+PLAN_PRESSURE = "plan_pressure"
+STALL_DETECTED = "stall_detected"
+VERIFICATION_REQUESTED = "verification_requested"
+BUDGET_SOFT_EXCEEDED = "budget_soft_exceeded"
+BUDGET_EXCEEDED = "budget_exceeded"
+RUN_INTERRUPTED = "run_interrupted"
+
 __all__ = [
+    "TOOLS_BATCH_STARTED",
+    "TOOLS_BATCH_FINISHED",
+    "BATCH_TRUNCATED",
+    "PLAN_UPDATED",
+    "PLAN_PRESSURE",
+    "STALL_DETECTED",
+    "VERIFICATION_REQUESTED",
+    "BUDGET_SOFT_EXCEEDED",
+    "BUDGET_EXCEEDED",
+    "RUN_INTERRUPTED",
     "INSTRUCTION_LOADED",
     "INSTRUCTION_CONFLICT",
     "REPO_MAP_BUILT",

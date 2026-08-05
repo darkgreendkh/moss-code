@@ -14,6 +14,9 @@ class ToolContext:
     max_depth: int
     spawn_delegate: Callable[[dict], str]
     skills_provider: Callable[[], dict] = lambda: {}
+    # 取消令牌：Ctrl-C 之后 run_shell 要能立刻把整个进程组杀掉，
+    # 而不是让命令继续跑到超时。None 表示"没人会取消"，行为与以前一致。
+    cancel_token: object = None
 
     def path(self, raw_path):
         return self.path_resolver(str(raw_path))
