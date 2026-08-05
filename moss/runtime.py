@@ -17,7 +17,7 @@ from .features import memory as memorylib
 from . import security as securitylib
 from .context_manager import ContextManager
 from .checkpoint import CHECKPOINT_NONE_STATUS
-from .prompt_prefix import build_prompt_prefix, tool_signature
+from .prompt_prefix import build_prompt_prefix, skill_signature, tool_signature
 from .run_store import RunStore
 from .session_store import SessionStore
 from . import skills as skilllib
@@ -186,6 +186,11 @@ class Moss:
             "workspace_changed": False,
             "prefix_changed": False,
         }
+        # run 内冻结会影响稳定头的注册表。磁盘漂移只记录，不在半途中换工具，
+        # 否则 provider 看到的 prompt_cache_key 会在同一任务里突然变化。
+        self._run_active = False
+        self._frozen_registry = None
+        self._reported_registry_drifts = set()
 
     @classmethod
     def from_session(cls, model_client, workspace, session_store, session_id, **kwargs):
@@ -297,6 +302,61 @@ class Moss:
         self.prefix_state = prefix_state
         self.prefix = prefix_state.text
 
+    def reload_registry(self):
+        """立即重读 skill/tool 注册表；只允许在模型 run 之外调用。"""
+        if self._run_active:
+            raise RuntimeError("cannot reload tools or skills during an active run")
+        previous_skills = set(self.skills)
+        previous_tools = set(self.tools)
+        self.skills = self.build_skills()
+        self.tools = self._apply_tool_allowlist(self.build_tools())
+        self._apply_prefix_state(self.build_prefix())
+        return {
+            "added": sorted(set(self.skills) - previous_skills),
+            "removed": sorted(previous_skills - set(self.skills)),
+            "tools_added": sorted(set(self.tools) - previous_tools),
+            "tools_removed": sorted(previous_tools - set(self.tools)),
+        }
+
+    def begin_run(self):
+        """在一次 agent loop 开始前刷新并冻结缓存敏感注册表。"""
+        if self._run_active:
+            return
+        self.reload_registry()
+        self._run_active = True
+        self._frozen_registry = {
+            "skills": dict(self.skills),
+            "tools": dict(self.tools),
+            "skill_signature": skill_signature(self.skills),
+            "tool_signature": tool_signature(self.tools),
+        }
+        self._reported_registry_drifts = set()
+
+    def end_run(self):
+        self._run_active = False
+        self._frozen_registry = None
+        self._reported_registry_drifts = set()
+
+    def _detect_registry_drift(self):
+        if not self._run_active or not self._frozen_registry:
+            return None
+        live_skills = self.build_skills()
+        live_skill_signature = skill_signature(live_skills)
+        if live_skill_signature == self._frozen_registry["skill_signature"]:
+            return None
+        frozen_names = set(self._frozen_registry["skills"])
+        live_names = set(live_skills)
+        changed = sorted(
+            name
+            for name in frozen_names & live_names
+            if self._frozen_registry["skills"][name] != live_skills[name]
+        )
+        return {
+            "added": sorted(live_names - frozen_names),
+            "removed": sorted(frozen_names - live_names),
+            "changed": changed,
+        }
+
     def refresh_prefix(self, force=False):
         previous_hash = getattr(getattr(self, "prefix_state", None), "hash", None)
         previous_workspace_fingerprint = getattr(getattr(self, "prefix_state", None), "workspace_fingerprint", None)
@@ -311,10 +371,21 @@ class Moss:
             self.attach_repo_map(refreshed_workspace)
             self.workspace = refreshed_workspace
 
-        # 重新发现 skill、重建 tool 注册表：这样磁盘上新增/删除的 skill
-        # （以及 use_skill 是否该暴露）都能在本轮被反映出来。
-        self.skills = self.build_skills()
-        self.tools = self._apply_tool_allowlist(self.build_tools())
+        registry_drift = self._detect_registry_drift()
+        if not self._run_active:
+            # REPL 空闲期与显式 prompt_metadata 调用仍保持原行为：磁盘改动立即生效。
+            self.skills = self.build_skills()
+            self.tools = self._apply_tool_allowlist(self.build_tools())
+        elif registry_drift:
+            drift_key = (
+                tuple(registry_drift["added"]),
+                tuple(registry_drift["removed"]),
+                tuple(registry_drift["changed"]),
+            )
+            if drift_key not in self._reported_registry_drifts:
+                self._reported_registry_drifts.add(drift_key)
+                if self.current_task_state is not None:
+                    self.emit_trace(self.current_task_state, trace_events.TOOL_REGISTRY_DRIFT, registry_drift)
 
         # prefix 的重建判据是整段 prefix 的 hash，而不是 workspace 指纹：
         # 组 prefix 只是字符串拼接 + 一次 sha256，开销极小，所以每轮都重建，
@@ -327,6 +398,7 @@ class Moss:
         self._last_prefix_refresh = {
             "workspace_changed": workspace_changed,
             "prefix_changed": prefix_changed,
+            "registry_drift": bool(registry_drift),
         }
         return dict(self._last_prefix_refresh)
 

@@ -55,6 +55,7 @@ class AgentLoop:
 
     def run(self, user_message):
         run_started_at = time.monotonic()
+        self.agent.begin_run()
         try:
             return self._run(user_message, run_started_at)
         except BaseException as exc:
@@ -66,7 +67,10 @@ class AgentLoop:
         finally:
             # 本轮结束，用户消息不再是"当前请求"，该以普通历史的身份进入后续轮次。
             # 放在 finally 里：中断退出的会话被 resume 时，历史同样不能缺这一条。
-            self.agent.clear_pending_history()
+            try:
+                self.agent.clear_pending_history()
+            finally:
+                self.agent.end_run()
 
     def _run(self, user_message, run_started_at):
         agent = self.agent

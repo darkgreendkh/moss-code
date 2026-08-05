@@ -53,6 +53,7 @@ HELP_DETAILS = textwrap.dedent(
     /help    Show this help message.
     /memory  Show the agent's distilled working memory.
     /session Show the path to the saved session file.
+    /reload  Reload tools and skills from disk.
     /reset   Clear the current session history and memory.
     /exit    Exit the agent.
 
@@ -618,6 +619,11 @@ def main(argv=None):
             continue
         if user_input == "/session":
             print(agent.session_path)
+            continue
+        if user_input == "/reload":
+            result = agent.reload_registry()
+            changed = result["added"] + result["removed"] + result["tools_added"] + result["tools_removed"]
+            print("tools and skills reloaded" + (f" ({', '.join(changed)})" if changed else ""))
             continue
         if user_input == "/reset":
             agent.reset()

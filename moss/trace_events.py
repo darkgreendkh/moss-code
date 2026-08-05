@@ -25,6 +25,9 @@ BUDGET_SOFT_EXCEEDED = "budget_soft_exceeded"
 BUDGET_EXCEEDED = "budget_exceeded"
 RUN_INTERRUPTED = "run_interrupted"
 
+# 提示词缓存（spec-04 §4.4）
+TOOL_REGISTRY_DRIFT = "tool_registry_drift"
+
 __all__ = [
     "TOOLS_BATCH_STARTED",
     "TOOLS_BATCH_FINISHED",
@@ -36,6 +39,7 @@ __all__ = [
     "BUDGET_SOFT_EXCEEDED",
     "BUDGET_EXCEEDED",
     "RUN_INTERRUPTED",
+    "TOOL_REGISTRY_DRIFT",
     "INSTRUCTION_LOADED",
     "INSTRUCTION_CONFLICT",
     "REPO_MAP_BUILT",
