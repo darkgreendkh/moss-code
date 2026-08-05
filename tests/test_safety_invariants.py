@@ -3,6 +3,8 @@ import subprocess
 import sys
 from unittest.mock import patch
 
+import pytest
+
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
 from moss import cli as moss_cli
 from moss.task_state import TaskState
@@ -155,21 +157,58 @@ def test_run_shell_uses_allowlisted_environment_only(tmp_path):
     assert "missing" in result
 
 
-def test_bound_tool_methods_delegate_into_tools_module(tmp_path):
+def test_private_tool_methods_delegate_into_tools_module(tmp_path):
     agent = build_agent(tmp_path, [], approval_policy="auto")
 
     with patch("moss.tools.run_shell_command", return_value=(0, "toolkit-shell\n", "")) as fake_run:
-        shell_result = agent.tool_run_shell({"command": "echo bypass", "timeout": 20})
+        shell_result = agent._tool_run_shell({"command": "echo bypass", "timeout": 20})
 
     assert "toolkit-shell" in shell_result
     fake_run.assert_called_once()
-    assert agent.tool_run_shell.__func__.__module__ == "moss.runtime"
+    assert agent._tool_run_shell.__func__.__module__ == "moss.runtime"
 
     with patch("moss.tools.tool_delegate", return_value="toolkit-delegate") as fake_delegate:
-        delegate_result = agent.tool_delegate({"task": "inspect README.md", "max_steps": 2})
+        delegate_result = agent._tool_delegate({"task": "inspect README.md", "max_steps": 2})
 
     assert delegate_result == "toolkit-delegate"
     fake_delegate.assert_called_once()
+
+
+def test_legacy_public_tool_methods_now_go_through_the_executor(tmp_path):
+    """老的公共 tool_* 能整体绕过 ToolExecutor，这正是本次收口要堵的口子。"""
+    agent = build_agent(tmp_path, [], approval_policy="never")
+
+    with pytest.deprecated_call():
+        result = agent.tool_run_shell({"command": "echo bypass", "timeout": 20})
+
+    # approval=never 时护栏该拦住它；旧实现会直接把命令跑掉。
+    assert "approval denied" in result
+
+
+def test_read_only_agent_cannot_write_through_any_public_api(tmp_path):
+    agent = build_agent(tmp_path, [], read_only=True, approval_policy="auto")
+    target = tmp_path / "written.txt"
+
+    assert "approval denied" in agent.run_tool("write_file", {"path": "written.txt", "content": "x"})
+    with pytest.deprecated_call():
+        assert "approval denied" in agent.tool_write_file({"path": "written.txt", "content": "x"})
+    with pytest.deprecated_call():
+        assert "approval denied" in agent.tool_run_shell({"command": "echo hi > written.txt", "timeout": 5})
+
+    assert not target.exists()
+
+
+def test_moss_exposes_no_unguarded_tool_entry_points(tmp_path):
+    """契约：Moss 上不该再有绕过 executor 的**已定义**公共执行方法。"""
+    from moss import Moss as MossClass
+
+    unguarded = [
+        name
+        for name in vars(MossClass)
+        if name.startswith("tool_") and name not in {"tool_signature", "tool_context", "tool_example"}
+    ]
+
+    assert unguarded == []
 
 
 def test_delegate_depth_limit_is_enforced(tmp_path):
@@ -277,3 +316,26 @@ def test_same_size_rewrite_is_caught_by_the_git_changed_set(tmp_path):
 
     assert changed == ["same.txt"]
     assert summaries == ["modified:same.txt"]
+
+
+def test_execute_is_a_guarded_structured_entry_point(tmp_path):
+    """收口之后外部集成必须有受护栏的入口，否则大家会退回去直连 toolkit。"""
+    from moss.tool_context import ActionRequest
+
+    agent = build_agent(tmp_path, [], approval_policy="never")
+
+    from_request = agent.execute(ActionRequest(name="run_shell", args={"command": "echo hi", "timeout": 5}))
+    from_dict = agent.execute({"name": "run_shell", "args": {"command": "echo hi", "timeout": 5}})
+
+    assert "approval denied" in from_request.content
+    assert "approval denied" in from_dict.content
+
+
+def test_execute_respects_the_allowed_tools_list(tmp_path):
+    from moss.tool_context import ActionRequest
+
+    agent = build_agent(tmp_path, [], allowed_tools=["read_file"])
+
+    result = agent.execute(ActionRequest(name="write_file", args={"path": "x.txt", "content": "y"}))
+
+    assert "not allowed" in result.content

@@ -34,3 +34,16 @@ class ToolContext:
         if self.plan_writer is None:
             return
         self.plan_writer(list(plan))
+
+
+@dataclass(frozen=True)
+class ActionRequest:
+    """一次结构化的工具执行请求。
+
+    存在的意义是给外部集成（MCP server、hooks、评测）一个明确的入参形状，
+    而不是让它们各自拼 dict —— 拼 dict 的下一步往往就是绕过护栏直连 toolkit。
+    """
+
+    name: str
+    args: dict
+    call_id: str = ""

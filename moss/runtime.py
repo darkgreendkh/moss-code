@@ -6,6 +6,7 @@ Moss 就是包在模型外面的控制循环：负责组 prompt、解析模型�
 
 import os
 import threading
+import warnings
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -618,6 +619,20 @@ class Moss:
         self._last_tool_result_metadata = dict(result.metadata)
         return result
 
+    def execute(self, request):
+        """唯一的结构化执行入口，供 MCP server / hooks / 评测使用。
+
+        为什么需要它：把 `tool_*` 收成私有之后，外部集成必须有一个受护栏的入口，
+        否则大家会退回去直接调 toolkit——那正是这次要堵的口子。
+        request 可以是 ActionRequest，也可以是 {"name":..., "args":...} 字典。
+        """
+        name = getattr(request, "name", None)
+        args = getattr(request, "args", None)
+        if name is None and isinstance(request, dict):
+            name = request.get("name")
+            args = request.get("args")
+        return self.execute_tool(str(name or ""), dict(args or {}))
+
     def run_tool(self, name, args):
         """执行一次工具调用，并在执行前后套上完整护栏。
 
@@ -814,27 +829,54 @@ class Moss:
         child.session["memory"]["notes"] = [clip(self.history_text(), 300)]
         return "delegate_result:\n" + child.ask(task)
 
-    def tool_list_files(self, args):
+    # 以下是**未经护栏**的原始工具调用。它们必须保持私有：
+    # 公开出去就等于在 ToolExecutor（allowlist -> 校验 -> deny -> 重复检测 ->
+    # 审批 -> 快照 diff）旁边开了一条直通车，read_only / approval / allowed_tools
+    # 全部形同虚设。唯一公开的执行入口是 run_tool / execute。
+    def _tool_list_files(self, args):
         return toolkit.tool_list_files(self.tool_context(), args)
 
-    def tool_read_file(self, args):
+    def _tool_read_file(self, args):
         return toolkit.tool_read_file(self.tool_context(), args)
 
-    def tool_search_text(self, args):
+    def _tool_search_text(self, args):
         return toolkit.tool_search_text(self.tool_context(), args)
 
-    def tool_run_shell(self, args):
+    def _tool_run_shell(self, args):
         result = toolkit.tool_run_shell(self.tool_context(), args)
         return result.content if hasattr(result, "content") else result
 
-    def tool_write_file(self, args):
+    def _tool_write_file(self, args):
         return toolkit.tool_write_file(self.tool_context(), args)
 
-    def tool_edit_file(self, args):
+    def _tool_edit_file(self, args):
         return toolkit.tool_edit_file(self.tool_context(), args)
 
-    def tool_delegate(self, args):
+    def _tool_delegate(self, args):
         return toolkit.tool_delegate(self.tool_context(), args)
+
+    def __getattr__(self, name):
+        """老的公共 `tool_*` 方法：保留一个发 DeprecationWarning 的兼容层。
+
+        它们过去能整体绕过 ToolExecutor，这是本次收口要堵的口子。
+        兼容层不再直连 toolkit，而是转发到 run_tool——也就是说，
+        行为从"无护栏"变成"受护栏约束"，这是刻意的破坏性变更。
+        """
+        if not name.startswith("tool_"):
+            raise AttributeError(name)
+        tool_name = name[len("tool_") :]
+        if tool_name not in toolkit.legal_tool_names():
+            raise AttributeError(name)
+
+        def deprecated_runner(args):
+            warnings.warn(
+                f"Moss.{name}() is deprecated and now runs through the tool executor; use run_tool({tool_name!r}, args).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return self.run_tool(tool_name, args)
+
+        return deprecated_runner
 
     def approve(self, name, args):
         if self.read_only:
