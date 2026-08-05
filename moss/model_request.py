@@ -46,3 +46,10 @@ class PromptBundle:
     request: ModelRequest
     text: str
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CompactionArtifact:
+    start: int
+    end: int
+    summary: str

@@ -40,7 +40,8 @@ def test_context_bundle_flatten_matches_its_structured_text(tmp_path):
     assert bundle.text.index("Workspace:") < bundle.text.index("Transcript:")
     assert bundle.text.index("Transcript:") < bundle.text.index("Memory:")
     assert bundle.text.rstrip().endswith("Current user request:\ndo it")
-    assert bundle.metadata == legacy_metadata
+    assert bundle.metadata["context_mode"] == "rerender"
+    assert {key: value for key, value in bundle.metadata.items() if key != "context_mode"} == legacy_metadata
 
 
 class StructuredCapturingClient(FakeModelClient):

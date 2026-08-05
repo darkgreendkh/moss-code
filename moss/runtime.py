@@ -92,6 +92,7 @@ class Moss:
         sandbox="auto",
         allowed_network_hosts=None,
         tool_protocol="auto",
+        context_mode="rerender",
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -120,6 +121,9 @@ class Moss:
         if tool_protocol not in {"auto", "native", "text"}:
             raise ValueError("tool_protocol must be auto, native, or text")
         self.tool_protocol = tool_protocol
+        if context_mode not in {"rerender", "append_only"}:
+            raise ValueError("context_mode must be rerender or append_only")
+        self.context_mode = context_mode
         self.sandbox_plan = sandboxlib.announce(sandboxlib.detect(sandbox))
         # 审批决定的记忆：{(工具, 风险, 路径桶): 是否允许}。刻意只存在内存里，
         # 会话结束即失效——落盘的"上次批过"会变成永久后门。
@@ -343,6 +347,8 @@ class Moss:
         if self._run_active:
             return
         self.reload_registry()
+        # 两次 run 之间可以发生外部修改；在冻结前抓一次最新 workspace。
+        self.refresh_prefix(force=True)
         self._run_active = True
         self._frozen_registry = {
             "skills": dict(self.skills),
@@ -387,7 +393,7 @@ class Moss:
         refreshed_workspace = WorkspaceContext.build(self.invocation_cwd, repo_root_override=self.root)
         refreshed_workspace_fingerprint = refreshed_workspace.fingerprint()
         workspace_changed = refreshed_workspace_fingerprint != previous_workspace_fingerprint
-        if workspace_changed or force:
+        if (workspace_changed or force) and not self._run_active:
             self.attach_repo_map(refreshed_workspace)
             self.workspace = refreshed_workspace
 

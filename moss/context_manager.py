@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from .model_request import Block, Message, ModelRequest, PromptBundle
+from .model_request import Block, CompactionArtifact, Message, ModelRequest, PromptBundle
 from .token_budget import clip_to_budget, estimate_tokens
 
 
@@ -235,6 +235,8 @@ class ContextManager:
     def build_bundle(self, user_message):
         """把预算后的 sections 放进有信任边界的结构化请求。"""
         _, metadata = self.build(user_message)
+        metadata = dict(metadata)
+        metadata["context_mode"] = self.agent.context_mode
         rendered = self._last_rendered
         rendered_prefix = rendered["prefix"].rendered
         stable_text, workspace_text = self._split_rendered_prefix(rendered_prefix)
@@ -253,7 +255,9 @@ class ContextManager:
                     blocks=(Block(workspace_text, kind="workspace", source="workspace", trust="tool"),),
                 )
             )
-        if protocol == "native":
+        if self.agent.context_mode == "append_only":
+            messages.extend(self._append_only_history_messages(protocol))
+        elif protocol == "native":
             messages.extend(self._native_history_messages())
         else:
             history_text = rendered["history"].rendered
@@ -292,6 +296,68 @@ class ContextManager:
             protocol=protocol,
         )
         return PromptBundle(request=request, text=request.flatten(), metadata=metadata)
+
+    def _append_only_history_messages(self, protocol):
+        history = self._history_entries()
+        if protocol == "native":
+            messages = self._native_history_messages()
+        else:
+            messages = [self._append_only_text_message(item) for item in history]
+
+        artifacts = []
+        for raw in self.agent.session.get("compaction_artifacts", []):
+            try:
+                artifact = CompactionArtifact(
+                    start=int(raw["start"]),
+                    end=int(raw["end"]),
+                    summary=str(raw["summary"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            if 0 <= artifact.start < artifact.end <= len(messages) and artifact.summary:
+                artifacts.append(artifact)
+        for artifact in sorted(artifacts, key=lambda item: item.start, reverse=True):
+            replacement = Message(
+                role="assistant",
+                blocks=(
+                    Block(
+                        artifact.summary,
+                        kind="history",
+                        source=f"compaction:{artifact.start}:{artifact.end}",
+                        trust="model",
+                        cache=True,
+                    ),
+                ),
+            )
+            messages[artifact.start:artifact.end] = [replacement]
+        return messages
+
+    def _append_only_text_message(self, item):
+        role = str(item.get("role", "user"))
+        if role == "tool":
+            name = str(item.get("name", "tool"))
+            args = json.dumps(item.get("args", {}), sort_keys=True)
+            text = (
+                f'<tool_result untrusted="true" source="{name}" args={args}>\n'
+                f'{item.get("content", "")}\n</tool_result>'
+            )
+            return Message(
+                role="tool",
+                blocks=(Block(text, kind="tool_result", source=name, trust="tool"),),
+                call_id=str(item.get("call_id", "") or "") or None,
+            )
+        safe_role = role if role in {"user", "assistant"} else "user"
+        return Message(
+            role=safe_role,
+            blocks=(
+                Block(
+                    f"[{role}] {item.get('content', '')}",
+                    kind="history",
+                    source="session",
+                    trust="user" if safe_role == "user" else "model",
+                ),
+            ),
+        )
 
     def _native_history_messages(self):
         messages = []
