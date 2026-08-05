@@ -1,5 +1,6 @@
 """Project-local configuration helpers."""
 
+import json
 import os
 import re
 import sys
@@ -63,6 +64,29 @@ def load_project_env(start, override=True):
         if override or name not in os.environ:
             os.environ[name] = value
     return loaded
+
+
+def load_project_config(root):
+    """读 `.moss/config.json`。
+
+    为什么和 `.env` 分开：`.env` 装的是密钥和开关（扁平字符串），
+    这里装的是结构化配置（比如文档名单这种列表）。文件不存在或写坏了都返回空 dict——
+    配置写错不该让 agent 起不来，这条和 `.env` 的坏行处理保持一致。
+    """
+    path = Path(root) / ".moss" / "config.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        print(f"warning: ignoring invalid {path}: {exc}", file=sys.stderr)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def project_config_section(root, section):
+    value = load_project_config(root).get(section)
+    return value if isinstance(value, dict) else {}
 
 
 def provider_env(name, legacy_names=(), default=""):

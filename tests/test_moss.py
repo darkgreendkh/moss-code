@@ -2186,3 +2186,43 @@ def test_module_execution_help_works():
 
     assert result.returncode == 0
     assert "usage:" in result.stdout.lower()
+
+
+def test_nearest_agents_doc_is_injected_once_after_touching_that_directory(tmp_path):
+    """子目录的 AGENTS.md 只在真的碰到那块代码时才注入，且一次会话只注一次。"""
+    (tmp_path / "AGENTS.md").write_text("root rules\n", encoding="utf-8")
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "AGENTS.md").write_text("pkg rules: always run the linter\n", encoding="utf-8")
+    (pkg / "mod.py").write_text("x = 1\n", encoding="utf-8")
+
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"read_file","args":{"path":"pkg/mod.py"}}</tool>',
+            '<tool>{"name":"read_file","args":{"path":"pkg/mod.py"}}</tool>',
+            "<final>Done.</final>",
+        ],
+    )
+
+    assert agent.ask("Look at pkg/mod.py") == "Done."
+
+    notices = [
+        item
+        for item in agent.session["history"]
+        if item.get("role") == "system" and "pkg/AGENTS.md" in item.get("content", "")
+    ]
+    assert len(notices) == 1
+    assert "always run the linter" in notices[0]["content"]
+
+    trace_events_seen = [
+        json.loads(line)
+        for line in agent.run_store.trace_path(agent.current_task_state).read_text(encoding="utf-8").splitlines()
+    ]
+    loaded = [event for event in trace_events_seen if event["event"] == "instruction_loaded"]
+    conflicts = [event for event in trace_events_seen if event["event"] == "instruction_conflict"]
+    assert [event["path"] for event in loaded] == ["pkg/AGENTS.md"]
+    assert loaded[0]["scope"] == "pkg"
+    # 根目录那份被就近的覆盖了，要留痕，否则"为什么这条规则没生效"没法查。
+    assert conflicts and conflicts[0]["winner"] == "pkg/AGENTS.md"
+    assert conflicts[0]["shadowed"] == ["AGENTS.md"]

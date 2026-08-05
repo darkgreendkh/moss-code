@@ -18,6 +18,9 @@ _TRUNCATION_KEEP = {
     "run_shell": "middle",
 }
 
+# 会“碰到某个目录”的文件类工具。碰到之后才去找那个目录的就近指令文档。
+_FILE_TOOLS = ("read_file", "write_file", "edit_file")
+
 _SHELL_RISK_LEVELS = {
     "read_only": "low",
     "test": "low",
@@ -260,6 +263,9 @@ class ToolExecutor:
                     tool_status = "error"
                     tool_error_code = "tool_failed"
             agent.update_memory_after_tool(name, args, content)
+            if tool_status in {"ok", "partial_success"} and name in _FILE_TOOLS:
+                # 模型第一次碰到某个子目录时，才把那个目录的就近 AGENTS.md 注进来。
+                agent.note_nearby_instructions(args.get("path", ""))
             metadata = _metadata(
                 tool_status,
                 tool_error_code=tool_error_code,

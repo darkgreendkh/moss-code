@@ -5,8 +5,42 @@ import time
 from .checkpoint import CHECKPOINT_NONE_STATUS, CHECKPOINT_PARTIAL_STALE_STATUS, CHECKPOINT_WORKSPACE_MISMATCH_STATUS
 from .clock import now
 from .output_parser import parse_model_output
+from . import trace_events
 from .task_state import TaskState
 from .token_budget import clip
+
+
+def _record_instruction_notices(agent, task_state):
+    """把就近指令文档作为 runtime notice 追加进 history，并落 trace。
+
+    走 history 而不是 prefix：这是事件性质的（“你刚碰到的目录还有一份规则”），
+    append-only，不会让稳定前缀在任务中途改写、白白打掉 prompt 缓存。
+    注入不计入 attempts —— 它不是模型的一轮决策。
+    """
+    for notice in agent.drain_instruction_notices():
+        event = notice.get("event")
+        if event == trace_events.INSTRUCTION_LOADED:
+            agent.record(
+                {
+                    "role": "system",
+                    "content": (
+                        f"Runtime notice: {notice['path']} applies to {notice['scope']}/.\n"
+                        f"{notice['content']}"
+                    ),
+                    "created_at": now(),
+                }
+            )
+            agent.emit_trace(task_state, event, {"path": notice["path"], "scope": notice["scope"]})
+        elif event == trace_events.INSTRUCTION_CONFLICT:
+            agent.emit_trace(
+                task_state,
+                event,
+                {
+                    "path": notice["path"],
+                    "winner": notice["winner"],
+                    "shadowed": notice.get("shadowed", []),
+                },
+            )
 
 
 class AgentLoop:
@@ -176,6 +210,7 @@ class AgentLoop:
                         "created_at": now(),
                     }
                 )
+                _record_instruction_notices(agent, task_state)
                 agent.write_task_state(task_state)
                 agent.emit_trace(
                     task_state,

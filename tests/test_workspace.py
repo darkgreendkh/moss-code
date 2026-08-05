@@ -5,7 +5,9 @@ from moss.workspace import (
     WorkspaceContext,
     capture_snapshot,
     collect_git_facts,
+    discover_docs,
     diff_snapshots,
+    find_nearest_instruction_docs,
     invalidate_git_facts_cache,
     parse_status_counts,
 )
@@ -162,3 +164,60 @@ def test_status_text_reports_clean_workspace():
     )
 
     assert workspace.status_text() == "clean"
+
+
+def test_oversized_doc_becomes_a_structural_summary(tmp_path):
+    """超预算的文档退化成标题树 + 开头 + 取回指针，而不是硬切一刀。"""
+    body = "\n".join(["# Title", "intro line", "## Setup", "x" * 400, "## Deploy", "y" * 1200])
+    (tmp_path / "README.md").write_text(body, encoding="utf-8")
+
+    ref = WorkspaceContext.build(tmp_path).doc_refs["README.md"]
+
+    assert ref.truncated is True
+    assert "# Title" in ref.preview
+    assert "## Deploy" in ref.preview
+    assert "read_file README.md" in ref.preview
+    assert ref.total_lines == len(body.splitlines())
+
+
+def test_small_doc_is_kept_verbatim(tmp_path):
+    (tmp_path / "README.md").write_text("# Title\nshort\n", encoding="utf-8")
+
+    ref = WorkspaceContext.build(tmp_path).doc_refs["README.md"]
+
+    assert ref.truncated is False
+    assert ref.preview == "# Title\nshort\n"
+
+
+def test_doc_discovery_covers_the_layered_default_names(tmp_path):
+    for name in ("AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "Makefile", "justfile"):
+        (tmp_path / name).write_text(f"# {name}\n", encoding="utf-8")
+
+    refs = discover_docs(tmp_path, tmp_path)
+
+    assert {"AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "Makefile", "justfile"} <= set(refs)
+
+
+def test_project_config_can_override_the_doc_names(tmp_path):
+    (tmp_path / "README.md").write_text("readme\n", encoding="utf-8")
+    (tmp_path / "HACKING.md").write_text("hacking\n", encoding="utf-8")
+    (tmp_path / ".moss").mkdir()
+    (tmp_path / ".moss" / "config.json").write_text(
+        '{"repo_context": {"doc_names": ["HACKING.md"]}}', encoding="utf-8"
+    )
+
+    docs = WorkspaceContext.build(tmp_path).project_docs
+
+    assert set(docs) == {"HACKING.md"}
+
+
+def test_find_nearest_instruction_docs_orders_near_to_far(tmp_path):
+    (tmp_path / "AGENTS.md").write_text("root rules\n", encoding="utf-8")
+    nested = tmp_path / "pkg" / "sub"
+    nested.mkdir(parents=True)
+    (tmp_path / "pkg" / "AGENTS.md").write_text("pkg rules\n", encoding="utf-8")
+    (nested / "mod.py").write_text("x = 1\n", encoding="utf-8")
+
+    found = find_nearest_instruction_docs(tmp_path, nested / "mod.py")
+
+    assert found == ["pkg/AGENTS.md", "AGENTS.md"]

@@ -12,11 +12,30 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .config import project_config_section
 from .token_budget import clip
 
 # 这些文件最可能直接影响 agent 的行动方式。
 # 我们不会预加载整个仓库，只会先给模型一小份“导航包”。
-DOC_NAMES = ("AGENTS.md", "README.md", "pyproject.toml", "package.json")
+DOC_NAMES = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "README.md",
+    "README.rst",
+    "README.txt",
+    "pyproject.toml",
+    "package.json",
+    "Makefile",
+    "justfile",
+)
+# 单份文档进 prompt 的预算（字符）。超了就退化成结构摘要 + 取回指针，
+# 而不是硬切断——被砍掉一半的 README 比一份目录更容易把模型带偏。
+DOC_PREVIEW_BUDGET = 1200
+# 结构摘要里保留多少行正文开头。
+DOC_PREVIEW_HEAD_LINES = 12
+# 就近文档：文件类工具碰到某个目录时，会去祖先目录找这些文件。
+NEAREST_DOC_NAMES = ("AGENTS.md", "CLAUDE.md")
 IGNORED_PATH_NAMES = {".git", ".moss", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "venv"}
 
 # 指纹口径的版本号。改了指纹的计算方式就必须改它——旧 checkpoint 里存的是老口径的
@@ -394,16 +413,98 @@ def collect_git_facts(cwd, *, ttl_s=GIT_FACTS_TTL_S, cache=None):
     return facts
 
 
-def _doc_ref(path, rel_key, budget=1200):
+def summarize_doc(text, path, budget=DOC_PREVIEW_BUDGET, head_lines=DOC_PREVIEW_HEAD_LINES):
+    """超预算的文档退化成“标题树 + 开头几行 + 取回指针”。
+
+    为什么不直接硬切：一份被砍在半句话上的 README 会让模型误以为自己看全了；
+    而“有哪些章节 + 怎么取回全文”既省 token，又明确告诉它这里还有东西。
+    """
+    lines = text.splitlines()
+    if len(text) <= budget:
+        return text, False
+    headings = [line.strip() for line in lines if line.startswith("#") and line.count("#") <= 3]
+    pointer = f"（全文 {len(lines)} 行，用 read_file {path} 取回）"
+    parts = []
+    if headings:
+        parts.append("\n".join(headings[:20]))
+    parts.append("\n".join(lines[:head_lines]))
+    body = "\n".join(part for part in parts if part.strip())
+    # 取回指针必须活下来：它是模型知道"这里还有东西、怎么拿"的唯一线索，
+    # 所以先给它留出位置，再切正文，而不是整段一起切。
+    return f"{clip(body, max(0, budget - len(pointer) - 1))}\n{pointer}", True
+
+
+def _doc_ref(path, rel_key, budget=DOC_PREVIEW_BUDGET):
     text = path.read_text(encoding="utf-8", errors="replace")
-    preview = clip(text, budget)
+    preview, truncated = summarize_doc(text, rel_key, budget)
     return DocRef(
         path=rel_key,
         preview=preview,
         digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         total_lines=len(text.splitlines()),
-        truncated=len(preview) < len(text),
+        truncated=truncated,
     )
+
+
+def _configured_doc_names(repo_root):
+    names = project_config_section(repo_root, "repo_context").get("doc_names")
+    if isinstance(names, (list, tuple)) and names:
+        return tuple(str(name) for name in names)
+    return None
+
+
+def discover_docs(repo_root, cwd, extra_names=(), doc_names=None):
+    """分层发现项目文档：repo_root 与 cwd 各扫一遍白名单。
+
+    名单可以被 .moss/config.json 的 repo_context.doc_names 整体覆盖——
+    不同技术栈的“导航包”差别很大，硬编码一份名单只能服务 Python 仓库。
+    """
+    repo_root = Path(repo_root)
+    cwd = Path(cwd)
+    names = tuple(doc_names) if doc_names else DOC_NAMES
+    names = names + tuple(extra_names)
+    refs = {}
+    for base in (repo_root, cwd):
+        for name in names:
+            path = base / name
+            if not path.is_file():
+                continue
+            try:
+                key = str(path.relative_to(repo_root))
+            except ValueError:
+                key = str(path)
+            if key in refs:
+                continue
+            try:
+                refs[key] = _doc_ref(path, key)
+            except OSError:
+                continue
+    return refs
+
+
+def find_nearest_instruction_docs(repo_root, target, names=NEAREST_DOC_NAMES):
+    """从 target 所在目录往上找就近的指令文档，由近到远返回相对路径。
+
+    为什么按“由近到远”返回：同名规则冲突时最近的目录优先——
+    子目录里的 AGENTS.md 就是为了覆盖仓库根那份而存在的。
+    """
+    repo_root = Path(repo_root).resolve()
+    target = Path(target)
+    directory = target if target.is_dir() else target.parent
+    found = []
+    try:
+        directory = directory.resolve()
+        directory.relative_to(repo_root)
+    except (OSError, ValueError):
+        return found
+    for candidate in (directory, *directory.parents):
+        for name in names:
+            doc = candidate / name
+            if doc.is_file():
+                found.append(doc.relative_to(repo_root).as_posix())
+        if candidate == repo_root:
+            break
+    return found
 
 
 class WorkspaceContext:
@@ -458,7 +559,7 @@ class WorkspaceContext:
         }
 
     @classmethod
-    def build(cls, cwd, repo_root_override=None, *, git_facts=None):
+    def build(cls, cwd, repo_root_override=None, *, git_facts=None, doc_names=None):
         cwd = Path(cwd).resolve()
         repo_root = (
             Path(repo_root_override).resolve()
@@ -466,25 +567,8 @@ class WorkspaceContext:
             else _repo_identity(cwd)[0]
         )
         facts = git_facts if git_facts is not None else collect_git_facts(cwd)
-
-        doc_refs = {}
-        # 同时扫描 repo_root 和 cwd，这样在子目录启动时也能看到本地文档；
-        # 但用相对路径做 key，避免同一份文档被重复收集。
-        for base in (repo_root, cwd):
-            for name in DOC_NAMES:
-                path = base / name
-                if not path.exists():
-                    continue
-                try:
-                    key = str(path.relative_to(repo_root))
-                except ValueError:
-                    key = str(path)
-                if key in doc_refs:
-                    continue
-                try:
-                    doc_refs[key] = _doc_ref(path, key)
-                except OSError:
-                    continue
+        # 同时扫描 repo_root 和 cwd，这样在子目录启动时也能看到本地文档。
+        doc_refs = discover_docs(repo_root, cwd, doc_names=doc_names or _configured_doc_names(repo_root))
 
         return cls(
             cwd=str(cwd),

@@ -25,7 +25,14 @@ from .clock import now
 from .token_budget import MAX_HISTORY, clip
 from . import ignore as ignorelib
 from . import repo_map as repo_maplib
-from .workspace import SnapshotResult, WorkspaceContext, capture_snapshot, diff_snapshots
+from . import trace_events
+from .workspace import (
+    SnapshotResult,
+    WorkspaceContext,
+    capture_snapshot,
+    diff_snapshots,
+    find_nearest_instruction_docs,
+)
 
 DEFAULT_SHELL_ENV_ALLOWLIST = (
     # POSIX-ish
@@ -37,6 +44,8 @@ DEFAULT_SHELL_ENV_ALLOWLIST = (
     "USERPROFILE", "USERNAME", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
     "PROGRAMFILES", "ProgramFiles", "ProgramFiles(x86)", "PROGRAMW6432",
 )
+# 就近指令文档进 history 的上限。它是 append-only 的事件，太长会挤掉真正的对话。
+MAX_INSTRUCTION_DOC_CHARS = 2000
 DEFAULT_FEATURE_FLAGS = {
     "memory": True,
     "relevant_memory": True,
@@ -72,6 +81,9 @@ class Moss:
         self._ignore_rules = None
         self._last_snapshot = SnapshotResult()
         self.last_repo_map = None
+        # 就近指令文档：一次会话里每份只注入一次，避免重复占预算。
+        self.loaded_instruction_docs = {}
+        self.pending_instruction_notices = []
         self.session_store = session_store
         self.approval_policy = approval_policy
         self.max_steps = max_steps
@@ -417,6 +429,54 @@ class Moss:
             workspace.repo_map_text = ""
             self.last_repo_map = None
         return workspace
+
+    def note_nearby_instructions(self, path):
+        """文件类工具碰到某个目录后，把该目录祖先链上的就近指令文档排队注入。
+
+        为什么是“碰到之后”而不是一开始就全塞进 prefix：子目录里的 AGENTS.md
+        只有在真的要动那块代码时才有意义，全量注入等于让每个任务都为所有子目录
+        的规则付 token。同一份文档在一次会话里只注一次（append-only，见 spec-04）。
+        """
+        try:
+            found = find_nearest_instruction_docs(self.root, self.root / str(path))
+        except Exception:
+            return []
+        if not found:
+            return []
+        nearest = found[0]
+        if len(found) > 1:
+            # 同名规则冲突：最近目录优先。记一笔，否则"为什么这条规则没生效"
+            # 只能靠人肉比对目录层级。
+            self.pending_instruction_notices.append(
+                {
+                    "event": trace_events.INSTRUCTION_CONFLICT,
+                    "path": nearest,
+                    "winner": nearest,
+                    "shadowed": found[1:],
+                }
+            )
+        if nearest in self.loaded_instruction_docs:
+            return []
+        try:
+            text = (self.root / nearest).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+        scope = str(Path(nearest).parent.as_posix())
+        scope = "." if scope in {"", "."} else scope
+        self.loaded_instruction_docs[nearest] = scope
+        notice = {
+            "event": trace_events.INSTRUCTION_LOADED,
+            "path": nearest,
+            "scope": scope,
+            "content": clip(text, MAX_INSTRUCTION_DOC_CHARS),
+        }
+        self.pending_instruction_notices.append(notice)
+        return [notice]
+
+    def drain_instruction_notices(self):
+        notices = list(self.pending_instruction_notices)
+        self.pending_instruction_notices.clear()
+        return notices
 
     def workspace_ignore_rules(self):
         """快照/地图共用的一套忽略口径，按 root 缓存。
