@@ -28,6 +28,7 @@ from .token_budget import MAX_HISTORY, clip
 from . import ignore as ignorelib
 from . import repo_map as repo_maplib
 from . import budget as budgetlib
+from . import policy as policylib
 from . import stall as stalllib
 from .verification import is_verification_command
 from . import trace_events
@@ -84,6 +85,7 @@ class Moss:
         run_budget_limits=None,
         verify_before_final=True,
         injection_scan=True,
+        policy=None,
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -106,6 +108,8 @@ class Moss:
         # 注入扫描。命中后本 run 剩余的 risky 工具强制走审批。
         self.injection_scan = bool(injection_scan)
         self.injection_findings = []
+        # 能力/路径策略。read_only 也归它管，这样"只读"不再是散落在多处的特判。
+        self.policy = policy if policy is not None else policylib.Policy.build(read_only=read_only)
         # 多维预算的上限（步数之外还有 token / 时间 / 金额）。默认全 None，
         # 行为与加预算前完全一致。
         self.run_budget_limits = dict(run_budget_limits or {})

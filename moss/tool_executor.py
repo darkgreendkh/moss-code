@@ -97,6 +97,31 @@ def _scan_result_for_injection(agent, name, args, content):
     return scan_for_injection(content, source=source)
 
 
+def _policy_decision(agent, tool, name, args):
+    """按能力标签和路径作用域判定。没有策略对象时返回 None（行为与以前一致）。"""
+    policy = getattr(agent, "policy", None)
+    spec = tool.get("spec")
+    if policy is None or spec is None:
+        return None
+    return policy.decide(spec, args, resolved_paths=_resolved_relative_paths(agent, name, args))
+
+
+def _resolved_relative_paths(agent, name, args):
+    """把工具参数里的路径解析成仓库内相对路径。
+
+    解析失败（逃逸、不存在）不在这里报错——路径锚定是 Moss.path() 的职责，
+    策略层只回答"允不允许碰这些路径"。
+    """
+    raw = str((args or {}).get("path", "")).strip()
+    if not raw:
+        return ()
+    try:
+        resolved = agent.path(raw)
+        return (resolved.relative_to(agent.root).as_posix(),)
+    except Exception:
+        return (raw.replace("\\", "/").lstrip("./"),)
+
+
 def _denied_shell_reason(name, args):
     """命中 deny 清单时返回原因，否则返回空串。"""
     if name != "run_shell":
@@ -238,6 +263,20 @@ class ToolExecutor:
                     "rejected",
                     tool_error_code="invalid_arguments",
                     security_event_type=security_event_type,
+                    risk_level=_risk_level_for(tool, name, args),
+                    read_only=_read_only_for(tool, name, args),
+                    extra=_extra_metadata_for(name, args),
+                ),
+            )
+
+        decision = _policy_decision(agent, tool, name, args)
+        if decision is not None and not decision.allowed:
+            return ToolExecutionResult(
+                content=f"error: policy refused {name}: {decision.reason}",
+                metadata=_metadata(
+                    "rejected",
+                    tool_error_code="capability_denied",
+                    security_event_type="capability_denied",
                     risk_level=_risk_level_for(tool, name, args),
                     read_only=_read_only_for(tool, name, args),
                     extra=_extra_metadata_for(name, args),

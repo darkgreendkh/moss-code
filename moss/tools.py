@@ -41,6 +41,11 @@ class ToolSpec:
     fields: dict[str, ToolField]
     risky: bool
     description: str
+    # 能力标签（spec-03 §4.2）。未声明 = 空集；risky 且未声明会被 policy 直接拒绝
+    # （fail-closed），这样新工具忘了声明会立刻在测试里炸，而不是默默放行。
+    capabilities: frozenset = frozenset()
+    # 路径作用域：workspace（默认）/ run_dir / memory_dir。
+    path_scope: str = "workspace"
 
 
 def write_text_atomic(path, content):
@@ -78,6 +83,7 @@ BASE_TOOL_SPECS = {
         name="list_files",
         fields={"path": ToolField("str", required=False, default=".")},
         risky=False,
+        capabilities=frozenset({"fs_read"}),
         description="List files in the workspace.",
     ),
     "read_file": ToolSpec(
@@ -88,30 +94,35 @@ BASE_TOOL_SPECS = {
             "end": ToolField("int", required=False, default=800, minimum=1),
         },
         risky=False,
+        capabilities=frozenset({"fs_read"}),
         description="Read a UTF-8 file by line range.",
     ),
     "write_file": ToolSpec(
         name="write_file",
         fields={"path": ToolField("str"), "content": ToolField("str")},
         risky=True,
+        capabilities=frozenset({"fs_write"}),
         description="Write a text file.",
     ),
     "edit_file": ToolSpec(
         name="edit_file",
         fields={"path": ToolField("str"), "old_text": ToolField("str"), "new_text": ToolField("str")},
         risky=True,
+        capabilities=frozenset({"fs_read", "fs_write"}),
         description="Replace one exact text block in a file.",
     ),
     "search_text": ToolSpec(
         name="search_text",
         fields={"pattern": ToolField("str"), "path": ToolField("str", required=False, default=".")},
         risky=False,
+        capabilities=frozenset({"fs_read"}),
         description="Search the workspace with rg or a simple fallback.",
     ),
     "update_plan": ToolSpec(
         name="update_plan",
         fields={"steps": ToolField("list")},
         risky=False,
+        capabilities=frozenset(),
         description="Replace the current plan. Each step: {id, title, status}.",
     ),
     "run_shell": ToolSpec(
@@ -121,6 +132,8 @@ BASE_TOOL_SPECS = {
             "timeout": ToolField("int", required=False, default=60, minimum=1, maximum=600),
         },
         risky=True,
+        # shell 能干的事没有上界，所以四个能力全给——策略层据此决定拦不拦。
+        capabilities=frozenset({"fs_read", "fs_write", "exec", "network"}),
         description="Run a shell command in the repo root.",
     ),
 }
@@ -129,6 +142,7 @@ DELEGATE_TOOL_SPEC = ToolSpec(
     name="delegate",
     fields={"task": ToolField("str"), "max_steps": ToolField("int", required=False, default=3, minimum=1)},
     risky=False,
+    capabilities=frozenset({"fs_read", "spawn"}),
     description="Ask a bounded read-only child agent to investigate.",
 )
 
@@ -136,6 +150,7 @@ USE_SKILL_TOOL_SPEC = ToolSpec(
     name="use_skill",
     fields={"name": ToolField("str")},
     risky=False,
+    capabilities=frozenset({"fs_read"}),
     description="Load a skill's instructions by name before doing the work it describes.",
 )
 
@@ -174,6 +189,9 @@ def _registry_entry(spec, context, runner):
         "schema": dict(spec.fields),
         "risky": spec.risky,
         "description": spec.description,
+        "capabilities": frozenset(spec.capabilities),
+        "path_scope": spec.path_scope,
+        "spec": spec,
         "run": partial(runner, context),
     }
 
@@ -251,6 +269,11 @@ def build_tool_registry(context):
 
 def tool_example(name):
     return TOOL_EXAMPLES.get(name, "")
+
+
+def tool_spec(name):
+    """按名字取 ToolSpec。策略层要用它读能力标签。"""
+    return _tool_spec(name)
 
 
 def _tool_spec(name):

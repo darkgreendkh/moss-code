@@ -16,6 +16,7 @@ from .config import load_project_env, provider_env
 from .providers.clients import AnthropicCompatibleModelClient, OllamaModelClient, OpenAICompatibleModelClient
 from .runtime import Moss, SessionStore
 from .token_budget import middle
+from . import policy as policylib
 from .workspace import WorkspaceContext
 
 DEFAULT_SECRET_ENV_NAMES = (
@@ -385,6 +386,10 @@ def build_agent(args):
     # 这里是 CLI 到 runtime 的装配点：
     # 先采集工作区快照和加载项目级环境，再整理 secret 名单、模型后端和 session。
     workspace = WorkspaceContext.build(args.cwd)
+    policy = policylib.Policy.build(
+        allow=policylib.parse_capability_rules(getattr(args, "allow_rules", [])),
+        deny=policylib.parse_capability_rules(getattr(args, "deny_rules", [])),
+    )
     run_budget_limits = {
         "max_input_tokens": getattr(args, "max_input_tokens", None),
         "max_output_tokens": getattr(args, "max_output_tokens", None),
@@ -412,6 +417,7 @@ def build_agent(args):
             run_budget_limits=run_budget_limits,
             verify_before_final=getattr(args, "verify_before_final", "on") == "on",
             injection_scan=getattr(args, "injection_scan", "on") == "on",
+            policy=policy,
         )
     return Moss(
         model_client=model,
@@ -425,6 +431,7 @@ def build_agent(args):
         run_budget_limits=run_budget_limits,
         verify_before_final=getattr(args, "verify_before_final", "on") == "on",
         injection_scan=getattr(args, "injection_scan", "on") == "on",
+        policy=policy,
     )
 
 
@@ -460,6 +467,22 @@ def build_arg_parser():
         help="Extra environment variable names to treat as secrets for trace/report redaction.",
     )
     parser.add_argument("--max-steps", type=int, default=25, help="Maximum tool/model iterations per request.")
+    parser.add_argument(
+        "--allow",
+        dest="allow_rules",
+        action="append",
+        default=[],
+        metavar="CAP[=GLOBS]",
+        help="Restrict a capability to a comma-separated glob scope, e.g. --allow fs_write=src/**,tests/**.",
+    )
+    parser.add_argument(
+        "--deny",
+        dest="deny_rules",
+        action="append",
+        default=[],
+        metavar="CAP[=GLOBS]",
+        help="Deny a capability entirely (--deny network) or for some paths (--deny fs_write=.github/**).",
+    )
     parser.add_argument(
         "--injection-scan",
         choices=("on", "off"),

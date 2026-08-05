@@ -189,11 +189,13 @@ def test_read_only_agent_cannot_write_through_any_public_api(tmp_path):
     agent = build_agent(tmp_path, [], read_only=True, approval_policy="auto")
     target = tmp_path / "written.txt"
 
-    assert "approval denied" in agent.run_tool("write_file", {"path": "written.txt", "content": "x"})
+    # read_only 现在由 policy 统一判定（"这次运行不允许 fs_write"），
+    # 落到审批之前就被拒了，所以断言只看"被拒了 + 文件没被创建"。
+    assert "error:" in agent.run_tool("write_file", {"path": "written.txt", "content": "x"})
     with pytest.deprecated_call():
-        assert "approval denied" in agent.tool_write_file({"path": "written.txt", "content": "x"})
+        assert "error:" in agent.tool_write_file({"path": "written.txt", "content": "x"})
     with pytest.deprecated_call():
-        assert "approval denied" in agent.tool_run_shell({"command": "echo hi > written.txt", "timeout": 5})
+        assert "error:" in agent.tool_run_shell({"command": "echo hi > written.txt", "timeout": 5})
 
     assert not target.exists()
 
