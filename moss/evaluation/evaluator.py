@@ -14,7 +14,7 @@ from ..runtime import Moss, SessionStore
 from ..run_store import RunStore
 from ..task_state import STOP_REASON_FINAL_ANSWER_RETURNED
 from ..tools import legal_tool_names
-from ..workspace import WorkspaceContext
+from ..workspace import WORKSPACE_FINGERPRINT_VERSION, WorkspaceContext
 
 BENCHMARK_SCHEMA_VERSION = 1
 DEFAULT_BENCHMARK_PATH = Path("benchmarks/coding_tasks.json")
@@ -364,7 +364,9 @@ def _apply_task_setup(agent, task, fixture_copy_root):
                     "ckpt_workspace",
                     current_goal="Recover after benchmark workspace drift",
                     next_step="Rebuild runtime state from a fresh checkpoint",
-                    runtime_identity={"workspace_fingerprint": "outdated-benchmark-fingerprint"},
+                    runtime_identity={
+                        "workspace_fingerprint": f"{WORKSPACE_FINGERPRINT_VERSION}:outdated-benchmark-fingerprint"
+                    },
                     summary="workspace drift benchmark checkpoint",
                 )
             },

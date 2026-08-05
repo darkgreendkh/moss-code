@@ -39,6 +39,7 @@ def test_current_runtime_identity_captures_execution_contract(tmp_path):
     assert identity["max_new_tokens"] == 1024
     assert identity["workspace_fingerprint"] == agent.workspace.fingerprint()
     assert identity["tool_signature"] == agent.tool_signature()
+    assert identity["prompt_version"] == "p1"
 
 
 def test_evaluate_resume_state_distinguishes_no_checkpoint_full_valid_and_schema_mismatch(tmp_path):

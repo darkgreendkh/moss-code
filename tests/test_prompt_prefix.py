@@ -1,3 +1,6 @@
+import hashlib
+
+import moss.prompt_prefix as prompt_module
 from moss.prompt_prefix import build_prompt_prefix, tool_signature
 from moss.tools import ToolField, build_tool_registry
 from moss.workspace import WorkspaceContext
@@ -51,6 +54,23 @@ def test_build_prompt_prefix_renders_tools_and_workspace_metadata(tmp_path):
     assert prefix.workspace_fingerprint == workspace.fingerprint()
     assert prefix.tool_signature == tool_signature(tools)
     assert prefix.built_at == "2026-06-02T00:00:00+08:00"
+    assert prefix.prompt_version == prompt_module.PROMPT_VERSION == "p1"
+
+
+def test_system_prompt_file_overrides_builtin_head_and_versions_by_content(tmp_path):
+    (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
+    prompt_path = tmp_path / ".moss" / "prompts" / "system.md"
+    prompt_path.parent.mkdir(parents=True)
+    prompt_path.write_text("CUSTOM SYSTEM\n", encoding="utf-8")
+    workspace = WorkspaceContext.build(tmp_path)
+    tools = build_tool_registry(_Agent(tmp_path))
+
+    prefix = build_prompt_prefix(workspace=workspace, tools=tools)
+
+    assert prefix.stable_text == "CUSTOM SYSTEM"
+    expected_hash = hashlib.sha256("CUSTOM SYSTEM\n".encode("utf-8")).hexdigest()[:12]
+    assert prefix.prompt_version == f"file:{expected_hash}"
+    assert "You are moss" not in prefix.stable_text
 
 
 def test_prompt_prefix_renders_executable_schema_fields_as_concise_text(tmp_path):

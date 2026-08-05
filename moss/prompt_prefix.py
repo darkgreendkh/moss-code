@@ -4,8 +4,11 @@ import hashlib
 import json
 import textwrap
 from dataclasses import asdict, dataclass, is_dataclass
+from pathlib import Path
 
 from .clock import now
+
+PROMPT_VERSION = "p1"
 
 
 @dataclass
@@ -27,6 +30,7 @@ class PromptPrefix:
     tool_signature: str
     skill_signature: str
     prompt_variant: str
+    prompt_version: str
     built_at: str
 
 
@@ -159,6 +163,12 @@ def build_prompt_prefix(workspace, tools, skills=None, built_at=None, protocol="
         {examples}
             """
         ).strip()
+    prompt_version = PROMPT_VERSION
+    override_path = Path(workspace.repo_root) / ".moss" / "prompts" / "system.md"
+    if override_path.is_file():
+        override_text = override_path.read_text(encoding="utf-8")
+        head = override_text.strip()
+        prompt_version = "file:" + hashlib.sha256(override_text.encode("utf-8")).hexdigest()[:12]
     # 易变尾：workspace 快照（含 git status / recent_commits），每轮可能变。
     # 拼在稳定头之后，整段 text == 改动前逐字节一致（旧模板里 workspace 也在最后）。
     workspace_text = workspace.text()
@@ -174,5 +184,6 @@ def build_prompt_prefix(workspace, tools, skills=None, built_at=None, protocol="
         tool_signature=signature,
         skill_signature=skill_signature(skills),
         prompt_variant=protocol,
+        prompt_version=prompt_version,
         built_at=built_at or now(),
     )

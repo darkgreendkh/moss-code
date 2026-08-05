@@ -60,6 +60,8 @@ cli.py (装配/REPL/进度渲染)
 - `token_budget.py`：token 估算与全部文本裁剪（`clip_to_budget` 按预算二分；`clip`/`middle` 硬切片，`MAX_TOOL_OUTPUT=16000`、`MAX_HISTORY=32000`）；`clock.py`：统一 UTC 时间戳 `now()`
 - `output_parser.py`：模型输出 → `("tool"|"final"|"retry", payload)` 的纯函数解析层
 - `prompt_prefix.py`：稳定前缀构建。**prompt cache key 用 `stable_hash`（只覆盖身份/规则/Tools/Skills 段），不用整段 hash**——否则 agent 自己写文件会导致 workspace 段变化、缓存键每轮抖动
+- `model_request.py`：结构化 `system blocks + messages` 请求；仓库/工具内容永不进入 system。provider 支持 native tool 时直接保留全部 `call_id`
+- `providers/capabilities.py`：按 provider/model prefix 显式声明 cache/native/context 能力；未知模型保守关闭缓存，不再按 URL 猜测
 - `features/memory.py`：分层记忆（working / episodic notes / durable topics），文件摘要带 freshness 失效；也承载记忆写入/durable 提炼策略（`update_memory_after_tool`/`extract_durable_promotions` 等，Moss 只薄委托）
 - `session_store.py`：会话持久化到 `.moss/sessions/`；delegate 子 agent 的会话隔离在 `.moss/delegates/`（不能污染 `--resume latest`）
 - `security.py`：secret 检测/脱敏；`run_shell` 只继承 `DEFAULT_SHELL_ENV_ALLOWLIST` 里的环境变量（**含 Windows 必需的 COMSPEC/SYSTEMROOT 等，删了 run_shell 在 Windows 上直接崩**）
@@ -104,6 +106,8 @@ cli.py (装配/REPL/进度渲染)
 安全开关：`--sandbox`（默认 auto）、`--allow-network`、`--allow` / `--deny`（能力+glob）、`--injection-scan`（默认 on）。
 
 主循环开关：`--parallel-tools`（默认 off）、`--verify-before-final`（默认 on）、`--max-input-tokens` / `--max-output-tokens` / `--max-seconds` / `--max-usd`（默认全 None，不设即老行为）。
+
+提示词开关：`--tool-protocol=auto|native|text`（默认 auto）、`--context-mode=rerender|append_only`（默认 rerender）、`--no-prompt-cache`。内置 prompt 版本是 `p1`；`.moss/prompts/system.md` 可覆盖稳定 system head，版本记为 `file:<sha256前12位>` 并写入 report/run_manifest。
 
 CLI 默认：`--max-steps 25`、`--max-new-tokens 4096`、`--approval ask`。ContextManager 预算以**估算 token** 为单位（见 `token_budget.py`，CJK 约 1 char/token、拉丁约 4 chars/token；测试可注入 `measure=len` 走字符级以稳定断言）：总预算 12000 token（section 预算 prefix 3000 / memory 1000 / relevant 800 / history 6000）。
 

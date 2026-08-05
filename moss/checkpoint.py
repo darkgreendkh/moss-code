@@ -32,6 +32,7 @@ RUNTIME_IDENTITY_KEYS = (
     "shell_env_allowlist",
     "workspace_fingerprint",
     "tool_signature",
+    "prompt_version",
 )
 
 
@@ -49,6 +50,7 @@ def current_runtime_identity(agent):
         "shell_env_allowlist": list(agent.shell_env_allowlist),
         "workspace_fingerprint": getattr(getattr(agent, "prefix_state", None), "workspace_fingerprint", agent.workspace.fingerprint()),
         "tool_signature": agent.tool_signature(),
+        "prompt_version": getattr(getattr(agent, "prefix_state", None), "prompt_version", ""),
     }
 
 
