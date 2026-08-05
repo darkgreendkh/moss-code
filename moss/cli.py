@@ -31,16 +31,20 @@ DEFAULT_SECRET_ENV_NAMES = (
     "GH_PAT",
 )
 
+# 欢迎屏的左侧图形：一棵五层的树，轮廓用斜线、树冠用点、每层外侧缀星。
+# 全部字符在等宽字体里占一格，所以整屏的盒子宽度可以直接按 len() 算。
 WELCOME_ART = (
-    "&&",
-    "&&&&",
-    "&&&&&&",
-    "&&&&&&&&",
-    " ||",
+    "      ✦      ",
+    "     ✧╱╲✧    ",
+    "    ✦╱∴∴╲✦   ",
+    "   ✧╱∴∴∴∴╲✧  ",
+    "  ✦╱∴∴∴∴∴∴╲✦ ",
+    " ✧╱∴∴∴∴∴∴∴∴╲✧",
 )
 WELCOME_NAME = "moss"
 WELCOME_SUBTITLE = "local coding agent"
-WELCOME_STATUS = "calm shell, ready for work"
+WELCOME_STATUS = "small loop, real tools"
+WELCOME_HINT = "/help for commands   ·   ctrl-c cancels the current task"
 HELP_DETAILS = textwrap.dedent(
     """\
     Commands:
@@ -293,22 +297,44 @@ def make_progress_printer(stream):
 
 
 def build_welcome(agent, model, host):
+    """渲染 REPL 启动时的欢迎屏。
+
+    为什么存在：
+    这是用户看到的第一屏，要在一眼之内回答四个问题——我连的是哪个模型、
+    在哪个工作区/分支、审批策略松还是紧、这轮会话叫什么。这些都是事后
+    翻 trace 时最常需要对齐的字段，所以放在最显眼的位置。
+
+    布局约定：整屏是一个等宽盒子，每行渲染完长度必须完全相同（有测试守着），
+    所以所有可变文本都先过 `middle()` 截断到固定宽度再 ljust 补齐。
+    """
     width = max(68, min(shutil.get_terminal_size((80, 20)).columns, 84))
-    inner = width - 4
+    pad = 2
+    inner = width - 2 - pad * 2
+    art_width = max(len(art_line) for art_line in WELCOME_ART)
+    art_gap = 3
+    text_width = inner - art_width - art_gap
     gap = 3
     left_width = (inner - gap) // 2
     right_width = inner - gap - left_width
 
     def row(text):
-        body = middle(text, width - 4)
-        return f"| {body.ljust(width - 4)} |"
-
-    def divider(char="-"):
-        return "+" + char * (width - 2) + "+"
-
-    def center(text):
         body = middle(text, inner)
-        return f"| {body.center(inner)} |"
+        return f"│{' ' * pad}{body.ljust(inner)}{' ' * pad}│"
+
+    def top():
+        return "╭" + "─" * (width - 2) + "╮"
+
+    def divider():
+        return "├" + "─" * (width - 2) + "┤"
+
+    def bottom():
+        return "╰" + "─" * (width - 2) + "╯"
+
+    def banner(art_line, text):
+        # 图形固定占左侧一列，文字靠左对齐排在右边——比整体居中更像现代 CLI，
+        # 也让 name/subtitle/status 三行形成一条竖直的阅读线。
+        body = middle(text, text_width)
+        return row(f"{art_line.ljust(art_width)}{' ' * art_gap}{body}")
 
     def cell(label, value, size):
         body = middle(f"{label:<9} {value}", size)
@@ -317,24 +343,27 @@ def build_welcome(agent, model, host):
     def pair(left_label, left_value, right_label, right_value):
         left = cell(left_label, left_value, left_width)
         right = cell(right_label, right_value, right_width)
-        return f"| {left}{' ' * gap}{right} |"
+        return f"│{' ' * pad}{left}{' ' * gap}{right}{' ' * pad}│"
 
-    line = divider("=")
-    rows = [center(text) for text in WELCOME_ART]
+    # 三行文字底部对齐到图形最后三行——树冠越往下越宽，文字贴着宽的一侧才不虚，
+    # 顶上的尖角顺势留出一块斜向留白。改图形的行数时这里会自动跟着走。
+    lines = (WELCOME_NAME, WELCOME_SUBTITLE, WELCOME_STATUS)
+    banner_text = ("",) * (len(WELCOME_ART) - len(lines)) + lines
+    rows = [banner(art, text) for art, text in zip(WELCOME_ART, banner_text)]
     rows.extend(
         [
-            center(WELCOME_NAME),
-            center(WELCOME_SUBTITLE),
-            center(WELCOME_STATUS),
-            divider("-"),
             row(""),
-            row("WORKSPACE  " + middle(agent.workspace.cwd, inner - 11)),
-            pair("MODEL", model, "BRANCH", agent.workspace.branch),
-            pair("APPROVAL", agent.approval_policy, "SESSION", agent.session["id"]),
+            divider(),
             row(""),
+            row(cell("workspace", agent.workspace.cwd, inner)),
+            pair("model", model, "branch", agent.workspace.branch),
+            pair("approval", agent.approval_policy, "session", agent.session["id"]),
+            row(""),
+            divider(),
+            row(WELCOME_HINT),
         ]
     )
-    return "\n".join([line, *rows, line])
+    return "\n".join([top(), row(""), *rows, bottom()])
 
 
 def build_agent(args):

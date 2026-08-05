@@ -346,7 +346,7 @@ def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):
     assert len(lines) >= 5
     assert len({len(line) for line in lines}) == 1
     assert "..." in welcome
-    assert "&&&&" in welcome
+    assert "╱" in welcome and "∴" in welcome
     assert "MINI-CODING-AGENT" not in welcome
     assert "MINI CODING AGENT" not in welcome
     assert "moss" in welcome
@@ -355,6 +355,10 @@ def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):
     assert "SLASH" not in welcome
     assert "READY      " not in welcome
     assert "commands: Commands:" not in welcome
+    # 启动屏是"一眼对齐运行现场"的地方，这四个字段掉了就得靠翻 trace 才知道跑在哪。
+    for label in ("workspace", "model", "branch", "approval", "session"):
+        assert label in welcome
+    assert "/help" in welcome
 
 
 def test_enable_line_editing_leaves_ctype_on_utf8():
