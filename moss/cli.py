@@ -6,6 +6,7 @@
 """
 
 import argparse
+import locale
 import os
 import shutil
 import sys
@@ -169,6 +170,66 @@ def _build_model_client(args):
         top_p=args.top_p,
         timeout=args.ollama_timeout,
     )
+
+
+def _ctype_codeset():
+    # 直接问 C 层 locale 的真实 codeset。不用 locale.getpreferredencoding()：
+    # Python 处于 UTF-8 mode 时它无条件返回 utf-8，看不出 LC_CTYPE 其实还停在
+    # ASCII——而 readline 的多字节行为只认后者。
+    if not hasattr(locale, "nl_langinfo"):
+        return ""
+    try:
+        return (locale.nl_langinfo(locale.CODESET) or "").lower().replace("-", "")
+    except (ValueError, AttributeError):
+        return ""
+
+
+def enable_line_editing():
+    """给 REPL 的 input() 挂上真正的行编辑器，否则中文输入会把整个进程搞崩。
+
+    为什么存在：
+    macOS / BSD 的 tty 行规程没有 Linux 那个 IUTF8 标志，退格只删掉一个
+    **字节**。一个汉字是 3 字节，删一次就在输入缓冲里留下半个 UTF-8 序列，
+    input() 用严格 UTF-8 解码时抛 UnicodeDecodeError，REPL 直接带着 traceback
+    退出（英文一字符一字节，所以只有中文会踩到）。同时终端只擦掉 1 列，而汉字
+    占 2 列，回显也跟着错位。把 readline 挂上之后，行编辑由 readline/libedit
+    接管：退格按“字符”删、方向键也不再变成 ^[[D 这样的乱码。
+
+    在 agent 链路里的位置：
+    main() 进入 REPL 之前调用一次，纯副作用。任何一步失败都必须静默降级——
+    Windows 标准库没有 readline，不能因为它启动不了 moss（REPL 里还有一层
+    解码兜底）。
+    """
+    # readline/libedit 是否按字符处理多字节取决于 LC_CTYPE：locale 还在 C/ASCII
+    # 时它照样把汉字拆成字节，所以必须先把 locale 拉到 UTF-8 再 import。
+    try:
+        locale.setlocale(locale.LC_ALL, "")
+    except locale.Error:
+        pass
+    if _ctype_codeset() != "utf8":
+        # LANG 没设或被设成 C 的环境（CI、cron、精简 Docker 镜像）走这里。
+        for candidate in ("C.UTF-8", "en_US.UTF-8", "UTF-8"):
+            try:
+                locale.setlocale(locale.LC_ALL, candidate)
+                break
+            except locale.Error:
+                continue
+    try:
+        import readline  # noqa: F401  仅为副作用导入：让 input() 走行编辑器
+    except ImportError:
+        pass
+
+
+def _scrub_undecodable(text):
+    """把输入里的孤立代理字符替换掉。
+
+    Python 处于 UTF-8 mode 时 stdin 用 surrogateescape 解码，半个 UTF-8 序列
+    不会抛错，而是变成孤立代理字符一路带下去，直到写 session JSON 或发 HTTP
+    请求时才炸（或者更糟：静默把乱码发给模型）。在入口就地清掉。
+    """
+    if not any("\ud800" <= ch <= "\udfff" for ch in text):
+        return text
+    return text.encode("utf-8", "replace").decode("utf-8", "replace")
 
 
 def _format_tool_line(name, args):
@@ -413,14 +474,28 @@ def main(argv=None):
                 return 1
         return 0
 
+    enable_line_editing()
+
     while True:
         # 交互模式：每次读取一条用户输入，交给同一个 agent，
         # 因此 session history 和 working memory 会跨轮延续。
+        # 空行单独 print 而不塞进 prompt：readline 要靠 prompt 算显示宽度，
+        # prompt 里带 \n 会让它的列计数错位，宽字符重绘就跟着花屏。
+        print()
         try:
-            user_input = input("\nmoss> ").strip()
+            user_input = _scrub_undecodable(input("moss> ")).strip()
         except (EOFError, KeyboardInterrupt):
             print("")
             return 0
+        except UnicodeDecodeError:
+            # 没有 readline 兜底的环境（Windows、被裁剪的构建）里，半个 UTF-8
+            # 序列还是可能漏进来。丢掉这一行让用户重输，绝不因为一次误删
+            # 就把整个会话带走。
+            print(
+                "warning: could not decode that input (broken multi-byte sequence); please retype it.",
+                file=sys.stderr,
+            )
+            continue
 
         if not user_input:
             continue

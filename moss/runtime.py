@@ -556,7 +556,9 @@ class Moss:
             return False
         try:
             answer = input(f"approve {name} {approval_summary(self, name, args)}? [y/N] ")
-        except EOFError:
+        except (EOFError, UnicodeDecodeError):
+            # 读不到（或读到半个 UTF-8 序列）一律按"没批准"处理：
+            # 审批是安全护栏，读不清的回答绝不能默认放行。
             return False
         return answer.strip().lower() in {"y", "yes"}
 

@@ -357,6 +357,48 @@ def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):
     assert "commands: Commands:" not in welcome
 
 
+def test_enable_line_editing_leaves_ctype_on_utf8():
+    # 中文输入能不能用，取决于 readline 挂上时 LC_CTYPE 是不是 UTF-8：
+    # locale 停在 C/ASCII 时 readline 会按字节删，一个退格就切断汉字。
+    import locale as locale_mod
+
+    from moss import cli
+
+    saved = locale_mod.setlocale(locale_mod.LC_ALL)
+    try:
+        cli.enable_line_editing()
+        assert cli._ctype_codeset() == "utf8"
+    finally:
+        locale_mod.setlocale(locale_mod.LC_ALL, saved)
+
+
+def test_scrub_undecodable_drops_lone_surrogates_but_keeps_cjk():
+    from moss import cli
+
+    # BSD tty 按字节退格后剩下的半个 UTF-8 序列，会以孤立代理字符形式进来。
+    assert "\udce7" not in cli._scrub_undecodable("你好世\udce7\udc95")
+    assert cli._scrub_undecodable("中文测试 ok") == "中文测试 ok"
+
+
+def test_repl_survives_undecodable_input(tmp_path, capsys):
+    from moss import cli
+
+    broken = UnicodeDecodeError("utf-8", b"\xe7\x95", 0, 2, "unexpected end of data")
+    with patch("builtins.input", side_effect=[broken, "/exit"]):
+        exit_code = cli.main(["--cwd", str(tmp_path), "--provider", "ollama"])
+
+    assert exit_code == 0
+    assert "could not decode" in capsys.readouterr().err
+
+
+def test_approve_treats_undecodable_answer_as_denied(tmp_path):
+    agent = build_agent(tmp_path, [], approval_policy="ask")
+
+    broken = UnicodeDecodeError("utf-8", b"\xe7\x95", 0, 2, "unexpected end of data")
+    with patch("builtins.input", side_effect=broken):
+        assert agent.approve("write_file", {"path": "a.txt", "content": "x"}) is False
+
+
 def test_ollama_client_posts_expected_payload():
     captured = {}
 
