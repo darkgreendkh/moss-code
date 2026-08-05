@@ -5,6 +5,7 @@ Moss 就是包在模型外面的控制循环：负责组 prompt、解析模型�
 """
 
 import os
+import sys
 import threading
 import warnings
 import uuid
@@ -108,6 +109,9 @@ class Moss:
         # 注入扫描。命中后本 run 剩余的 risky 工具强制走审批。
         self.injection_scan = bool(injection_scan)
         self.injection_findings = []
+        # 审批决定的记忆：{(工具, 风险, 路径桶): 是否允许}。刻意只存在内存里，
+        # 会话结束即失效——落盘的"上次批过"会变成永久后门。
+        self._approval_memory = {}
         # 能力/路径策略。read_only 也归它管，这样"只读"不再是散落在多处的特判。
         self.policy = policy if policy is not None else policylib.Policy.build(read_only=read_only)
         # 多维预算的上限（步数之外还有 token / 时间 / 金额）。默认全 None，
@@ -911,15 +915,66 @@ class Moss:
             return False
         return self._ask_for_approval(name, args)
 
-    def _ask_for_approval(self, name, args):
-        prefix = "[injection suspected] " if self.injection_suspected else ""
+    def approval_class(self, name, args):
+        """"本类"的定义：(工具, 风险等级, 路径桶)；shell 额外按 argv[0] 归类。
+
+        粒度太粗（只按工具名）会让"允许一次 git status"变成"允许所有 shell"；
+        太细（按完整参数）则等于没有记忆，用户还是每次都要按 y。
+        """
+        args = args or {}
+        risk = "high"
+        bucket = ""
+        if name == "run_shell":
+            classified = toolkit.classify_shell_command(args.get("command", ""))
+            risk = classified.level
+            bucket = classified.argvs[0][0] if classified.argvs and classified.argvs[0] else ""
+        else:
+            tool = self.tools.get(name) or {}
+            risk = "high" if tool.get("risky") else "low"
+            raw_path = str(args.get("path", "")).strip()
+            if raw_path:
+                # 按顶层目录分桶：改 src/ 和改 tests/ 是两类决定。
+                bucket = raw_path.replace("\\", "/").lstrip("./").split("/", 1)[0]
+        return (name, risk, bucket)
+
+    def _read_approval_answer(self, question):
+        """从 tty 读审批回答。
+
+        为什么不用 input()：一旦有人 `echo task | moss`，stdin 就是管道，
+        input() 会把**任务文本**当成审批回答读走——用户的第一行输入变成了 "y"。
+        所以优先打开 /dev/tty；打不开就降级为拒绝，保持"读不清 = 不批准"。
+        """
         try:
-            answer = input(f"{prefix}approve {name} {approval_summary(self, name, args)}? [y/N] ")
+            with open("/dev/tty", "r+", encoding="utf-8") as tty:
+                tty.write(question)
+                tty.flush()
+                return (tty.readline() or "").strip().lower()
+        except (OSError, UnicodeDecodeError):
+            pass
+        # Windows 没有 /dev/tty：退回 input()，但先确认 stdin 真的是终端。
+        if not sys.stdin or not sys.stdin.isatty():
+            return ""
+        try:
+            return input(question).strip().lower()
         except (EOFError, UnicodeDecodeError):
-            # 读不到（或读到半个 UTF-8 序列）一律按"没批准"处理：
-            # 审批是安全护栏，读不清的回答绝不能默认放行。
+            return ""
+
+    def _ask_for_approval(self, name, args):
+        approval_class = self.approval_class(name, args)
+        remembered = self._approval_memory.get(approval_class)
+        if remembered is not None:
+            return remembered
+        prefix = "[injection suspected] " if self.injection_suspected else ""
+        question = f"{prefix}approve {name} {approval_summary(self, name, args)}? [y/N/a=always/d=never] "
+        answer = self._read_approval_answer(question)
+        if answer in {"a", "always"}:
+            # 只记在内存里：落盘的"上次批过"会变成永久后门。
+            self._approval_memory[approval_class] = True
+            return True
+        if answer in {"d", "never"}:
+            self._approval_memory[approval_class] = False
             return False
-        return answer.strip().lower() in {"y", "yes"}
+        return answer in {"y", "yes"}
 
     def reset(self):
         self.session["history"] = []
