@@ -515,18 +515,24 @@ class ContextManager:
         lines = []
         for item in history:
             if item["role"] == "tool":
-                lines.append(f"[tool:{item['name']}] {json.dumps(item['args'], sort_keys=True)}")
+                lines.append(
+                    f'<tool_result untrusted="true" source="{item["name"]}" args={json.dumps(item["args"], sort_keys=True)}>'
+                )
                 lines.append(str(item["content"]))
+                lines.append("</tool_result>")
             else:
                 lines.append(f"[{item['role']}] {item['content']}")
         return "\n".join(["Transcript:", *lines])
 
     def _render_history_item(self, item, line_limit):
         if item["role"] == "tool":
-            prefix = f"[tool:{item['name']}] {json.dumps(item['args'], sort_keys=True)}"
+            # 工具结果带上不可信标记：它是**数据**，不是指令。
+            # prefix 里有一条对应规则说明这一点，两者缺一都不成立
+            # （光标注没规则模型不会当回事，光有规则则标不出边界在哪）。
+            prefix = f'<tool_result untrusted="true" source="{item["name"]}" args={json.dumps(item["args"], sort_keys=True)}>'
             keep = _HISTORY_KEEP.get(item["name"], "head")
             content = self._clip(item["content"], max(20, line_limit), keep=keep)
-            return [prefix, content]
+            return [prefix, content, "</tool_result>"]
         return [f"[{item['role']}] {self._clip(item['content'], line_limit, keep='head')}"]
 
     def _assemble_prompt(self, rendered):

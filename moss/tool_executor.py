@@ -5,6 +5,7 @@ import json
 import re
 from dataclasses import dataclass
 
+from .injection import scan as scan_for_injection
 from .token_budget import clip
 from .tools import ToolRunOutput, classify_shell_command
 from .workspace import invalidate_git_facts_cache
@@ -86,6 +87,14 @@ def _shell_risk_metadata(name, args):
         "risk_level": _SHELL_RISK_LEVELS.get(risk_class, "medium"),
         "read_only": False,
     }
+
+
+def _scan_result_for_injection(agent, name, args, content):
+    """扫工具输出里的注入痕迹。工具输出是数据，里面的"指令"不该被执行。"""
+    if not getattr(agent, "injection_scan", True):
+        return None
+    source = f"{name}:{str((args or {}).get('path', '') or (args or {}).get('command', ''))[:60]}"
+    return scan_for_injection(content, source=source)
 
 
 def _denied_shell_reason(name, args):
@@ -309,6 +318,19 @@ class ToolExecutor:
                 elif exit_code != 0:
                     tool_status = "error"
                     tool_error_code = "tool_failed"
+            finding = _scan_result_for_injection(agent, name, args, content)
+            if finding is not None:
+                # 只收紧策略，不拒绝执行：误报是必然的（正常代码里就有
+                # "ignore previous" 这样的字符串），把误报变成"任务直接失败"
+                # 比漏报还难受。所以后果是"接下来的 risky 工具一律走审批"。
+                agent.flag_injection_suspected(finding)
+                extra_metadata.update(
+                    {
+                        "security_event_type": "prompt_injection_suspected",
+                        "injection_pattern": finding.pattern,
+                        "injection_excerpt": agent.redact_text(finding.excerpt),
+                    }
+                )
             if not defer_side_effects:
                 agent.update_memory_after_tool(name, args, content)
             if tool_status in {"ok", "partial_success"} and name in _FILE_TOOLS:

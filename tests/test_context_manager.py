@@ -196,7 +196,7 @@ def test_context_manager_collapses_older_duplicate_reads_into_one_summary_line(t
     prompt, metadata = ContextManager(agent).build("check the file")
     transcript = prompt.split("\n\nTranscript:\n", 1)[1].split("\n\nCurrent user request:", 1)[0]
 
-    assert transcript.count("[tool:read_file]") == 0
+    assert transcript.count('source="read_file"') == 0
     assert "sample.txt -> alpha | beta" in transcript
     assert metadata["history"]["older_entries_count"] == 1
     assert metadata["history"]["collapsed_duplicate_reads"] == 1

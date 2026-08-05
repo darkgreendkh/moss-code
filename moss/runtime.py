@@ -83,6 +83,7 @@ class Moss:
         parallel_tools=False,
         run_budget_limits=None,
         verify_before_final=True,
+        injection_scan=True,
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -102,6 +103,9 @@ class Moss:
         self.parallel_tools = bool(parallel_tools)
         # 收尾前自检：改了文件却没跑过验证时，拦一次并提示先验证。
         self.verify_before_final = bool(verify_before_final)
+        # 注入扫描。命中后本 run 剩余的 risky 工具强制走审批。
+        self.injection_scan = bool(injection_scan)
+        self.injection_findings = []
         # 多维预算的上限（步数之外还有 token / 时间 / 金额）。默认全 None，
         # 行为与加预算前完全一致。
         self.run_budget_limits = dict(run_budget_limits or {})
@@ -878,15 +882,35 @@ class Moss:
 
         return deprecated_runner
 
+    def flag_injection_suspected(self, finding):
+        """记下一次注入嫌疑，并让本 run 剩余的 risky 工具强制走审批。
+
+        为什么是"强制审批"而不是"拒绝"：检测必然有误报，拒绝会把正常任务
+        直接打断；而强制审批只是把决定权交回给人，代价是一次确认。
+        """
+        self.injection_findings.append(finding)
+        return finding
+
+    @property
+    def injection_suspected(self):
+        return bool(self.injection_findings)
+
     def approve(self, name, args):
         if self.read_only:
             return False
+        if self.approval_policy == "auto" and self.injection_suspected:
+            # 本 run 里出现过注入嫌疑：即使 --approval auto 也要问一次。
+            return self._ask_for_approval(name, args)
         if self.approval_policy == "auto":
             return True
         if self.approval_policy == "never":
             return False
+        return self._ask_for_approval(name, args)
+
+    def _ask_for_approval(self, name, args):
+        prefix = "[injection suspected] " if self.injection_suspected else ""
         try:
-            answer = input(f"approve {name} {approval_summary(self, name, args)}? [y/N] ")
+            answer = input(f"{prefix}approve {name} {approval_summary(self, name, args)}? [y/N] ")
         except (EOFError, UnicodeDecodeError):
             # 读不到（或读到半个 UTF-8 序列）一律按"没批准"处理：
             # 审批是安全护栏，读不清的回答绝不能默认放行。

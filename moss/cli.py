@@ -411,6 +411,7 @@ def build_agent(args):
             parallel_tools=getattr(args, "parallel_tools", "off") == "on",
             run_budget_limits=run_budget_limits,
             verify_before_final=getattr(args, "verify_before_final", "on") == "on",
+            injection_scan=getattr(args, "injection_scan", "on") == "on",
         )
     return Moss(
         model_client=model,
@@ -423,6 +424,7 @@ def build_agent(args):
         parallel_tools=getattr(args, "parallel_tools", "off") == "on",
         run_budget_limits=run_budget_limits,
         verify_before_final=getattr(args, "verify_before_final", "on") == "on",
+        injection_scan=getattr(args, "injection_scan", "on") == "on",
     )
 
 
@@ -458,6 +460,12 @@ def build_arg_parser():
         help="Extra environment variable names to treat as secrets for trace/report redaction.",
     )
     parser.add_argument("--max-steps", type=int, default=25, help="Maximum tool/model iterations per request.")
+    parser.add_argument(
+        "--injection-scan",
+        choices=("on", "off"),
+        default="on",
+        help="Scan tool output for prompt-injection attempts; a hit forces approval for the rest of the run.",
+    )
     parser.add_argument(
         "--verify-before-final",
         choices=("on", "off"),
