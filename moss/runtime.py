@@ -780,6 +780,7 @@ class Moss:
         return memorylib.record_process_note_for_tool(self, name, metadata)
 
     def promote_durable_memory(self, user_message, final_answer):
+        self.memory.mark_used(final_answer)
         promotions, rejections = memorylib.extract_durable_promotions(
             user_message, final_answer, redact_text=self.redact_text
         )

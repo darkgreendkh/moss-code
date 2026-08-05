@@ -15,13 +15,13 @@ from ..clock import now
 from .. import security as securitylib
 from .. import injection as injectionlib
 from ..security import REDACTED_VALUE
-from ..token_budget import clip
+from ..token_budget import clip, estimate_tokens
 from ..retrieval import BM25Index
 from .memory_store import MemoryStore, project_scope_key
 from .memory_records import make_record
 
 WORKING_FILE_LIMIT = 8
-EPISODIC_NOTE_LIMIT = 12
+DEFAULT_EPISODIC_TOKEN_BUDGET = 1000
 FILE_SUMMARY_LIMIT = 6
 
 DURABLE_TOPIC_DEFAULTS = {
@@ -396,6 +396,8 @@ def _normalize_note(note, index):
             "line_range": [],
             "freshness": "",
             "trust": "model",
+            "hit_count": 0,
+            "used_count": 0,
         }
 
     if not isinstance(note, dict):
@@ -411,6 +413,8 @@ def _normalize_note(note, index):
             "line_range": [],
             "freshness": "",
             "trust": "model",
+            "hit_count": 0,
+            "used_count": 0,
         }
 
     text = clip(str(note.get("text", "")).strip(), 500)
@@ -423,6 +427,8 @@ def _normalize_note(note, index):
     line_range = [int(item) for item in _ensure_list(note.get("line_range", [])) if str(item).strip()]
     freshness = str(note.get("freshness", "")).strip()
     trust = str(note.get("trust", "model")).strip() or "model"
+    hit_count = max(0, int(note.get("hit_count", 0)))
+    used_count = max(0, int(note.get("used_count", 0)))
     if trust not in {"user", "model", "tool"}:
         trust = "model"
     return {
@@ -436,6 +442,8 @@ def _normalize_note(note, index):
         "line_range": line_range,
         "freshness": freshness,
         "trust": trust,
+        "hit_count": hit_count,
+        "used_count": used_count,
     }
 
 
@@ -490,7 +498,6 @@ def normalize_memory_state(state, workspace_root=None):
                 continue
             normalized_notes.append(_normalize_note(note, index))
         episodic_notes = normalized_notes
-    episodic_notes = episodic_notes[-EPISODIC_NOTE_LIMIT:]
     state["episodic_notes"] = episodic_notes
 
     file_summaries = state.get("file_summaries")
@@ -586,12 +593,14 @@ def append_note(
         "line_range": [int(item) for item in _ensure_list(line_range) if str(item).strip()],
         "freshness": str(freshness).strip(),
         "trust": str(trust).strip() if str(trust).strip() in {"user", "model", "tool"} else "model",
+        "hit_count": 0,
+        "used_count": 0,
     }
     state["next_note_index"] = note["note_index"] + 1
 
     notes = [item for item in state["episodic_notes"] if item["text"] != note["text"]]
     notes.append(note)
-    state["episodic_notes"] = notes[-EPISODIC_NOTE_LIMIT:]
+    state["episodic_notes"] = notes
     state["notes"] = [item["text"] for item in state["episodic_notes"]]
     return state
 
@@ -681,6 +690,23 @@ def _trust_weight(trust):
     return {"user": 1.2, "model": 1.0, "tool": 0.8}.get(str(trust), 1.0)
 
 
+def episodic_note_tokens(note):
+    return estimate_tokens(_render_note(note))
+
+
+def episodic_note_value(note, current_time=None):
+    current_time = _parse_timestamp(current_time or now())
+    observed = _parse_timestamp(note.get("created_at"))
+    age_days = max(0.0, current_time - observed) / 86400.0 if observed else 3650.0
+    recency_score = pow(2.718281828459045, -age_days / 7.0)
+    return (
+        float(note.get("hit_count", 0))
+        + 2.0 * float(note.get("used_count", 0))
+        + 1.5 * recency_score
+        + _trust_weight(note.get("trust", "model"))
+    )
+
+
 def _render_note(note):
     trust = str(note.get("trust", "model")).strip() or "model"
     source = str(note.get("source", "")).strip() or "unknown"
@@ -690,7 +716,9 @@ def _render_note(note):
     return f"[trust={trust}{source_label}] {note.get('text', '')}{review_label}"
 
 
-def _retrieval_candidates_with_explain(state, query, limit=3, workspace_root=None):
+def _retrieval_candidates_with_explain(
+    state, query, limit=3, workspace_root=None, *, include_cold=False
+):
     state = normalize_memory_state(state, workspace_root)
     index = BM25Index(tokenize=_tokenize, decay_days=_memory_decay_days())
     candidates = {}
@@ -728,6 +756,22 @@ def _retrieval_candidates_with_explain(state, query, limit=3, workspace_root=Non
 
     if workspace_root is not None:
         durable_store = DurableMemoryStore(Path(workspace_root) / ".moss" / "memory")
+        if include_cold and durable_store.v2:
+            for position, raw_note in enumerate(durable_store.store.load_cold_notes()):
+                note = _normalize_note(raw_note, int(raw_note.get("note_index", position)))
+                note["kind"] = "cold_episodic"
+                doc_id = f"cold:{position}:{note['note_index']}"
+                candidates[doc_id] = note
+                index.add(
+                    doc_id,
+                    {
+                        "tag": note.get("tags", []),
+                        "path": note.get("source", ""),
+                        "text": note.get("text", ""),
+                    },
+                    weight=_trust_weight(note.get("trust", "model")),
+                    ts=_parse_timestamp(note.get("created_at")) or None,
+                )
         for position, note in enumerate(durable_store.all_notes()):
             doc_id = f"durable:{position}:{note.get('source', '')}"
             candidates[doc_id] = note
@@ -813,12 +857,22 @@ def is_effectively_empty(state, workspace_root=None):
 
 
 class LayeredMemory:
-    def __init__(self, state=None, workspace_root=None, *, session_id="", event_callback=None):
+    def __init__(
+        self,
+        state=None,
+        workspace_root=None,
+        *,
+        session_id="",
+        event_callback=None,
+        episodic_token_budget=DEFAULT_EPISODIC_TOKEN_BUDGET,
+    ):
         self.workspace_root = workspace_root
         self.session_id = str(session_id or "session")
         self.event_callback = event_callback
-        self.state = normalize_memory_state(state, workspace_root)
         self.durable_store = DurableMemoryStore(Path(workspace_root) / ".moss" / "memory") if workspace_root is not None else None
+        self.episodic_token_budget = max(1, int(episodic_token_budget))
+        self.state = normalize_memory_state(state, workspace_root)
+        self._evict_episodic_if_needed()
         self.last_retrieval_explain = []
 
     def to_dict(self):
@@ -866,7 +920,24 @@ class LayeredMemory:
             freshness=freshness,
             trust=trust,
         )
+        self._evict_episodic_if_needed()
         return self
+
+    def _evict_episodic_if_needed(self):
+        notes = self.state.get("episodic_notes", [])
+        evicted = []
+        while notes and sum(episodic_note_tokens(note) for note in notes) > self.episodic_token_budget:
+            victim = min(
+                notes,
+                key=lambda note: (episodic_note_value(note), int(note.get("note_index", 0))),
+            )
+            notes.remove(victim)
+            evicted.append(victim)
+        self.state["episodic_notes"] = notes
+        self.state["notes"] = [note["text"] for note in notes]
+        if evicted and self.durable_store is not None and self.durable_store.v2:
+            self.durable_store.store.append_cold_notes(self.session_id, evicted)
+        return evicted
 
     def set_file_summary(self, path, summary):
         self.state = set_file_summary(self.state, path, summary, self.workspace_root)
@@ -884,6 +955,14 @@ class LayeredMemory:
         candidates, self.last_retrieval_explain = _retrieval_candidates_with_explain(
             self.state, query, limit=limit, workspace_root=self.workspace_root
         )
+        selected_indexes = {
+            int(note.get("note_index", -1))
+            for note in candidates
+            if note.get("kind", "episodic") == "episodic"
+        }
+        for note in self.state["episodic_notes"]:
+            if int(note.get("note_index", -1)) in selected_indexes:
+                note["hit_count"] = int(note.get("hit_count", 0)) + 1
         return candidates
 
     def retrieval_view(self, query, limit=3):
@@ -1030,7 +1109,13 @@ class LayeredMemory:
         return record, ""
 
     def search(self, query, limit=5):
-        matches = self.retrieval_candidates(str(query), limit=max(1, int(limit)))
+        matches, self.last_retrieval_explain = _retrieval_candidates_with_explain(
+            self.state,
+            str(query),
+            limit=max(1, int(limit)),
+            workspace_root=self.workspace_root,
+            include_cold=True,
+        )
         return [
             {
                 "id": note.get("id", ""),
@@ -1042,6 +1127,17 @@ class LayeredMemory:
             }
             for note in matches
         ]
+
+    def mark_used(self, final_answer):
+        answer_tokens = _tokenize(final_answer)
+        changed = 0
+        for note in self.state["episodic_notes"]:
+            note_tokens = _tokenize(note.get("text", ""))
+            required = min(3, len(note_tokens))
+            if required and len(answer_tokens & note_tokens) >= required:
+                note["used_count"] = int(note.get("used_count", 0)) + 1
+                changed += 1
+        return changed
 
     def promote_durable(self, promotions, *, source_refs=(), trust="user"):
         if self.durable_store is None:

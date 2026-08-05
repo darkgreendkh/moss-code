@@ -290,6 +290,39 @@ class MemoryStore:
             self.append_many(stale)
         return stale
 
+    def cold_path(self, session_id):
+        safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(session_id or "session")).strip(".-")
+        return self.episodic_dir / f"{safe_id or 'session'}.jsonl"
+
+    def append_cold_notes(self, session_id, notes):
+        notes = [dict(note) for note in notes]
+        if not notes:
+            return []
+        path = self.cold_path(session_id)
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        payload = existing + "".join(
+            json.dumps(note, ensure_ascii=False, sort_keys=True) + "\n" for note in notes
+        )
+        _atomic_write(path, payload)
+        return notes
+
+    def load_cold_notes(self, session_id=None):
+        paths = [self.cold_path(session_id)] if session_id is not None else sorted(self.episodic_dir.glob("*.jsonl")) if self.episodic_dir.exists() else []
+        notes = []
+        for path in paths:
+            if not path.exists():
+                continue
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    note = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(note, dict) and str(note.get("text", "")).strip():
+                    notes.append(note)
+        return notes
+
     def get(self, record_id):
         return next((record for record in self.all_records() if record.id == str(record_id)), None)
 
