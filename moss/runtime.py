@@ -91,6 +91,7 @@ class Moss:
         policy=None,
         sandbox="auto",
         allowed_network_hosts=None,
+        tool_protocol="auto",
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -116,6 +117,9 @@ class Moss:
         # L1 沙箱：网络类命令即使 --approval auto 也要问一次；
         # 给了白名单就只放行名单内的域名。
         self.allowed_network_hosts = tuple(allowed_network_hosts or ())
+        if tool_protocol not in {"auto", "native", "text"}:
+            raise ValueError("tool_protocol must be auto, native, or text")
+        self.tool_protocol = tool_protocol
         self.sandbox_plan = sandboxlib.announce(sandboxlib.detect(sandbox))
         # 审批决定的记忆：{(工具, 风险, 路径桶): 是否允许}。刻意只存在内存里，
         # 会话结束即失效——落盘的"上次批过"会变成永久后门。
@@ -257,6 +261,16 @@ class Moss:
             return None
         return toolkit.native_tool_definitions(self.tools, native_tool_format)
 
+    def resolved_tool_protocol(self):
+        if self.tool_protocol != "auto":
+            return self.tool_protocol
+        capabilities = getattr(self.model_client, "capabilities", None)
+        supports_native = bool(
+            (capabilities.supports_native_tools if capabilities is not None else False)
+            or getattr(self.model_client, "supports_native_tools", False)
+        )
+        return "native" if supports_native else "text"
+
     def recover_interrupted_runs(self):
         # 启动恢复只属于顶层 agent。delegate 子 agent 与父 agent 共用同一个
         # run_store，且是在父 agent 运行途中（父 run 的 task_state 正处于
@@ -297,7 +311,12 @@ class Moss:
         return tool_signature(self.tools)
 
     def build_prefix(self):
-        return build_prompt_prefix(workspace=self.workspace, tools=self.tools, skills=self.skills)
+        return build_prompt_prefix(
+            workspace=self.workspace,
+            tools=self.tools,
+            skills=self.skills,
+            protocol=self.resolved_tool_protocol(),
+        )
 
     def _apply_prefix_state(self, prefix_state):
         self.prefix_state = prefix_state

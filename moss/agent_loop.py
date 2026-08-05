@@ -180,10 +180,9 @@ class AgentLoop:
             prompt_cache_key = None
             prompt_cache_retention = None
             capabilities = getattr(agent.model_client, "capabilities", None)
-            supports_cache = (
-                capabilities.supports_cache
-                if capabilities is not None
-                else getattr(agent.model_client, "supports_prompt_cache", False)
+            supports_cache = bool(
+                (capabilities.supports_cache if capabilities is not None else False)
+                or getattr(agent.model_client, "supports_prompt_cache", False)
             )
             if agent.feature_enabled("prompt_cache") and supports_cache:
                 # 只有后端明确支持时，才把稳定前缀的 hash 作为 cache key 发出去。
@@ -248,7 +247,9 @@ class AgentLoop:
             if soft:
                 agent.emit_trace(task_state, trace_events.BUDGET_SOFT_EXCEEDED, {"dimension": soft})
                 agent.record({"role": "system", "content": budget.soft_notice(soft), "created_at": now()})
-            actions, dropped = truncate_after_final(parse_model_actions(raw))
+            actions, dropped = truncate_after_final(
+                parse_model_actions(raw, protocol=model_request.protocol)
+            )
             kind = actions[0].kind if actions else "retry"
             agent.emit_trace(
                 task_state,
@@ -270,6 +271,19 @@ class AgentLoop:
 
             tool_actions = [action for action in actions if action.kind == "tool"]
             if tool_actions:
+                if model_request.protocol == "native":
+                    for action in tool_actions:
+                        agent.record(
+                            {
+                                "role": "assistant",
+                                "name": action.name,
+                                "args": action.args,
+                                "call_id": action.call_id,
+                                "native_tool_call": True,
+                                "content": "",
+                                "created_at": now(),
+                            }
+                        )
                 tool_steps += self._execute_tool_batch(task_state, user_message, tool_actions, tool_steps)
 
             final_action = next((action for action in actions if action.kind == "final"), None)
@@ -300,7 +314,7 @@ class AgentLoop:
                 agent.write_task_state(task_state)
                 continue
 
-            final = (final_action.text or raw).strip()
+            final = (final_action.text or (raw if isinstance(raw, str) else "")).strip()
             agent.record({"role": "assistant", "content": final, "created_at": now()})
             task_state.finish_success(final)
             agent.promote_durable_memory(user_message, final)

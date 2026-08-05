@@ -34,23 +34,128 @@ def _openai_structured_input(model_request):
             }
         )
     for message in model_request.messages:
-        text = _message_text(message)
-        if not text:
-            continue
+        if model_request.protocol == "native" and message.blocks:
+            block = message.blocks[0]
+            if block.kind == "tool_call" and message.call_id:
+                items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": message.call_id,
+                        "name": block.source,
+                        "arguments": block.text,
+                    }
+                )
+                continue
+            if block.kind == "tool_result" and message.call_id:
+                items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": message.call_id,
+                        "output": block.text,
+                    }
+                )
+                continue
         role = message.role if message.role in {"user", "assistant"} else "user"
-        items.append({"role": role, "content": [{"type": "input_text", "text": text}]})
+        content = [
+            {"type": "input_text", "text": block.text}
+            for block in message.blocks
+            if block.text
+        ]
+        if content:
+            items.append({"role": role, "content": content})
     return items
 
 
 def _anthropic_structured_messages(model_request):
     messages = []
     for message in model_request.messages:
-        text = _message_text(message)
-        if not text:
-            continue
+        if model_request.protocol == "native" and message.blocks:
+            block = message.blocks[0]
+            if block.kind == "tool_call" and message.call_id:
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": message.call_id,
+                                "name": block.source,
+                                "input": _parse_native_tool_args(block.text),
+                            }
+                        ],
+                    }
+                )
+                continue
+            if block.kind == "tool_result" and message.call_id:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": message.call_id,
+                                "content": block.text,
+                            }
+                        ],
+                    }
+                )
+                continue
         role = "assistant" if message.role == "assistant" else "user"
-        messages.append({"role": role, "content": [{"type": "text", "text": text}]})
+        content = [
+            {"type": "text", "text": block.text}
+            for block in message.blocks
+            if block.text
+        ]
+        if content:
+            messages.append({"role": role, "content": content})
     return messages
+
+
+def _extract_openai_native_actions(data):
+    calls = []
+    for item in data.get("output", []):
+        if not isinstance(item, dict) or item.get("type") not in {"function_call", "tool_call"}:
+            continue
+        function = item.get("function", {}) if isinstance(item.get("function"), dict) else {}
+        name = item.get("name") or function.get("name")
+        arguments = item.get("arguments") if item.get("arguments") is not None else function.get("arguments")
+        if name:
+            calls.append(
+                {
+                    "type": "tool",
+                    "name": str(name),
+                    "args": _parse_native_tool_args(arguments),
+                    "call_id": str(item.get("call_id") or item.get("id") or ""),
+                }
+            )
+    if calls:
+        return calls
+    text = _extract_openai_text(data)
+    return [{"type": "final", "text": text}] if text else []
+
+
+def _extract_anthropic_native_actions(data):
+    calls = [
+        {
+            "type": "tool",
+            "name": str(item.get("name", "")),
+            "args": _parse_native_tool_args(item.get("input", {})),
+            "call_id": str(item.get("id", "") or ""),
+        }
+        for item in data.get("content", [])
+        if isinstance(item, dict) and item.get("type") == "tool_use" and item.get("name")
+    ]
+    if calls:
+        return calls
+    text = next(
+        (
+            str(item.get("text"))
+            for item in data.get("content", [])
+            if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
+        ),
+        "",
+    )
+    return [{"type": "final", "text": text}] if text else []
 
 
 class FakeModelClient:
@@ -478,6 +583,8 @@ class OpenAICompatibleModelClient:
                     **parse_openai_usage(response_data),
                 }
             if text:
+                if _model_request is not None and _model_request.protocol == "native":
+                    return _extract_openai_native_actions(response_data or {"output_text": text})
                 return text
             raise RuntimeError("OpenAI-compatible error: could not extract text from event stream response")
 
@@ -495,6 +602,8 @@ class OpenAICompatibleModelClient:
             "prompt_cache_retention": prompt_cache_retention,
             **parse_openai_usage(data),
         }
+        if _model_request is not None and _model_request.protocol == "native":
+            return _extract_openai_native_actions(data)
         return _extract_openai_text(data)
 
     def complete_request(self, request):
@@ -637,6 +746,11 @@ class AnthropicCompatibleModelClient:
             "prompt_cache_supported": self.supports_prompt_cache,
             **parse_anthropic_usage(data),
         }
+        if _model_request is not None and _model_request.protocol == "native":
+            native_actions = _extract_anthropic_native_actions(data)
+            if native_actions:
+                return native_actions
+            raise RuntimeError("Anthropic-compatible error: could not extract native output from response")
         text = _extract_anthropic_text(data)
         if text:
             return text

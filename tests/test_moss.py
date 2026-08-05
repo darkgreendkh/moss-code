@@ -941,7 +941,7 @@ def test_agent_passes_native_tool_schema_to_capable_provider(tmp_path):
             return super().complete(prompt, max_new_tokens, **kwargs)
 
     agent = Moss(
-        model_client=NativeToolFakeClient(["<final>Done.</final>"]),
+        model_client=NativeToolFakeClient([[{"type": "final", "text": "Done."}]]),
         workspace=build_workspace(tmp_path),
         session_store=SessionStore(tmp_path / ".moss" / "sessions"),
         approval_policy="auto",

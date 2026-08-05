@@ -407,6 +407,7 @@ def build_agent(args):
     feature_flags = {
         "prompt_cache": not bool(getattr(args, "no_prompt_cache", False)),
     }
+    tool_protocol = getattr(args, "tool_protocol", "auto")
     load_project_env(workspace.repo_root)
     configured_secret_names = _configured_secret_names(args)
     store = SessionStore(workspace.repo_root + "/.moss/sessions")
@@ -432,6 +433,7 @@ def build_agent(args):
             sandbox=getattr(args, "sandbox", "auto"),
             allowed_network_hosts=allowed_network_hosts,
             feature_flags=feature_flags,
+            tool_protocol=tool_protocol,
         )
     return Moss(
         model_client=model,
@@ -449,6 +451,7 @@ def build_agent(args):
         sandbox=getattr(args, "sandbox", "auto"),
         allowed_network_hosts=allowed_network_hosts,
         feature_flags=feature_flags,
+        tool_protocol=tool_protocol,
     )
 
 
@@ -534,6 +537,12 @@ def build_arg_parser():
         "--no-prompt-cache",
         action="store_true",
         help="Disable provider prompt-cache fields for this process.",
+    )
+    parser.add_argument(
+        "--tool-protocol",
+        choices=("auto", "native", "text"),
+        default="auto",
+        help="Choose provider-native tools automatically or force native/text protocol.",
     )
     parser.add_argument("--max-new-tokens", type=int, default=4096, help="Maximum model output tokens per step.")
     # 多维预算。默认全 None：不设就完全按老行为跑，只有 --max-steps 生效。

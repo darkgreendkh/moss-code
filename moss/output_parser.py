@@ -45,6 +45,8 @@ def parse_model_actions(raw, *, protocol="text"):
     单动作时**逐字节退化成 parse_model_output 的结果**：这条兼容约束是硬的，
     现有解析测试一行不改就必须通过，所以这里直接委托过去，而不是另写一套。
     """
+    if protocol == "native":
+        return _parse_native_actions(raw)
     raw = str(raw)
     matches = list(_BLOCK_RE.finditer(raw))
     if len(matches) <= 1:
@@ -68,6 +70,39 @@ def parse_model_actions(raw, *, protocol="text"):
             continue
         actions.append(_tool_action(match, index))
     return actions
+
+
+def _parse_native_actions(raw):
+    items = raw if isinstance(raw, (list, tuple)) else [raw]
+    actions = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            return [Action(kind="retry", text=retry_notice("provider returned malformed native output"))]
+        kind = str(item.get("type", ""))
+        if kind == "tool":
+            name = str(item.get("name", "")).strip()
+            args = item.get("args", {})
+            if not name or not isinstance(args, dict):
+                return [Action(kind="retry", text=retry_notice("provider returned malformed native tool call"))]
+            actions.append(
+                Action(
+                    kind="tool",
+                    index=index,
+                    name=name,
+                    args=args,
+                    call_id=str(item.get("call_id", "") or ""),
+                )
+            )
+        elif kind == "final":
+            text = str(item.get("text", "")).strip()
+            actions.append(
+                Action(kind="final", index=index, text=text)
+                if text
+                else Action(kind="retry", index=index, text=retry_notice("provider returned empty native text"))
+            )
+        else:
+            actions.append(Action(kind="retry", index=index, text=retry_notice("unknown native output block")))
+    return actions or [Action(kind="retry", text=retry_notice("provider returned empty native output"))]
 
 
 def _single_action(kind, payload):

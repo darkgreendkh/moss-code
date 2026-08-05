@@ -238,8 +238,9 @@ class ContextManager:
         rendered = self._last_rendered
         rendered_prefix = rendered["prefix"].rendered
         stable_text, workspace_text = self._split_rendered_prefix(rendered_prefix)
+        protocol = self.agent.resolved_tool_protocol()
         native_tools = None
-        if getattr(self.agent.model_client, "supports_native_tools", False):
+        if protocol == "native":
             native_tools = self.agent.native_tool_definitions()
         system = (
             Block(stable_text, kind="rules", trust="platform", cache=True),
@@ -252,14 +253,17 @@ class ContextManager:
                     blocks=(Block(workspace_text, kind="workspace", source="workspace", trust="tool"),),
                 )
             )
-        history_text = rendered["history"].rendered
-        history_trust = "tool" if "<tool_result" in history_text else "model"
-        messages.append(
-            Message(
-                role="tool" if history_trust == "tool" else "assistant",
-                blocks=(Block(history_text, kind="history", source="session", trust=history_trust),),
+        if protocol == "native":
+            messages.extend(self._native_history_messages())
+        else:
+            history_text = rendered["history"].rendered
+            history_trust = "tool" if "<tool_result" in history_text else "model"
+            messages.append(
+                Message(
+                    role="tool" if history_trust == "tool" else "assistant",
+                    blocks=(Block(history_text, kind="history", source="session", trust=history_trust),),
+                )
             )
-        )
         messages.append(
             Message(
                 role="user",
@@ -285,9 +289,62 @@ class ContextManager:
             tools=tuple(native_tools or ()),
             max_new_tokens=int(getattr(self.agent, "max_new_tokens", 4096)),
             cache_key=getattr(getattr(self.agent, "prefix_state", None), "stable_hash", None),
-            protocol="text",
+            protocol=protocol,
         )
         return PromptBundle(request=request, text=request.flatten(), metadata=metadata)
+
+    def _native_history_messages(self):
+        messages = []
+        for item in self._history_entries():
+            role = str(item.get("role", "user"))
+            call_id = str(item.get("call_id", "") or "") or None
+            if item.get("native_tool_call") and call_id:
+                messages.append(
+                    Message(
+                        role="assistant",
+                        blocks=(
+                            Block(
+                                json.dumps(item.get("args", {}), separators=(",", ":"), sort_keys=True),
+                                kind="tool_call",
+                                source=str(item.get("name", "")),
+                                trust="model",
+                            ),
+                        ),
+                        call_id=call_id,
+                    )
+                )
+            elif role == "tool" and call_id:
+                messages.append(
+                    Message(
+                        role="tool",
+                        blocks=(
+                            Block(
+                                self._clip(str(item.get("content", "")), 900, keep="head"),
+                                kind="tool_result",
+                                source=str(item.get("name", "")),
+                                trust="tool",
+                            ),
+                        ),
+                        call_id=call_id,
+                    )
+                )
+            else:
+                safe_role = role if role in {"user", "assistant"} else "user"
+                trust = "user" if safe_role == "user" else "model"
+                messages.append(
+                    Message(
+                        role=safe_role,
+                        blocks=(
+                            Block(
+                                self._clip(str(item.get("content", "")), 900, keep="head"),
+                                kind="history",
+                                source="session",
+                                trust=trust,
+                            ),
+                        ),
+                    )
+                )
+        return messages
 
     def _split_rendered_prefix(self, rendered_prefix):
         stable_text = str(getattr(getattr(self.agent, "prefix_state", None), "stable_text", ""))
