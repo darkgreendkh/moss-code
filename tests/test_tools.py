@@ -116,10 +116,11 @@ def test_validate_tool_uses_schema_for_required_fields_and_ranges(tmp_path):
 
 
 def test_classify_shell_command_distinguishes_risk_classes():
-    assert classify_shell_command("python -m pytest tests -q") == "test"
-    assert classify_shell_command("git diff --stat") == "read_only"
-    assert classify_shell_command("git push origin main") == "destructive_or_network"
-    assert classify_shell_command("python scripts/build.py") == "general"
+    assert classify_shell_command("python -m pytest tests -q").level == "test"
+    assert classify_shell_command("git diff --stat").level == "read_only"
+    # spec-03 起网络类单独成档，写操作单独成档。
+    assert classify_shell_command("git push origin main").level == "network"
+    assert classify_shell_command("python scripts/build.py").level == "write"
 
 
 def test_native_tool_definitions_are_generated_from_executable_schema(tmp_path):

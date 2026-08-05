@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 from functools import partial
 
+from . import shell_policy
 from .workspace import IGNORED_PATH_NAMES
 
 
@@ -63,67 +64,13 @@ def write_text_atomic(path, content):
 
 
 def classify_shell_command(command):
-    lowered = str(command or "").strip().lower()
-    if not lowered:
-        return "general"
+    """shell 风险分级。实现下沉到 moss/shell_policy.py。
 
-    destructive_or_network_markers = (
-        "git push",
-        "curl ",
-        "curl.",
-        "wget ",
-        "wget.",
-        "npm publish",
-        "twine upload",
-        "pip install",
-        "uv pip install",
-        "rm ",
-        "rm -",
-        "del ",
-        "erase ",
-        "rmdir ",
-        "remove-item",
-        "move-item",
-        "mv ",
-        "git reset",
-        "git checkout --",
-        "git clean",
-    )
-    if any(marker in lowered for marker in destructive_or_network_markers):
-        return "destructive_or_network"
-
-    test_markers = (
-        "pytest",
-        "python -m unittest",
-        "ruff",
-        "mypy",
-        "npm test",
-        "pnpm test",
-        "yarn test",
-        "cargo test",
-        "go test",
-    )
-    if any(marker in lowered for marker in test_markers):
-        return "test"
-
-    read_only_markers = (
-        "git status",
-        "git diff",
-        "git show",
-        "git log",
-        "ls",
-        "dir",
-        "pwd",
-        "type ",
-        "cat ",
-        "get-content",
-        "select-string",
-        "findstr",
-    )
-    if any(lowered == marker.strip() or lowered.startswith(marker) for marker in read_only_markers):
-        return "read_only"
-
-    return "general"
+    留在这里只是为了保持 `from .tools import classify_shell_command` 这个
+    既有调用点不变；真正的分级逻辑是基于 shlex 的结构化解析，
+    见 shell_policy 模块头的说明。
+    """
+    return shell_policy.classify_shell_command(command)
 
 
 BASE_TOOL_SPECS = {

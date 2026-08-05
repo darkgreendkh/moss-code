@@ -21,11 +21,15 @@ _TRUNCATION_KEEP = {
 # 会“碰到某个目录”的文件类工具。碰到之后才去找那个目录的就近指令文档。
 _FILE_TOOLS = ("read_file", "write_file", "edit_file")
 
+# shell 分级 -> 审批用的粗粒度风险。denied 不会走到这里（更早就被拒了），
+# 但仍然映射一份，免得将来漏一个分支就静默降级成 low。
 _SHELL_RISK_LEVELS = {
     "read_only": "low",
     "test": "low",
-    "general": "medium",
-    "destructive_or_network": "high",
+    "write": "medium",
+    "network": "high",
+    "high": "high",
+    "denied": "high",
 }
 
 
@@ -73,12 +77,25 @@ def _normalize_tool_output(value):
 def _shell_risk_metadata(name, args):
     if name != "run_shell":
         return None
-    risk_class = classify_shell_command((args or {}).get("command", ""))
+    risk = classify_shell_command((args or {}).get("command", ""))
+    risk_class = risk.level
     return {
         "shell_risk_class": risk_class,
+        "shell_risk_reasons": list(risk.reasons),
+        "shell_undecidable": risk.undecidable,
         "risk_level": _SHELL_RISK_LEVELS.get(risk_class, "medium"),
         "read_only": False,
     }
+
+
+def _denied_shell_reason(name, args):
+    """命中 deny 清单时返回原因，否则返回空串。"""
+    if name != "run_shell":
+        return ""
+    risk = classify_shell_command((args or {}).get("command", ""))
+    if risk.level != "denied":
+        return ""
+    return "; ".join(risk.reasons) or "command is on the deny list"
 
 
 def _risk_level_for(tool, name, args):
@@ -99,7 +116,11 @@ def _extra_metadata_for(name, args):
     shell_metadata = _shell_risk_metadata(name, args)
     if not shell_metadata:
         return {}
-    return {"shell_risk_class": shell_metadata["shell_risk_class"]}
+    return {
+        "shell_risk_class": shell_metadata["shell_risk_class"],
+        "shell_risk_reasons": shell_metadata["shell_risk_reasons"],
+        "shell_undecidable": shell_metadata["shell_undecidable"],
+    }
 
 
 def approval_summary(agent, name, args):
@@ -112,8 +133,11 @@ def approval_summary(agent, name, args):
     if name == "run_shell":
         command = str(args.get("command", ""))
         command_summary = command if len(command) <= 200 else command[:197] + "..."
-        risk_class = classify_shell_command(command)
-        return f"[{risk_class}] {command_summary}"
+        risk = classify_shell_command(command)
+        # 审批摘要要说清"为什么算这个等级"，否则用户只能盲批。
+        reasons = "; ".join(risk.reasons)
+        suffix = f" — {reasons}" if reasons else ""
+        return f"[{risk.level}] {command_summary}{suffix}"
     summary = json.dumps(args, ensure_ascii=True)
     return summary if len(summary) <= 200 else summary[:197] + "..."
 
@@ -207,6 +231,22 @@ class ToolExecutor:
                     security_event_type=security_event_type,
                     risk_level=_risk_level_for(tool, name, args),
                     read_only=_read_only_for(tool, name, args),
+                    extra=_extra_metadata_for(name, args),
+                ),
+            )
+
+        denied_reason = _denied_shell_reason(name, args)
+        if denied_reason:
+            # deny 清单是"连审批机会都不给"的一档：这些命令没有任何正当用法
+            # 值得用一次误点来换（`rm -rf /`、下载内容直接管道进解释器、fork bomb）。
+            return ToolExecutionResult(
+                content=f"error: refused to run {name}: {denied_reason}",
+                metadata=_metadata(
+                    "rejected",
+                    tool_error_code="command_denied",
+                    security_event_type="denied_command",
+                    risk_level="high",
+                    read_only=False,
                     extra=_extra_metadata_for(name, args),
                 ),
             )

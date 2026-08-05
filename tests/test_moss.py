@@ -300,7 +300,9 @@ def test_run_shell_approval_summary_includes_risk_class(tmp_path):
 
     summary = approval_summary(agent, "run_shell", {"command": "git push origin main"})
 
-    assert summary.startswith("[destructive_or_network] ")
+    # 分级口径升级到 spec-03：网络类单独成档，摘要还要说清为什么。
+    assert summary.startswith("[network] ")
+    assert "talks to a remote" in summary
     assert "git push origin main" in summary
 
 
@@ -1632,8 +1634,9 @@ def test_run_shell_metadata_records_risk_class(tmp_path):
     result = agent.run_tool("run_shell", {"command": command, "timeout": 20})
 
     assert "ok" in result
-    assert agent._last_tool_result_metadata["shell_risk_class"] == "general"
-    assert agent._last_tool_result_metadata["risk_level"] == "medium"
+    # `python -c` 无法静态判定要跑什么，按 spec-03 一律进 high。
+    assert agent._last_tool_result_metadata["shell_risk_class"] == "high"
+    assert agent._last_tool_result_metadata["risk_level"] == "high"
     assert agent._last_tool_result_metadata["read_only"] is False
 
 
