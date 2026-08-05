@@ -28,6 +28,7 @@ from . import ignore as ignorelib
 from . import repo_map as repo_maplib
 from . import budget as budgetlib
 from . import stall as stalllib
+from .verification import is_verification_command
 from . import trace_events
 from .workspace import (
     SnapshotResult,
@@ -80,6 +81,7 @@ class Moss:
         allowed_tools=None,
         parallel_tools=False,
         run_budget_limits=None,
+        verify_before_final=True,
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -97,6 +99,8 @@ class Moss:
         self.cancel_token = threading.Event()
         # 只读工具批内并发。默认关闭：先灰度，评测证明收益后再翻默认值。
         self.parallel_tools = bool(parallel_tools)
+        # 收尾前自检：改了文件却没跑过验证时，拦一次并提示先验证。
+        self.verify_before_final = bool(verify_before_final)
         # 多维预算的上限（步数之外还有 token / 时间 / 金额）。默认全 None，
         # 行为与加预算前完全一致。
         self.run_budget_limits = dict(run_budget_limits or {})
@@ -719,6 +723,7 @@ class Moss:
                 "args": args,
                 "workspace_changed": bool((metadata or {}).get("workspace_changed")),
                 "tool_error_code": str((metadata or {}).get("tool_error_code", "") or ""),
+                "verification": is_verification_command(name, args, metadata),
             }
         )
         del self._tool_outcomes[: -STALL_EVENT_HISTORY]

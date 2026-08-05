@@ -252,6 +252,26 @@ class AgentLoop:
                 agent.write_task_state(task_state)
                 continue
 
+            if self._needs_verification(task_state):
+                # 改了文件却一次验证都没跑过——收尾前拦一次。
+                # 只拦一次：模型如果坚持不验证，硬顶着不让它收尾只会烧完预算。
+                task_state.verification_requested = True
+                attempts += 1
+                agent.emit_trace(task_state, trace_events.VERIFICATION_REQUESTED, {})
+                agent.record(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Runtime notice: this run changed files but never ran a test or lint command. "
+                            "Run one now (for example the project's test command), then return your <final> answer. "
+                            "If verification is not possible here, say so explicitly in the final answer."
+                        ),
+                        "created_at": now(),
+                    }
+                )
+                agent.write_task_state(task_state)
+                continue
+
             final = (final_action.text or raw).strip()
             agent.record({"role": "assistant", "content": final, "created_at": now()})
             task_state.finish_success(final)
@@ -436,6 +456,24 @@ class AgentLoop:
                 "created_at": now(),
             }
         )
+
+    def _needs_verification(self, task_state):
+        """改了文件却一次验证都没跑过 —— 收尾前拦一次。
+
+        为什么值得多花一轮：未经验证的改动是 agent 最常见的"看起来完成了"，
+        而它恰恰最贵——用户要么自己发现，要么在下一次运行里当成既有事实。
+        """
+        agent = self.agent
+        if not getattr(agent, "verify_before_final", True) or task_state.verification_requested:
+            return False
+        changed = False
+        verified = False
+        for outcome in agent.stall_events():
+            if outcome.get("workspace_changed"):
+                changed = True
+            if outcome.get("verification"):
+                verified = True
+        return changed and not verified
 
     def _check_stall(self, task_state):
         """每批结束后查一次停滞，命中就注入结构化干预。

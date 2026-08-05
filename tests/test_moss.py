@@ -168,6 +168,8 @@ def test_agent_accepts_xml_write_file_tool(tmp_path):
         tmp_path,
         [
             '<tool name="write_file" path="hello.py"><content>print("hi")\n</content></tool>',
+            # 收尾前自检会拦一次（spec-02 §4.4），所以多给一次 final。
+            "<final>Done.</final>",
             "<final>Done.</final>",
         ],
     )
@@ -1720,6 +1722,8 @@ def test_write_file_trace_records_minimum_tool_contract_fields(tmp_path):
         tmp_path,
         [
             '<tool>{"name":"write_file","args":{"path":"notes.txt","content":"hello\\n"}}</tool>',
+            # 收尾前自检会拦一次（spec-02 §4.4），所以多给一次 final。
+            "<final>Done.</final>",
             "<final>Done.</final>",
         ],
     )

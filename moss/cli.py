@@ -410,6 +410,7 @@ def build_agent(args):
             secret_env_names=configured_secret_names,
             parallel_tools=getattr(args, "parallel_tools", "off") == "on",
             run_budget_limits=run_budget_limits,
+            verify_before_final=getattr(args, "verify_before_final", "on") == "on",
         )
     return Moss(
         model_client=model,
@@ -421,6 +422,7 @@ def build_agent(args):
         secret_env_names=configured_secret_names,
         parallel_tools=getattr(args, "parallel_tools", "off") == "on",
         run_budget_limits=run_budget_limits,
+        verify_before_final=getattr(args, "verify_before_final", "on") == "on",
     )
 
 
@@ -456,6 +458,12 @@ def build_arg_parser():
         help="Extra environment variable names to treat as secrets for trace/report redaction.",
     )
     parser.add_argument("--max-steps", type=int, default=25, help="Maximum tool/model iterations per request.")
+    parser.add_argument(
+        "--verify-before-final",
+        choices=("on", "off"),
+        default="on",
+        help="Ask for one verification run before finalizing when files changed but nothing was tested.",
+    )
     parser.add_argument(
         "--parallel-tools",
         choices=("on", "off"),
