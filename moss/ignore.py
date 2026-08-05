@@ -4,8 +4,12 @@
 “这个路径该不该被看见”。三处各写一套的话，模型看到的目录树和快照统计的
 文件集会对不上，diff 里就会冒出模型从没见过的路径。
 
-支持的子集：`#` 注释、`!` 取反、目录尾斜杠、`*` / `**` / `?`、前导 `/` 锚定。
-不支持字符类 `[a-z]`（真实 .gitignore 里罕见）——命中就整行忽略并在 stderr 警告一次。
+支持的子集：`#` 注释、`!` 取反、目录尾斜杠、`*` / `**` / `?`、前导 `/` 锚定、
+字符类 `[a-z]` / `[!abc]`。写坏的规则（比如没闭合的 `[`）整行忽略并在 stderr 警告一次。
+
+spec-01 原本把字符类列为不支持项，但 Python 官方 .gitignore 模板里就有
+`*.py[cod]`——本仓库自己也在用。不支持意味着每次启动都要往 stderr 打一条警告，
+而翻成正则字符类只是几行代码，所以这里做了支持。
 
 安全边界：这个匹配器只用来“少扫一些文件”和“少展示一些文件”。
 路径逃逸这类安全判定永远走 `Moss.path()` 的 resolve + 锚定检查，不依赖这里。
@@ -41,15 +45,55 @@ def _warn_once(pattern, reason):
     print(f"warning: ignoring unsupported gitignore pattern {pattern!r}: {reason}", file=sys.stderr)
 
 
+def _char_class_regex(segment, start):
+    """把 gitignore 的 [abc] / [a-z] / [!abc] 翻成正则字符类。
+
+    返回 (regex, 下一个待扫描的下标)；没有闭合的 `]` 就返回 (None, start)，
+    由调用方按“不支持的写法”处理。
+    """
+    index = start + 1
+    negated = index < len(segment) and segment[index] in "!^"
+    if negated:
+        index += 1
+    body = []
+    # gitignore 沿用 shell 语义：紧跟在 [ 或 [! 后面的 ] 是字面量。
+    if index < len(segment) and segment[index] == "]":
+        body.append("\\]")
+        index += 1
+    while index < len(segment) and segment[index] != "]":
+        char = segment[index]
+        if char == "\\" and index + 1 < len(segment):
+            body.append(re.escape(segment[index + 1]))
+            index += 2
+            continue
+        body.append(char if char == "-" else re.escape(char))
+        index += 1
+    if index >= len(segment) or not body:
+        return None, start
+    prefix = "^" if negated else ""
+    return f"[{prefix}{''.join(body)}]", index + 1
+
+
 def _segment_regex(segment):
+    """把一个路径段翻成正则；不支持的写法返回 None。"""
     out = []
-    for char in segment:
+    index = 0
+    while index < len(segment):
+        char = segment[index]
         if char == "*":
             out.append("[^/]*")
         elif char == "?":
             out.append("[^/]")
+        elif char == "[":
+            translated, next_index = _char_class_regex(segment, index)
+            if translated is None:
+                return None
+            out.append(translated)
+            index = next_index
+            continue
         else:
             out.append(re.escape(char))
+        index += 1
     return "".join(out)
 
 
@@ -72,9 +116,6 @@ def _compile(pattern):
     negated = pattern.startswith("!")
     if negated:
         pattern = pattern[1:]
-    if "[" in pattern:
-        _warn_once(raw, "character classes are not supported")
-        return None
     dir_only = pattern.endswith("/")
     pattern = pattern.rstrip("/")
     if not pattern:
@@ -93,7 +134,11 @@ def _compile(pattern):
         if segment == "**":
             body.append(".*" if last else "(?:[^/]+/)*")
             continue
-        body.append(_segment_regex(segment))
+        translated = _segment_regex(segment)
+        if translated is None:
+            _warn_once(raw, "malformed character class")
+            return None
+        body.append(translated)
         if not last:
             body.append("/")
     prefix = "" if anchored else "(?:.*/)?"

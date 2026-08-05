@@ -24,6 +24,7 @@ from . import tools as toolkit
 from .clock import now
 from .token_budget import MAX_HISTORY, clip
 from . import ignore as ignorelib
+from . import repo_map as repo_maplib
 from .workspace import SnapshotResult, WorkspaceContext, capture_snapshot, diff_snapshots
 
 DEFAULT_SHELL_ENV_ALLOWLIST = (
@@ -70,6 +71,7 @@ class Moss:
         self.invocation_cwd = Path(getattr(workspace, "invocation_cwd", None) or workspace.cwd)
         self._ignore_rules = None
         self._last_snapshot = SnapshotResult()
+        self.last_repo_map = None
         self.session_store = session_store
         self.approval_policy = approval_policy
         self.max_steps = max_steps
@@ -102,6 +104,7 @@ class Moss:
         self.skills = self.build_skills()
         self.tools = self._apply_tool_allowlist(self.build_tools())
         self.tool_executor = ToolExecutor(self)
+        self.attach_repo_map(self.workspace)
         self.prefix_state = self.build_prefix()
         self.prefix = self.prefix_state.text
         self.context_manager = ContextManager(self)
@@ -244,6 +247,7 @@ class Moss:
         refreshed_workspace_fingerprint = refreshed_workspace.fingerprint()
         workspace_changed = refreshed_workspace_fingerprint != previous_workspace_fingerprint
         if workspace_changed or force:
+            self.attach_repo_map(refreshed_workspace)
             self.workspace = refreshed_workspace
 
         # 重新发现 skill、重建 tool 注册表：这样磁盘上新增/删除的 skill
@@ -386,6 +390,33 @@ class Moss:
         # trace 是运行中的逐事件时间线，适合回答“这一轮 agent 到底做了什么”。
         self.run_store.append_trace(task_state, payload)
         return payload
+
+    def attach_repo_map(self, workspace):
+        """把仓库地图挂到 workspace 段。
+
+        为什么在这里而不是 WorkspaceContext.build 里：地图要用 agent 的忽略口径
+        和 .moss/cache 目录，而 workspace 构建是个不认识 agent 的纯函数。
+        MOSS_REPO_MAP=off 是一键回退开关——关掉后 prefix 与加地图前逐字节一致。
+        """
+        if str(os.environ.get("MOSS_REPO_MAP", "on")).strip().lower() in {"off", "0", "false", "no"}:
+            workspace.repo_map_text = ""
+            self.last_repo_map = None
+            return workspace
+        try:
+            budget = int(os.environ.get("MOSS_REPO_MAP_BUDGET", repo_maplib.DEFAULT_BUDGET_TOKENS))
+        except ValueError:
+            budget = repo_maplib.DEFAULT_BUDGET_TOKENS
+        try:
+            repo_map = repo_maplib.get_repo_map(
+                self.root, ignore=self.workspace_ignore_rules(), budget_tokens=budget
+            )
+            workspace.repo_map_text = repo_maplib.render_repo_map(repo_map, budget)
+            self.last_repo_map = repo_map
+        except Exception:
+            # 地图是纯增益特性，构建失败绝不能挡住 agent 起来干活。
+            workspace.repo_map_text = ""
+            self.last_repo_map = None
+        return workspace
 
     def workspace_ignore_rules(self):
         """快照/地图共用的一套忽略口径，按 root 缓存。

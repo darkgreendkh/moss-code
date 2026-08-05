@@ -432,6 +432,10 @@ class WorkspaceContext:
         self.status = status
         self.recent_commits = recent_commits
         self.project_docs = project_docs
+        # 仓库地图渲染后的文本。挂在 workspace 段（prefix 尾部）而不是稳定头：
+        # 它与任务无关但会随仓库结构变化，放进 stable_hash 覆盖的段落会白白打掉
+        # prompt 缓存。默认空字符串 —— MOSS_REPO_MAP=off 时行为与加地图前完全一致。
+        self.repo_map_text = ""
         self.status_entries = tuple(
             status_entries
             if status_entries is not None
@@ -523,6 +527,7 @@ class WorkspaceContext:
         # 这段文本会被塞进 prompt prefix，作为相对稳定的基线上下文。
         commits = "\n".join(f"- {line}" for line in self.recent_commits) or "- none"
         docs = "\n".join(f"- {path}\n{snippet}" for path, snippet in self.project_docs.items()) or "- none"
+        repo_map = f"\n\n{self.repo_map_text}" if self.repo_map_text else ""
         return textwrap.dedent(
             f"""\
             Workspace:
@@ -537,7 +542,7 @@ class WorkspaceContext:
             - project_docs:
             {docs}
             """
-        ).strip()
+        ).strip() + repo_map
 
     def fingerprint(self):
         # 这个指纹用来判断仓库状态是否发生了足够大的变化，

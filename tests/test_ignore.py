@@ -73,11 +73,22 @@ def test_question_mark_matches_one_character():
     assert rules.match("cache12.bin") is False
 
 
-def test_character_class_patterns_are_skipped_with_a_warning(capsys):
-    rules = _rules("tmp[0-9].txt")
+def test_character_classes_are_supported():
+    """`*.py[cod]` 在 Python 官方模板里就有，不支持等于每次启动都要报警告。"""
+    rules = _rules("*.py[cod]", "tmp[!0-9].txt")
+
+    assert rules.match("mod.pyc") is True
+    assert rules.match("mod.pyd") is True
+    assert rules.match("mod.pyx") is False
+    assert rules.match("tmpA.txt") is True
+    assert rules.match("tmp1.txt") is False
+
+
+def test_malformed_character_class_is_skipped_with_a_warning(capsys):
+    rules = _rules("tmp[0-9.txt")
 
     assert rules.match("tmp1.txt") is False
-    assert "character classes" in capsys.readouterr().err
+    assert "malformed character class" in capsys.readouterr().err
 
 
 def test_load_merges_defaults_with_repo_gitignore(tmp_path):
