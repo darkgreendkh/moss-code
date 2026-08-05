@@ -466,6 +466,10 @@ class AgentLoop:
         agent = self.agent
         if not getattr(agent, "verify_before_final", True) or task_state.verification_requested:
             return False
+        if "run_shell" not in getattr(agent, "tools", {}):
+            # 这次运行根本没有能跑验证的工具（比如 --allowed-tools 只给了读写）。
+            # 要求它去验证只会白白烧掉一轮，模型也做不到。
+            return False
         changed = False
         verified = False
         for outcome in agent.stall_events():

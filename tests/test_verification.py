@@ -111,3 +111,16 @@ def test_only_shell_commands_count_as_verification():
 
 def test_shell_risk_class_is_reused_when_available():
     assert is_verification_command("run_shell", {"command": "unknown-runner"}, {"shell_risk_class": "test"}) is True
+
+
+def test_no_verification_tool_means_no_interception(tmp_path):
+    """没给 run_shell 的运行里要求"先去验证"，只会白烧一轮——模型也做不到。"""
+    agent = _build_agent(
+        tmp_path,
+        [_WRITE, "<final>Done.</final>"],
+        allowed_tools=["read_file", "write_file"],
+    )
+
+    assert agent.ask("write it") == "Done."
+
+    assert "verification_requested" not in [event["event"] for event in _trace(agent)]
