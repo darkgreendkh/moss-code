@@ -46,3 +46,10 @@ testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py310"
+
+[tool.ruff.lint]
+# 显式钉住规则集。CI 里 ruff 是不带版本装的，而 ruff 0.16 扩大了默认 select
+# （新增 I/BLE/SIM/DTZ/RUF... 一大批），一次上游发版就让 CI 冒出 100+ 条从没
+# 打算开启的告警、整个 Lint step 直接红。写死成本项目一直在用的那四组，
+# 升 ruff 不再改变判定标准；真要加规则也得是这里显式加。
+select = ["E4", "E7", "E9", "F"]
