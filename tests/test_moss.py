@@ -16,7 +16,7 @@ from moss import (
     WorkspaceContext,
     build_welcome,
 )
-from moss.output_parser import parse_model_output
+from moss.model_request import Block, Message, ModelRequest
 from moss.tool_executor import approval_summary
 from moss.workspace import WORKSPACE_FINGERPRINT_VERSION
 
@@ -585,7 +585,9 @@ def test_openai_compatible_client_sends_native_tools_and_normalizes_tool_call():
         result = client.complete("hello", 42, tools=native_tools)
 
     assert captured["body"]["tools"] == native_tools
-    assert parse_model_output(result) == ("tool", {"name": "read_file", "args": {"path": "README.md"}})
+    assert result == [
+        {"type": "tool", "name": "read_file", "args": {"path": "README.md"}, "call_id": ""}
+    ]
 
 
 def test_openai_compatible_client_sends_prompt_cache_fields_and_records_usage():
@@ -831,7 +833,9 @@ def test_anthropic_compatible_client_sends_native_tools_and_normalizes_tool_use(
         result = client.complete("hello", 42, tools=native_tools)
 
     assert captured["body"]["tools"] == native_tools
-    assert parse_model_output(result) == ("tool", {"name": "read_file", "args": {"path": "README.md"}})
+    assert result == [
+        {"type": "tool", "name": "read_file", "args": {"path": "README.md"}, "call_id": ""}
+    ]
 
 
 def test_anthropic_compatible_client_extracts_first_text_block():
@@ -903,14 +907,20 @@ def test_anthropic_compatible_client_prefers_tool_use_over_leading_preamble_text
         timeout=30,
     )
 
+    request = ModelRequest(
+        messages=(Message("user", (Block("hello", "request", trust="user"),)),),
+        protocol="native",
+    )
     with patch("urllib.request.urlopen", return_value=FakeResponse()):
-        result = client.complete("hello", 42)
+        result = client.complete_request(request)
 
-    assert parse_model_output(result) == ("tool", {"name": "list_files", "args": {"path": "."}})
+    assert result == [
+        {"type": "tool", "name": "list_files", "args": {"path": "."}, "call_id": ""}
+    ]
 
 
-def test_openai_compatible_extract_prefers_nested_tool_call_over_leading_text():
-    from moss.providers.clients import _extract_openai_text
+def test_openai_native_extract_preserves_nested_tool_call_after_leading_text():
+    from moss.providers.clients import _extract_openai_native_actions
 
     data = {
         "output": [
@@ -923,10 +933,9 @@ def test_openai_compatible_extract_prefers_nested_tool_call_over_leading_text():
         ]
     }
 
-    assert parse_model_output(_extract_openai_text(data)) == (
-        "tool",
-        {"name": "list_files", "args": {"path": "."}},
-    )
+    assert _extract_openai_native_actions(data) == [
+        {"type": "tool", "name": "list_files", "args": {"path": "."}, "call_id": ""}
+    ]
 
 
 def test_agent_passes_native_tool_schema_to_capable_provider(tmp_path):

@@ -4,7 +4,12 @@ from unittest.mock import patch
 from moss import Moss, SessionStore, WorkspaceContext
 from moss.model_request import Block, Message, ModelRequest
 from moss.output_parser import parse_model_actions
-from moss.providers.clients import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
+from moss.providers.clients import (
+    AnthropicCompatibleModelClient,
+    OpenAICompatibleModelClient,
+    _extract_anthropic_text,
+    _extract_openai_text,
+)
 
 
 class FakeResponse:
@@ -21,6 +26,13 @@ class FakeResponse:
 
     def read(self):
         return json.dumps(self.body).encode("utf-8")
+
+
+class FakeSseResponse(FakeResponse):
+    headers = {"Content-Type": "text/event-stream"}
+
+    def read(self):
+        return self.body.encode("utf-8")
 
 
 def test_native_parser_preserves_all_ordered_tool_calls_and_call_ids():
@@ -114,6 +126,96 @@ def test_anthropic_native_response_returns_multiple_calls_without_xml_conversion
         {"type": "tool", "name": "read_file", "args": {"path": "a.py"}, "call_id": "toolu-1"},
         {"type": "tool", "name": "read_file", "args": {"path": "b.py"}, "call_id": "toolu-2"},
     ]
+
+
+def test_anthropic_text_extraction_never_converts_native_tool_use_to_xml():
+    raw = _extract_anthropic_text(
+        {
+            "content": [
+                {"type": "text", "text": "plain text response"},
+                {"type": "tool_use", "id": "toolu-1", "name": "read_file", "input": {}},
+            ]
+        }
+    )
+
+    assert raw == "plain text response"
+
+
+def test_openai_text_extraction_never_converts_native_tool_calls_to_xml():
+    raw = _extract_openai_text(
+        {
+            "output_text": "plain text response",
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "read_file",
+                    "arguments": "{}",
+                }
+            ],
+        }
+    )
+
+    assert raw == "plain text response"
+
+
+def test_openai_native_sse_response_returns_tool_call_without_xml_conversion():
+    client = OpenAICompatibleModelClient(
+        model="gpt-5-5",
+        base_url="https://api.openai.com/v1",
+        api_key="sk-test",
+        temperature=0.2,
+        timeout=30,
+    )
+    request = ModelRequest(
+        system=(Block("rules", "rules"),),
+        messages=(Message("user", (Block("inspect", "request", trust="user"),)),),
+        protocol="native",
+    )
+    event = {
+        "type": "response.completed",
+        "response": {
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "read_file",
+                    "arguments": '{"path":"a.py"}',
+                }
+            ],
+            "usage": {},
+        },
+    }
+    response = FakeSseResponse("data: " + json.dumps(event) + "\n\ndata: [DONE]\n")
+
+    with patch("urllib.request.urlopen", return_value=response):
+        raw = client.complete_request(request)
+
+    assert raw == [
+        {"type": "tool", "name": "read_file", "args": {"path": "a.py"}, "call_id": "call-1"}
+    ]
+
+
+def test_openai_native_sse_text_response_is_normalized_as_final_action():
+    client = OpenAICompatibleModelClient(
+        model="gpt-5-5",
+        base_url="https://api.openai.com/v1",
+        api_key="sk-test",
+        temperature=0.2,
+        timeout=30,
+    )
+    request = ModelRequest(
+        messages=(Message("user", (Block("inspect", "request", trust="user"),)),),
+        protocol="native",
+    )
+    response = FakeSseResponse(
+        'data: {"type":"response.output_text.done","text":"done"}\n\ndata: [DONE]\n'
+    )
+
+    with patch("urllib.request.urlopen", return_value=response):
+        raw = client.complete_request(request)
+
+    assert raw == [{"type": "final", "text": "done"}]
 
 
 def test_provider_payloads_return_native_tool_results_with_original_call_id():

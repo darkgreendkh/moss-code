@@ -112,9 +112,26 @@ def _anthropic_structured_messages(model_request):
 
 
 def _extract_openai_native_actions(data):
+    candidates = [item for item in data.get("output", []) if isinstance(item, dict)]
+    candidates.extend(
+        content
+        for item in data.get("output", [])
+        if isinstance(item, dict)
+        for content in item.get("content", [])
+        if isinstance(content, dict)
+    )
+    for choice in data.get("choices", []) or []:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message", {})
+        if isinstance(message, dict):
+            candidates.extend(
+                item for item in message.get("tool_calls", []) or [] if isinstance(item, dict)
+            )
+
     calls = []
-    for item in data.get("output", []):
-        if not isinstance(item, dict) or item.get("type") not in {"function_call", "tool_call"}:
+    for item in candidates:
+        if item.get("type") not in {"function_call", "tool_call", "function"}:
             continue
         function = item.get("function", {}) if isinstance(item.get("function"), dict) else {}
         name = item.get("name") or function.get("name")
@@ -265,43 +282,16 @@ def _parse_native_tool_args(value):
     return {}
 
 
-def _render_native_tool_call(name, args):
-    return "<tool>" + json.dumps(
-        {"name": str(name or ""), "args": _parse_native_tool_args(args)},
-        separators=(",", ":"),
-        sort_keys=True,
-    ) + "</tool>"
-
-
 def _extract_openai_text(data):
-    for item in data.get("output", []):
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") in {"function_call", "tool_call"}:
-            function = item.get("function", {}) if isinstance(item.get("function"), dict) else {}
-            name = item.get("name") or function.get("name")
-            arguments = item.get("arguments") if item.get("arguments") is not None else function.get("arguments")
-            if name:
-                return _render_native_tool_call(name, arguments)
-
     if data.get("output_text"):
         return data["output_text"]
 
-    # 同 `_extract_anthropic_text`：工具调用要先整体扫一遍，
-    # 否则夹在前面的开场白文本会把后面的 tool_call 吃掉。
     nested = [
         content
         for item in data.get("output", [])
         for content in item.get("content", [])
         if isinstance(content, dict)
     ]
-    for content in nested:
-        if content.get("type") in {"function_call", "tool_call"}:
-            function = content.get("function", {}) if isinstance(content.get("function"), dict) else {}
-            name = content.get("name") or function.get("name")
-            arguments = content.get("arguments") if content.get("arguments") is not None else function.get("arguments")
-            if name:
-                return _render_native_tool_call(name, arguments)
     for content in nested:
         text = content.get("text")
         if text:
@@ -310,14 +300,6 @@ def _extract_openai_text(data):
     choices = data.get("choices", [])
     if choices:
         message = choices[0].get("message", {})
-        for tool_call in message.get("tool_calls", []) or []:
-            if not isinstance(tool_call, dict):
-                continue
-            function = tool_call.get("function", {}) if isinstance(tool_call.get("function"), dict) else {}
-            name = tool_call.get("name") or function.get("name")
-            arguments = tool_call.get("arguments") if tool_call.get("arguments") is not None else function.get("arguments")
-            if name:
-                return _render_native_tool_call(name, arguments)
         content = message.get("content")
         if isinstance(content, str):
             return content
@@ -582,9 +564,18 @@ class OpenAICompatibleModelClient:
                     "prompt_cache_retention": prompt_cache_retention,
                     **parse_openai_usage(response_data),
                 }
+            if _model_request is not None and _model_request.protocol == "native":
+                native_payload = dict(response_data or {})
+                if text and not native_payload.get("output_text"):
+                    native_payload["output_text"] = text
+                native_actions = _extract_openai_native_actions(native_payload)
+                if native_actions:
+                    return native_actions
+            elif tools:
+                native_actions = _extract_openai_native_actions(response_data or {})
+                if native_actions and native_actions[0].get("type") == "tool":
+                    return native_actions
             if text:
-                if _model_request is not None and _model_request.protocol == "native":
-                    return _extract_openai_native_actions(response_data or {"output_text": text})
                 return text
             raise RuntimeError("OpenAI-compatible error: could not extract text from event stream response")
 
@@ -604,6 +595,10 @@ class OpenAICompatibleModelClient:
         }
         if _model_request is not None and _model_request.protocol == "native":
             return _extract_openai_native_actions(data)
+        if tools:
+            native_actions = _extract_openai_native_actions(data)
+            if native_actions and native_actions[0].get("type") == "tool":
+                return native_actions
         return _extract_openai_text(data)
 
     def complete_request(self, request):
@@ -618,16 +613,11 @@ class OpenAICompatibleModelClient:
 
 
 def _extract_anthropic_text(data):
-    # 必须先整体扫一遍 tool_use 再回落到 text：模型常常先吐一句开场白
-    # （"I'll explore the project structure..."），再跟上真正的 tool_use，
-    # content 顺序就是 ["text", "tool_use"]。若在同一个循环里按顺序返回，
-    # 拿到的是那句开场白，output_parser 认不出 <tool> 就当成最终答案，
-    # 整个 run 会在第一步工具之后直接收尾（DeepSeek 上必现）。
-    blocks = [item for item in data.get("content", []) if isinstance(item, dict)]
-    for item in blocks:
-        if item.get("type") == "tool_use":
-            return _render_native_tool_call(item.get("name"), item.get("input", {}))
-    for item in blocks:
+    # Native tool_use 由 `_extract_anthropic_native_actions` 处理；文本协议
+    # 只消费 text block，避免两个协议之间再做有损的 XML 中转。
+    for item in data.get("content", []):
+        if not isinstance(item, dict):
+            continue
         if item.get("type") == "text":
             text = item.get("text")
             if isinstance(text, str) and text:
@@ -751,6 +741,10 @@ class AnthropicCompatibleModelClient:
             if native_actions:
                 return native_actions
             raise RuntimeError("Anthropic-compatible error: could not extract native output from response")
+        if tools:
+            native_actions = _extract_anthropic_native_actions(data)
+            if native_actions and native_actions[0].get("type") == "tool":
+                return native_actions
         text = _extract_anthropic_text(data)
         if text:
             return text
