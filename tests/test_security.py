@@ -1,8 +1,11 @@
+from pathlib import Path
+
 from moss.security import (
     REDACTED_VALUE,
     detected_secret_env_items,
     looks_sensitive_env_name,
     redact_artifact,
+    redact_secret_shapes,
     shell_env,
 )
 
@@ -48,3 +51,45 @@ def test_shell_env_uses_allowlist_and_sets_pwd_with_path_fallback(tmp_path):
     filtered = shell_env(env=env, allowlist=("HOME",), root=tmp_path)
 
     assert filtered == {"HOME": "/home/user", "PWD": str(tmp_path), "PATH": "/usr/bin"}
+
+
+def test_shape_based_redaction_catches_secrets_that_are_not_in_the_env():
+    """只替换环境变量的值不够：agent 会**读到**仓库里的密钥。"""
+    for text in (
+        "key = sk-abcdefghijklmnop1234",
+        "token: ghp_abcdefghijklmnopqrst12",
+        "AKIAIOSFODNN7EXAMPLE",
+        "auth eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijk",
+        'api_key: "supersecretvalue123"',
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----",
+    ):
+        assert REDACTED_VALUE in redact_secret_shapes(text), text
+
+
+def test_shape_based_redaction_leaves_ordinary_text_alone():
+    for text in ("normal text with no secrets", "short token = abc", "def main(): pass"):
+        assert redact_secret_shapes(text) == text
+
+
+def test_reading_a_secret_from_the_workspace_never_reaches_the_artifacts(tmp_path):
+    from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
+
+    (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
+    (tmp_path / "config.ini").write_text("api_key = sk-live-abcdefghijklmnop123456\n", encoding="utf-8")
+    agent = Moss(
+        model_client=FakeModelClient(['<tool>{"name":"read_file","args":{"path":"config.ini"}}</tool>', "<final>Done.</final>"]),
+        workspace=WorkspaceContext.build(tmp_path),
+        session_store=SessionStore(tmp_path / ".moss" / "sessions"),
+        approval_policy="auto",
+    )
+
+    agent.ask("read the config")
+
+    run_dir = agent.run_store.run_dir(agent.current_task_state)
+    artifacts = [
+        (run_dir / "trace.jsonl").read_text(encoding="utf-8"),
+        (run_dir / "report.json").read_text(encoding="utf-8"),
+        Path(agent.session_path).read_text(encoding="utf-8"),
+    ]
+    for text in artifacts:
+        assert "sk-live-abcdefghijklmnop123456" not in text

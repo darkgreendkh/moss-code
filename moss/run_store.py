@@ -4,11 +4,26 @@ session.json 负责保存“可恢复的会话状态”；RunStore 负责保存�
 例如 task_state、trace 和 report。两者分开后，恢复现场和复盘证据不会混在一起。
 """
 
+import hashlib
 import json
 import tempfile
 from pathlib import Path
 
 from .task_state import STATUS_RUNNING, TaskState
+
+# 哈希链的起点。第一条事件的 prev_hash 用它，链条才有明确的头。
+TRACE_CHAIN_GENESIS = "0" * 64
+
+
+def event_digest(event):
+    """一条事件的规范化摘要。
+
+    canonical json（排序键 + 固定分隔符）是关键：字段顺序或空格变一下就算出
+    另一个 hash 的话，链条校验会变成"格式检查"而不是"内容检查"。
+    """
+    payload = {key: value for key, value in dict(event or {}).items() if key != "prev_hash"}
+    text = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _run_id(value):
@@ -61,6 +76,28 @@ class RunStore:
             handle.write(json.dumps(event, sort_keys=True, ensure_ascii=True))
             handle.write("\n")
         return path
+
+    def verify_trace(self, run_id):
+        """逐条校验哈希链，返回 (是否完整, 问题列表)。
+
+        它能发现的是"事后被改过/被删过"：trace 是审计工件，
+        如果谁能悄悄改掉一条记录，整份工件就失去了证据价值。
+        """
+        events = self.read_trace(run_id)
+        problems = []
+        previous = TRACE_CHAIN_GENESIS
+        for index, event in enumerate(events):
+            expected_sequence = index + 1
+            if int(event.get("sequence", 0) or 0) != expected_sequence:
+                problems.append(f"sequence gap at index {index}: expected {expected_sequence}")
+            if "prev_hash" not in event:
+                problems.append(f"event {event.get('event_id', index)} has no prev_hash")
+                previous = event_digest(event)
+                continue
+            if event.get("prev_hash") != previous:
+                problems.append(f"broken chain at {event.get('event_id', index)}")
+            previous = event_digest(event)
+        return (not problems), problems
 
     def read_trace(self, run_id):
         path = self.trace_path(run_id)
@@ -137,6 +174,8 @@ class RunStore:
         sequence = self._next_trace_sequence(run_id)
         payload["sequence"] = sequence
         payload["event_id"] = f"{run_id}:{sequence:06d}"
+        # 每条事件带上一条的摘要：改掉中间任何一条，后面全部对不上。
+        payload["prev_hash"] = self._last_trace_hash(run_id)
         payload.setdefault("run_id", run_id)
         if hasattr(task_state, "task_id"):
             payload.setdefault("task_id", task_state.task_id)
@@ -147,6 +186,12 @@ class RunStore:
             payload.setdefault("attempt", int(payload.get("attempt", 0) or 0))
             payload.setdefault("tool_steps", int(payload.get("tool_steps", 0) or 0))
         return payload
+
+    def _last_trace_hash(self, run_id):
+        events = self.read_trace(run_id)
+        if not events:
+            return TRACE_CHAIN_GENESIS
+        return event_digest(events[-1])
 
     def _next_trace_sequence(self, run_id):
         events = self.read_trace(run_id)

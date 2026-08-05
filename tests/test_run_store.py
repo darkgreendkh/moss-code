@@ -1,6 +1,6 @@
 import json
 
-from moss.run_store import RunStore
+from moss.run_store import TRACE_CHAIN_GENESIS, RunStore, event_digest
 from moss.task_state import (
     STATUS_FAILED,
     STOP_REASON_FINAL_ANSWER_RETURNED,
@@ -125,3 +125,62 @@ def test_run_store_tolerates_missing_final_report(tmp_path):
 
     assert store.trace_path(state.run_id).exists()
     assert not store.report_path(state.run_id).exists()
+
+
+def test_trace_events_form_a_hash_chain(tmp_path):
+    """trace 是审计工件：谁能悄悄改一条，整份工件就没有证据价值了。"""
+    store = RunStore(tmp_path / "runs")
+    task_state = TaskState.create(task_id="t", user_request="x")
+    store.start_run(task_state)
+    for index in range(3):
+        store.append_trace(task_state, {"event": "step", "index": index})
+
+    events = store.read_trace(task_state.run_id)
+    ok, problems = store.verify_trace(task_state.run_id)
+
+    assert ok, problems
+    assert events[0]["prev_hash"] == TRACE_CHAIN_GENESIS
+    assert events[1]["prev_hash"] == event_digest(events[0])
+
+
+def test_tampering_with_a_middle_event_breaks_the_chain(tmp_path):
+    store = RunStore(tmp_path / "runs")
+    task_state = TaskState.create(task_id="t", user_request="x")
+    store.start_run(task_state)
+    for index in range(3):
+        store.append_trace(task_state, {"event": "step", "index": index})
+
+    path = store.trace_path(task_state.run_id)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    tampered = json.loads(lines[1])
+    tampered["index"] = 999
+    lines[1] = json.dumps(tampered, sort_keys=True, ensure_ascii=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    ok, problems = store.verify_trace(task_state.run_id)
+
+    assert ok is False
+    assert problems
+
+
+def test_deleting_an_event_is_detected(tmp_path):
+    store = RunStore(tmp_path / "runs")
+    task_state = TaskState.create(task_id="t", user_request="x")
+    store.start_run(task_state)
+    for index in range(3):
+        store.append_trace(task_state, {"event": "step", "index": index})
+
+    path = store.trace_path(task_state.run_id)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    path.write_text("\n".join([lines[0], lines[2]]) + "\n", encoding="utf-8")
+
+    ok, problems = store.verify_trace(task_state.run_id)
+
+    assert ok is False
+    assert any("sequence gap" in problem or "broken chain" in problem for problem in problems)
+
+
+def test_digest_ignores_prev_hash_itself():
+    event = {"event": "a", "sequence": 1}
+
+    assert event_digest(event) == event_digest({**event, "prev_hash": "whatever"})

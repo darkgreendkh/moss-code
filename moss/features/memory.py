@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from ..clock import now
+from .. import security as securitylib
 from ..security import REDACTED_VALUE
 from ..token_budget import clip
 
@@ -284,7 +285,8 @@ def file_freshness(raw_path, workspace_root=None):
 
 
 _ASCII_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
-_SECRET_SHAPED_TEXT_PATTERN = re.compile(r"(?i)(\b(api[_ -]?key|token|secret|password)\b|sk-[A-Za-z0-9_-]{6,})")
+# 口径统一到 security 模块：两处各留一套正则一定会慢慢漂移。
+_SECRET_SHAPED_TEXT_PATTERN = securitylib.SECRET_SHAPED_TEXT_PATTERN
 _NOISY_MEMORY_PATTERN = re.compile(r"(?i)\b(stdout|stderr|traceback|exit_code)\b")
 
 
