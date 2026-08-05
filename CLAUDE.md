@@ -51,6 +51,12 @@ cli.py (装配/REPL/进度渲染)
 - `budget.py`：`RunBudget` 多维预算（步数 / token / 时间 / 金额），软阈值 80% 提醒收敛、硬阈值不再调模型直接优雅收尾。
   `usd=None` 表示"不知道价格"，**绝不能当成 0**
 - `verification.py`：判断一次 `run_shell` 算不算"跑过验证"。收尾自检和评测的 `unverified_edit_rate` 必须共用它
+- `shell_policy.py`：shell 风险分级。**基于 shlex 的结构化解析**（按 `; && || |` 和引号外换行拆段，逐段看 argv[0]），
+  六档 `read_only/test/write/network/high/denied`。`denied` 连审批都不给；命令替换/eval/引号不闭合一律 `high` + `undecidable`
+- `policy.py`：能力标签（`fs_read/fs_write/exec/network/spawn/memory_write`）+ 路径 glob 作用域。
+  **fail-closed**：risky 但未声明能力的工具直接拒绝
+- `injection.py`：工具输出里的 prompt injection 检测。命中**只收紧策略不拒绝执行**（本 run 剩余 risky 工具强制审批）
+- `sandbox.py`：L1 策略层 / L2 `sandbox-exec`·`bwrap` / L3 容器。**任何降级都要进 report 且打 stderr**
 - `token_budget.py`：token 估算与全部文本裁剪（`clip_to_budget` 按预算二分；`clip`/`middle` 硬切片，`MAX_TOOL_OUTPUT=16000`、`MAX_HISTORY=32000`）；`clock.py`：统一 UTC 时间戳 `now()`
 - `output_parser.py`：模型输出 → `("tool"|"final"|"retry", payload)` 的纯函数解析层
 - `prompt_prefix.py`：稳定前缀构建。**prompt cache key 用 `stable_hash`（只覆盖身份/规则/Tools/Skills 段），不用整段 hash**——否则 agent 自己写文件会导致 workspace 段变化、缓存键每轮抖动
@@ -73,6 +79,8 @@ cli.py (装配/REPL/进度渲染)
 4. **错误收敛，不裸抛**：模型后端异常由 `AgentLoop._finish_model_error` 收敛为已收尾的失败运行（task_state=failed / stop_reason=model_error，trace+report 齐全），并对错误信息脱敏。one-shot 模式下失败必须非零退出（CI 依赖这个）。`KeyboardInterrupt` 继承 BaseException 不会被捕获——REPL 里 Ctrl-C 只取消当前轮。
 5. **所有落盘/展示的文本先过脱敏**：`redact_artifact` / `redact_text`，secret 名单来自 `DEFAULT_SECRET_ENV_NAMES` + `MOSS_SECRET_ENV_NAMES` + `--secret-env-name`。
 6. **路径锚定**：所有文件类工具经 `Moss.path()`，resolve 后必须在 workspace root 之下（防 `../` 和符号链接逃逸）。遍历工作区时不跟随符号链接目录（防死循环）。
+   **唯一执行入口是 `run_tool` / `execute(ActionRequest)`**；`Moss` 上不允许再出现绕过 `ToolExecutor` 的公共 `tool_*` 方法（有契约测试守着）。
+   审批与写入之间用 `ApprovalReceipt` + `expected_sha` 挡 TOCTOU：审批后文件被换掉就 `precondition_failed`，要求重新审批。
 7. **工具是显式注册的白名单**（`BASE_TOOL_SPECS`），risky 工具走审批（`ask`/`auto`/`never`）；审批提示只展示摘要（`tool_executor.approval_summary`：写文件类展示脱敏 diff、shell 展示风险分级），不 dump 完整 args。
 8. **快照 diff 用 `(mtime_ns, size)`**，不做内容 hash——risky 工具每次调用前后各扫一遍工作区，性能敏感。已知盲区：walk 策略下同尺寸覆盖写 + mtime 还原判不出来（git 策略靠变更集兜底），chmod 也不可见。
 9. **中断也要留全工件**：`AgentLoop.run` 外层 `except BaseException` 只做收尾（`stop_reason=interrupted` + trace + report）然后**必然重新抛出**；收尾函数自己绝不抛异常。
@@ -92,6 +100,8 @@ cli.py (装配/REPL/进度渲染)
 | ollama | `qwen3:8b` | Ollama `/api/generate` |
 
 仓库上下文相关的开关（见 `.env.example`）：`MOSS_REPO_MAP`（默认 on，一键回退）、`MOSS_REPO_MAP_BUDGET`（默认 800 token）、`MOSS_SNAPSHOT_STRATEGY`（`git`/`walk`/`auto`，默认 auto）、`MOSS_SNAPSHOT_EXCLUDE`（逗号分隔 glob）。
+
+安全开关：`--sandbox`（默认 auto）、`--allow-network`、`--allow` / `--deny`（能力+glob）、`--injection-scan`（默认 on）。
 
 主循环开关：`--parallel-tools`（默认 off）、`--verify-before-final`（默认 on）、`--max-input-tokens` / `--max-output-tokens` / `--max-seconds` / `--max-usd`（默认全 None，不设即老行为）。
 
