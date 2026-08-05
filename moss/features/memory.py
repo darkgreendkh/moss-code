@@ -512,17 +512,31 @@ def normalize_memory_state(state, workspace_root=None):
             freshness = summary.get("freshness")
             freshness = None if freshness in (None, "") else str(freshness).strip() or None
             trust = str(summary.get("trust", "tool")).strip() or "tool"
+            symbols = [
+                {
+                    "name": str(symbol.get("name", "")),
+                    "kind": str(symbol.get("kind", "other")),
+                    "start": int(symbol.get("start", 0)),
+                    "end": int(symbol.get("end", symbol.get("start", 0))),
+                }
+                for symbol in _ensure_list(summary.get("symbols", []))
+                if isinstance(symbol, dict) and str(symbol.get("name", "")).strip()
+            ]
         else:
             text = clip(str(summary).strip(), 500)
             created_at = now()
             freshness = None
             trust = "tool"
+            symbols = []
         if not path or not text:
             continue
         normalized_file_summaries[path] = {
+            "path": path,
             "summary": text,
             "created_at": created_at,
             "freshness": freshness,
+            "sha": freshness,
+            "symbols": symbols,
             "trust": trust if trust in {"user", "model", "tool"} else "tool",
         }
     state["file_summaries"] = normalized_file_summaries
@@ -605,16 +619,20 @@ def append_note(
     return state
 
 
-def set_file_summary(state, path, summary, workspace_root=None):
+def set_file_summary(state, path, summary, workspace_root=None, *, symbols=()):
     state = normalize_memory_state(state, workspace_root)
     path = canonicalize_path(path, workspace_root).strip()
     summary = clip(str(summary).strip(), 500)
     if not path or reject_memory_reason(summary):
         return state
+    freshness = file_freshness(path, workspace_root)
     state["file_summaries"][path] = {
+        "path": path,
         "summary": summary,
         "created_at": now(),
-        "freshness": file_freshness(path, workspace_root),
+        "freshness": freshness,
+        "sha": freshness,
+        "symbols": [dict(symbol) for symbol in symbols],
         "trust": "tool",
     }
     return state
@@ -717,7 +735,15 @@ def _render_note(note):
 
 
 def _retrieval_candidates_with_explain(
-    state, query, limit=3, workspace_root=None, *, include_cold=False
+    state,
+    query,
+    limit=3,
+    workspace_root=None,
+    *,
+    include_cold=False,
+    session_id="",
+    global_memory_root=None,
+    current_path="",
 ):
     state = normalize_memory_state(state, workspace_root)
     index = BM25Index(tokenize=_tokenize, decay_days=_memory_decay_days())
@@ -772,8 +798,27 @@ def _retrieval_candidates_with_explain(
                     weight=_trust_weight(note.get("trust", "model")),
                     ts=_parse_timestamp(note.get("created_at")) or None,
                 )
-        for position, note in enumerate(durable_store.all_notes()):
-            doc_id = f"durable:{position}:{note.get('source', '')}"
+        project_key = project_scope_key(workspace_root)
+        durable_notes = list(durable_store.all_notes())
+        if global_memory_root is not None:
+            global_root = Path(global_memory_root)
+            if global_root.resolve() != durable_store.root.resolve():
+                durable_notes.extend(MemoryStore(global_root).all_notes())
+        for position, note in enumerate(durable_notes):
+            scope = note.get("scope", "project")
+            scope_key = note.get("scope_key", "")
+            scope_weight = 1.0
+            if scope == "project" and scope_key and scope_key != project_key:
+                continue
+            if scope == "session" and scope_key != str(session_id):
+                continue
+            if scope == "global" and scope_key != "global":
+                continue
+            if scope == "path":
+                key = str(scope_key).strip("/")
+                active_path = str(current_path).strip("/")
+                scope_weight = 1.5 if key and (active_path == key or active_path.startswith(key + "/")) else 0.5
+            doc_id = f"durable:{position}:{note.get('id', note.get('source', ''))}"
             candidates[doc_id] = note
             index.add(
                 doc_id,
@@ -782,7 +827,11 @@ def _retrieval_candidates_with_explain(
                     "subject": f"{note.get('subject', '')} {note.get('source', '')}",
                     "text": note.get("text", ""),
                 },
-                weight=_trust_weight(note.get("trust", "user")) * (0.5 if note.get("status") == "needs_review" else 1.0),
+                weight=(
+                    _trust_weight(note.get("trust", "user"))
+                    * scope_weight
+                    * (0.5 if note.get("status") == "needs_review" else 1.0)
+                ),
                 ts=_parse_timestamp(note.get("created_at")) or None,
             )
 
@@ -834,6 +883,13 @@ def render_memory_text(state, workspace_root=None):
         current_freshness = file_freshness(path, workspace_root)
         if summary.get("summary", "") and summary.get("freshness") == current_freshness:
             summaries.append(f"- [trust={summary.get('trust', 'tool')} source={path}] {summary['summary']}")
+            for symbol in summary.get("symbols", [])[:3]:
+                start = int(symbol.get("start", 1))
+                end = max(start, int(symbol.get("end", start)))
+                summaries.append(
+                    f"- {symbol.get('name', 'symbol')} ({symbol.get('kind', 'other')}): "
+                    f"read_file({path}, start={start}, end={end})"
+                )
     if summaries:
         lines.append("- file_summaries:")
         lines.extend(f"  {line}" for line in summaries)
@@ -865,10 +921,12 @@ class LayeredMemory:
         session_id="",
         event_callback=None,
         episodic_token_budget=DEFAULT_EPISODIC_TOKEN_BUDGET,
+        global_memory_root=None,
     ):
         self.workspace_root = workspace_root
         self.session_id = str(session_id or "session")
         self.event_callback = event_callback
+        self.global_memory_root = Path(global_memory_root) if global_memory_root is not None else Path.home() / ".moss" / "memory"
         self.durable_store = DurableMemoryStore(Path(workspace_root) / ".moss" / "memory") if workspace_root is not None else None
         self.episodic_token_budget = max(1, int(episodic_token_budget))
         self.state = normalize_memory_state(state, workspace_root)
@@ -939,8 +997,10 @@ class LayeredMemory:
             self.durable_store.store.append_cold_notes(self.session_id, evicted)
         return evicted
 
-    def set_file_summary(self, path, summary):
-        self.state = set_file_summary(self.state, path, summary, self.workspace_root)
+    def set_file_summary(self, path, summary, *, symbols=()):
+        self.state = set_file_summary(
+            self.state, path, summary, self.workspace_root, symbols=symbols
+        )
         return self
 
     def invalidate_file_summary(self, path):
@@ -953,7 +1013,15 @@ class LayeredMemory:
 
     def retrieval_candidates(self, query, limit=3):
         candidates, self.last_retrieval_explain = _retrieval_candidates_with_explain(
-            self.state, query, limit=limit, workspace_root=self.workspace_root
+            self.state,
+            query,
+            limit=limit,
+            workspace_root=self.workspace_root,
+            session_id=self.session_id,
+            global_memory_root=self.global_memory_root,
+            current_path=self.state["working"]["recent_files"][-1]
+            if self.state["working"]["recent_files"]
+            else "",
         )
         selected_indexes = {
             int(note.get("note_index", -1))
@@ -1115,6 +1183,11 @@ class LayeredMemory:
             limit=max(1, int(limit)),
             workspace_root=self.workspace_root,
             include_cold=True,
+            session_id=self.session_id,
+            global_memory_root=self.global_memory_root,
+            current_path=self.state["working"]["recent_files"][-1]
+            if self.state["working"]["recent_files"]
+            else "",
         )
         return [
             {
@@ -1124,6 +1197,8 @@ class LayeredMemory:
                 "trust": note.get("trust", "model"),
                 "source": _note_source(note),
                 "kind": note.get("kind", "episodic"),
+                "scope": note.get("scope", "session" if note.get("kind") != "durable" else "project"),
+                "scope_key": note.get("scope_key", ""),
             }
             for note in matches
         ]
@@ -1264,11 +1339,11 @@ def append_memory_note(agent, text, **kwargs):
     return True
 
 
-def set_memory_file_summary(agent, path, summary):
+def set_memory_file_summary(agent, path, summary, *, symbols=()):
     safe_summary = safe_memory_text(agent, summary)
     if not safe_summary:
         return False
-    agent.memory.set_file_summary(path, safe_summary)
+    agent.memory.set_file_summary(path, safe_summary, symbols=symbols)
     return True
 
 
@@ -1297,12 +1372,22 @@ def update_memory_after_tool(agent, name, args, result):
         agent.memory.remember_file(canonical_path)
     if name == "read_file":
         summary = summarize_read_result(result)
-        set_memory_file_summary(agent, canonical_path, summary)
+        symbols = []
+        repo_map = getattr(agent, "last_repo_map", None)
+        if repo_map is not None:
+            entry = next(
+                (item for item in repo_map.entries if item.path == canonical_path),
+                None,
+            )
+            if entry is not None:
+                symbols = [symbol.to_dict() for symbol in entry.symbols]
+        set_memory_file_summary(agent, canonical_path, summary, symbols=symbols)
         append_memory_note(
             agent,
             summary,
             tags=(canonical_path,),
             source=canonical_path,
+            line_range=(int(args.get("start", 1)), int(args.get("end", 800))),
             trust="tool",
         )
     elif name in {"write_file", "edit_file"}:

@@ -380,6 +380,7 @@ class MemoryStore:
                 "subject": record.subject,
                 "status": record.status,
                 "scope": record.scope,
+                "scope_key": record.scope_key,
                 "source_refs": [source.to_dict() for source in record.source_refs],
                 "review_reason": self._review_reason(record),
             }
