@@ -57,12 +57,18 @@ class AgentLoop:
             # 永远停在 running、没有 report 的半截 run 目录。
             self._finish_interrupted(user_message, exc, run_started_at)
             raise
+        finally:
+            # 本轮结束，用户消息不再是"当前请求"，该以普通历史的身份进入后续轮次。
+            # 放在 finally 里：中断退出的会话被 resume 时，历史同样不能缺这一条。
+            self.agent.clear_pending_history()
 
     def _run(self, user_message, run_started_at):
         agent = self.agent
         agent.cancel_token.clear()
         agent.memory.set_task_summary(user_message)
-        agent.record({"role": "user", "content": user_message, "created_at": now()})
+        # 用户消息打 pending：它每一轮都会被 context_manager 渲染成
+        # `Current user request`，历史里再来一份就是同一句话说两遍。
+        agent.record({"role": "user", "content": user_message, "created_at": now(), "pending": True})
 
         task_state = TaskState.create(run_id=agent.new_run_id(), task_id=agent.new_task_id(), user_request=user_message)
         task_state.resume_status = agent.resume_state.get("status", CHECKPOINT_NONE_STATUS)

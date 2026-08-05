@@ -302,6 +302,19 @@ class Moss:
         prompt, _ = self._build_prompt_and_metadata(user_message)
         return prompt
 
+    def clear_pending_history(self):
+        """去掉历史里的 pending 标记。
+
+        pending 的含义是"这条内容已经在本轮 prompt 的别处出现过了"，
+        只对当前这一次运行成立；运行结束后它就是普通历史。
+        """
+        changed = False
+        for item in self.session.get("history", []):
+            if item.pop("pending", None):
+                changed = True
+        if changed:
+            self.session_path = self.session_store.save(self.session)
+
     def record(self, item):
         # session 会进入下一轮 prompt，也会长期落盘；这里必须和 trace/report
         # 一样先过脱敏边界，避免一次工具输出把 secret 带进可恢复上下文。

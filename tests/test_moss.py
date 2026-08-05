@@ -2226,3 +2226,28 @@ def test_nearest_agents_doc_is_injected_once_after_touching_that_directory(tmp_p
     # 根目录那份被就近的覆盖了，要留痕，否则"为什么这条规则没生效"没法查。
     assert conflicts and conflicts[0]["winner"] == "pkg/AGENTS.md"
     assert conflicts[0]["shadowed"] == ["AGENTS.md"]
+
+
+def test_first_turn_prompt_contains_the_user_request_only_once(tmp_path):
+    """用户消息每轮都会渲染成 Current user request，历史里再来一份就是说两遍。"""
+    agent = build_agent(tmp_path, ["<final>Done.</final>"])
+    marker = "please refactor the parser"
+
+    prompt = agent.prompt(marker)
+
+    assert prompt.count(marker) == 1
+
+
+def test_pending_user_message_rejoins_history_on_the_next_run(tmp_path):
+    agent = build_agent(
+        tmp_path,
+        ["<final>First.</final>", "<final>Second.</final>"],
+    )
+
+    assert agent.ask("first request") == "First."
+    assert agent.ask("second request") == "Second."
+
+    # 第一轮的用户消息在第二轮里应当以普通历史身份出现。
+    assert not any(item.get("pending") for item in agent.session["history"])
+    prompt = agent.prompt("third request")
+    assert "first request" in prompt

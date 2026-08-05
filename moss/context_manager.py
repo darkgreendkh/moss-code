@@ -239,7 +239,7 @@ class ContextManager:
         else:
             relevant_lines.append("- none")
         relevant_raw = "\n".join(relevant_lines)
-        history = list(getattr(self.agent, "session", {}).get("history", []))
+        history = self._history_entries()
         history_raw = self._raw_history_text(history)
         return {
             "prefix": SectionRender(raw=section_texts["prefix"], budget=len(section_texts["prefix"]), rendered=section_texts["prefix"], details={}),
@@ -363,7 +363,7 @@ class ContextManager:
         return self._render_history_section(budget).rendered
 
     def _render_history_section(self, budget):
-        history = list(getattr(self.agent, "session", {}).get("history", []))
+        history = self._history_entries()
         raw = self._raw_history_text(history)
         if not history:
             rendered = "Transcript:\n- empty"
@@ -498,6 +498,16 @@ class ContextManager:
         signal_lines = [line for line in lines if _is_shell_signal_line(line)]
         chosen = signal_lines[:3] if signal_lines else lines[:3]
         return " | ".join(chosen)
+
+    def _history_entries(self):
+        """取进 prompt 的历史条目，跳过 pending 的那些。
+
+        pending 标记的是"本轮 prompt 别处已经渲染过"的内容——目前只有当前
+        用户请求（它每轮都作为 `Current user request` 出现）。不跳过的话，
+        同一句话会在 Transcript 和 Current user request 里各出现一次。
+        """
+        history = list(getattr(self.agent, "session", {}).get("history", []))
+        return [item for item in history if not item.get("pending")]
 
     def _raw_history_text(self, history):
         if not history:
