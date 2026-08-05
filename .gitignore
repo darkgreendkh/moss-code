@@ -48,6 +48,12 @@ docs/面试话术/
 !docs/review-pack/README.md
 !docs/architecture/
 !docs/architecture/agent-harness-v1-overview.md
+!docs/optimize/
+!docs/optimize/*.md
+!docs/optimize_v2/
+!docs/optimize_v2/*.md
+!docs/specs/
+!docs/specs/*.md
 
 # OS files
 .DS_Store
