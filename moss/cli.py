@@ -17,6 +17,7 @@ from .providers.clients import AnthropicCompatibleModelClient, OllamaModelClient
 from .runtime import Moss, SessionStore
 from .token_budget import middle
 from . import policy as policylib
+from . import sandbox as sandboxlib
 from .workspace import WorkspaceContext
 
 DEFAULT_SECRET_ENV_NAMES = (
@@ -390,6 +391,9 @@ def build_agent(args):
         allow=policylib.parse_capability_rules(getattr(args, "allow_rules", [])),
         deny=policylib.parse_capability_rules(getattr(args, "deny_rules", [])),
     )
+    allowed_network_hosts = tuple(
+        host.strip() for host in str(getattr(args, "allowed_network_hosts", "") or "").split(",") if host.strip()
+    )
     run_budget_limits = {
         "max_input_tokens": getattr(args, "max_input_tokens", None),
         "max_output_tokens": getattr(args, "max_output_tokens", None),
@@ -418,6 +422,8 @@ def build_agent(args):
             verify_before_final=getattr(args, "verify_before_final", "on") == "on",
             injection_scan=getattr(args, "injection_scan", "on") == "on",
             policy=policy,
+            sandbox=getattr(args, "sandbox", "auto"),
+            allowed_network_hosts=allowed_network_hosts,
         )
     return Moss(
         model_client=model,
@@ -432,6 +438,8 @@ def build_agent(args):
         verify_before_final=getattr(args, "verify_before_final", "on") == "on",
         injection_scan=getattr(args, "injection_scan", "on") == "on",
         policy=policy,
+        sandbox=getattr(args, "sandbox", "auto"),
+        allowed_network_hosts=allowed_network_hosts,
     )
 
 
@@ -467,6 +475,18 @@ def build_arg_parser():
         help="Extra environment variable names to treat as secrets for trace/report redaction.",
     )
     parser.add_argument("--max-steps", type=int, default=25, help="Maximum tool/model iterations per request.")
+    parser.add_argument(
+        "--sandbox",
+        choices=sandboxlib.SANDBOX_MODES,
+        default="auto",
+        help="Isolation layer for run_shell. auto uses whatever the platform supports; degradation is reported.",
+    )
+    parser.add_argument(
+        "--allow-network",
+        dest="allowed_network_hosts",
+        default="",
+        help="Comma-separated host allowlist for network commands. Empty means no host filtering.",
+    )
     parser.add_argument(
         "--allow",
         dest="allow_rules",

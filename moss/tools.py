@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 from functools import partial
 
+from . import sandbox
 from . import shell_policy
 from .workspace import IGNORED_PATH_NAMES
 
@@ -477,8 +478,10 @@ def tool_run_shell(context, args):
     timeout = int(args.get("timeout", 60))
     if timeout < 1 or timeout > 600:
         raise ValueError("timeout must be in [1, 600]")
+    plan = getattr(context, "sandbox_plan", None)
+    wrapped = sandbox.wrap_command(command, plan, workspace=context.root) if plan is not None else None
     returncode, stdout, stderr = run_shell_command(
-        command,
+        wrapped or command,
         cwd=context.root,
         timeout=timeout,
         # 这里传入的是过滤后的环境变量，而不是直接继承整个父 shell 环境，
@@ -528,15 +531,15 @@ def run_shell_command(command, *, cwd, timeout, env, cancel_token=None, poll_int
 
     自己轮询而不是直接用 `subprocess.run(timeout=...)`：那样拿不到取消信号，
     用户 Ctrl-C 之后命令还会继续跑到超时为止。
+    command 可以是字符串（走 shell）或 argv 列表（沙箱包裹后的形式）。
     """
-    popen_kwargs = {}
+    popen_kwargs = {"shell": isinstance(command, str)}
     if hasattr(os, "setsid"):
         # 独立进程组，超时/取消时才能整组杀干净。
         popen_kwargs["start_new_session"] = True
     process = subprocess.Popen(  # noqa: S602 - shell=True 是这个工具的语义本身
         command,
         cwd=cwd,
-        shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

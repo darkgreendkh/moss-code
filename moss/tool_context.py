@@ -20,6 +20,8 @@ class ToolContext:
     # 计划写入回调。计划属于运行时状态（要进 task_state 和 prompt），
     # 而工具函数只认识 ToolContext，所以用回调把写入权交给 runtime。
     plan_writer: Callable[[list], None] = None
+    # 沙箱计划。None 表示不包裹，行为与加沙箱前一致。
+    sandbox_plan: object = None
 
     def path(self, raw_path):
         return self.path_resolver(str(raw_path))

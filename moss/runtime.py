@@ -30,6 +30,7 @@ from . import ignore as ignorelib
 from . import repo_map as repo_maplib
 from . import budget as budgetlib
 from . import policy as policylib
+from . import sandbox as sandboxlib
 from . import stall as stalllib
 from .verification import is_verification_command
 from . import trace_events
@@ -87,6 +88,8 @@ class Moss:
         verify_before_final=True,
         injection_scan=True,
         policy=None,
+        sandbox="auto",
+        allowed_network_hosts=None,
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -109,6 +112,10 @@ class Moss:
         # 注入扫描。命中后本 run 剩余的 risky 工具强制走审批。
         self.injection_scan = bool(injection_scan)
         self.injection_findings = []
+        # L1 沙箱：网络类命令即使 --approval auto 也要问一次；
+        # 给了白名单就只放行名单内的域名。
+        self.allowed_network_hosts = tuple(allowed_network_hosts or ())
+        self.sandbox_plan = sandboxlib.announce(sandboxlib.detect(sandbox))
         # 审批决定的记忆：{(工具, 风险, 路径桶): 是否允许}。刻意只存在内存里，
         # 会话结束即失效——落盘的"上次批过"会变成永久后门。
         self._approval_memory = {}
@@ -789,6 +796,9 @@ class Moss:
             "durable_rejections": list(self.last_durable_rejections),
             "durable_superseded": list(self.last_durable_superseded),
             "usage": self.last_run_budget.snapshot() if self.last_run_budget else {},
+            # 沙箱状态进 report：降级必须看得见，评测口径也要能区分。
+            "sandbox": self.sandbox_plan.to_dict(),
+            "snapshot_strategy": self.snapshot_strategy(),
             "redacted_env": self.detected_secret_env_summary(),
         }
 
@@ -810,6 +820,7 @@ class Moss:
             skills_provider=lambda: self.skills,
             cancel_token=self.cancel_token,
             plan_writer=self.set_plan,
+            sandbox_plan=self.sandbox_plan,
         )
 
     def delegate_session_store(self):
@@ -890,6 +901,11 @@ class Moss:
 
         return deprecated_runner
 
+    def _is_network_command(self, name, args):
+        if name != "run_shell":
+            return False
+        return toolkit.classify_shell_command((args or {}).get("command", "")).level == "network"
+
     def flag_injection_suspected(self, finding):
         """记下一次注入嫌疑，并让本 run 剩余的 risky 工具强制走审批。
 
@@ -903,9 +919,25 @@ class Moss:
     def injection_suspected(self):
         return bool(self.injection_findings)
 
+    def network_hosts_refused(self, name, args):
+        """给了网络白名单时，命令里出现的域名必须在名单内。"""
+        if name != "run_shell" or not self.allowed_network_hosts:
+            return ()
+        hosts = toolkit.shell_policy.extract_hosts((args or {}).get("command", ""))
+        return tuple(
+            host for host in hosts if not toolkit.shell_policy.host_allowed(host, self.allowed_network_hosts)
+        )
+
     def approve(self, name, args):
         if self.read_only:
             return False
+        refused = self.network_hosts_refused(name, args)
+        if refused:
+            return False
+        if self.approval_policy == "auto" and self._is_network_command(name, args):
+            # 网络类命令即使在 --approval auto 下也要问一次：它把数据送出去，
+            # 是唯一一类"做错了收不回来"的操作。
+            return self._ask_for_approval(name, args)
         if self.approval_policy == "auto" and self.injection_suspected:
             # 本 run 里出现过注入嫌疑：即使 --approval auto 也要问一次。
             return self._ask_for_approval(name, args)

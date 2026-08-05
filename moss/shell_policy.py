@@ -390,6 +390,31 @@ def classify_shell_command(command):
     )
 
 
+# 从 argv 里能认出的域名/主机形状。`curl $URL` 这类拿不到——那种命令已经因为
+# 命令替换被判成 undecidable + high，正好由审批和沙箱兜底。
+_HOST_PATTERN = re.compile(r"(?:https?://)?([A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,})(?:[:/]|$)")
+
+
+def extract_hosts(command):
+    """从命令里抽出字面量域名，用于网络白名单判定。"""
+    hosts = []
+    for match in _HOST_PATTERN.finditer(str(command or "")):
+        host = match.group(1).lower().rstrip(".")
+        if host not in hosts:
+            hosts.append(host)
+    return tuple(hosts)
+
+
+def host_allowed(host, allowlist):
+    """域名白名单：精确匹配或子域匹配。"""
+    host = str(host).lower()
+    for allowed in allowlist:
+        allowed = str(allowed).lower().lstrip(".")
+        if host == allowed or host.endswith("." + allowed):
+            return True
+    return False
+
+
 def classify_shell_command_level(command):
     """过渡函数：只要等级字符串。"""
     return classify_shell_command(command).level
