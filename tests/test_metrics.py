@@ -6,11 +6,66 @@ from unittest.mock import patch
 
 from moss.evaluation.metrics import (
     _provider_profile,
+    aggregate_run_artifacts,
+    render_resume_metrics_markdown,
     run_context_ablation_v2,
     run_memory_ablation_v2,
     run_recovery_ablation_v2,
     write_benchmark_core_report,
 )
+
+
+def test_cache_metrics_remain_unavailable_when_provider_reports_no_cache_fields(tmp_path):
+    run_dir = tmp_path / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "report.json").write_text(
+        '{"prompt_metadata":{"input_tokens":100,"output_tokens":10,"cache_metrics_available":false}}',
+        encoding="utf-8",
+    )
+
+    metrics = aggregate_run_artifacts(tmp_path / "runs")
+
+    assert metrics["cache_metrics_available"] is False
+    assert metrics["cache_hit_rate"] is None
+
+
+def test_resume_report_renders_unavailable_cache_rate_as_text():
+    metrics = {
+        "experiment_mode": "synthetic",
+        "facts": {"model_backend_count": 1, "tool_count": 8},
+        "benchmark": {"task_count": 1, "pass_rate": 1.0},
+        "runs": {
+            "run_count": 1,
+            "avg_tool_steps": 0.0,
+            "avg_attempts": 1.0,
+            "cache_hit_rate": None,
+            "cache_metrics_available": False,
+        },
+        "stress_ablation": {
+            "full": {"prompt_chars": 10},
+            "no_context_reduction": {"prompt_chars": 20},
+        },
+        "memory_experiment": {
+            "memory_on": {"repeated_reads": 0},
+            "memory_off": {"repeated_reads": 1},
+        },
+        "memory_large_experiment": {
+            "task_count": 1,
+            "variants": {
+                "memory_on": {"repeated_reads": 0},
+                "memory_off": {"repeated_reads": 1},
+            },
+        },
+        "context_experiment": {"config_count": 1},
+        "security_experiment": {"scenario_count": 1},
+        "provider_experiments": {"providers": []},
+        "resume_highlights": [],
+    }
+
+    report = render_resume_metrics_markdown(metrics)
+
+    assert "Cache hit rate: not available" in report
+    assert "Cache hit rate: 0.00%" not in report
 
 
 def test_evaluation_script_help_entrypoints_import_from_real_package_path():

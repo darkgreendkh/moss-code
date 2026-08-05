@@ -171,7 +171,7 @@ class AgentLoop:
             )
             prompt_cache_key = None
             prompt_cache_retention = None
-            if getattr(agent.model_client, "supports_prompt_cache", False):
+            if agent.feature_enabled("prompt_cache") and getattr(agent.model_client, "supports_prompt_cache", False):
                 # 只有后端明确支持时，才把稳定前缀的 hash 作为 cache key 发出去。
                 prompt_cache_key = prompt_metadata.get("prompt_cache_key")
                 prompt_cache_retention = "in_memory"

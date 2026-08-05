@@ -261,20 +261,44 @@ def _extract_openai_response_from_sse(body_text):
     return "", {}
 
 
-def _extract_usage_cache_details(data):
-    # 把不同 OpenAI-compatible 返回里的 usage 字段整理成统一结构，
-    # 让 runtime/trace/report 不需要关心 provider 细节。
+def parse_openai_usage(data):
+    """把 OpenAI usage 归一成 runtime 唯一认的一种缓存统计形状。"""
     usage = data.get("usage") or {}
     input_tokens = usage.get("input_tokens", usage.get("prompt_tokens"))
     output_tokens = usage.get("output_tokens", usage.get("completion_tokens"))
     input_details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details") or {}
     cached_tokens = int(input_details.get("cached_tokens") or 0)
+    cache_metrics_available = "cached_tokens" in input_details
     return {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": usage.get("total_tokens"),
+        "cache_read_tokens": cached_tokens,
+        "cache_write_tokens": 0,
+        "cache_metrics_available": cache_metrics_available,
+        # 兼容旧 report/评测字段；新代码统一读 cache_read_tokens。
         "cached_tokens": cached_tokens,
         "cache_hit": cached_tokens > 0,
+    }
+
+
+def parse_anthropic_usage(data):
+    """解析 Anthropic `/messages` usage，缺缓存字段时明确标成不可用。"""
+    usage = data.get("usage") or {}
+    cache_read_tokens = int(usage.get("cache_read_input_tokens") or 0)
+    cache_write_tokens = int(usage.get("cache_creation_input_tokens") or 0)
+    cache_metrics_available = (
+        "cache_read_input_tokens" in usage or "cache_creation_input_tokens" in usage
+    )
+    return {
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "total_tokens": usage.get("total_tokens"),
+        "cache_read_tokens": cache_read_tokens,
+        "cache_write_tokens": cache_write_tokens,
+        "cache_metrics_available": cache_metrics_available,
+        "cached_tokens": cache_read_tokens,
+        "cache_hit": cache_read_tokens > 0,
     }
 
 
@@ -386,7 +410,7 @@ class OpenAICompatibleModelClient:
                     "prompt_cache_supported": self.supports_prompt_cache,
                     "prompt_cache_key": prompt_cache_key,
                     "prompt_cache_retention": prompt_cache_retention,
-                    **_extract_usage_cache_details(response_data),
+                    **parse_openai_usage(response_data),
                 }
             if text:
                 return text
@@ -404,7 +428,7 @@ class OpenAICompatibleModelClient:
             "prompt_cache_supported": self.supports_prompt_cache,
             "prompt_cache_key": prompt_cache_key,
             "prompt_cache_retention": prompt_cache_retention,
-            **_extract_usage_cache_details(data),
+            **parse_openai_usage(data),
         }
         return _extract_openai_text(data)
 
@@ -507,6 +531,10 @@ class AnthropicCompatibleModelClient:
             ) from exc
         if data.get("error"):
             raise RuntimeError(f"Anthropic-compatible error: {data['error']}")
+        self.last_completion_metadata = {
+            "prompt_cache_supported": self.supports_prompt_cache,
+            **parse_anthropic_usage(data),
+        }
         text = _extract_anthropic_text(data)
         if text:
             return text

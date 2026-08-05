@@ -31,6 +31,16 @@ def _safe_ratio(numerator, denominator):
     return numerator / denominator
 
 
+def _cache_metrics_available(metadata):
+    return bool(metadata.get("cache_metrics_available", False))
+
+
+def _format_cache_hit_rate(summary):
+    if not summary.get("cache_metrics_available", False):
+        return "not available"
+    return f"{float(summary.get('cache_hit_rate', 0.0)):.2%}"
+
+
 def _parse_iso8601(value):
     if not value:
         return None
@@ -123,9 +133,18 @@ def aggregate_run_artifacts(runs_root):
     tool_steps = [int(report.get("tool_steps", 0)) for report in reports]
     attempts = [int(report.get("attempts", 0)) for report in reports]
     prompt_chars = [int((report.get("prompt_metadata") or {}).get("prompt_chars", 0)) for report in reports]
-    cached_tokens = [int((report.get("prompt_metadata") or {}).get("cached_tokens", 0) or 0) for report in reports]
-    cache_hits = [bool((report.get("prompt_metadata") or {}).get("cache_hit")) for report in reports]
-    input_tokens = [int((report.get("prompt_metadata") or {}).get("input_tokens", 0) or 0) for report in reports]
+    cache_metadata = [
+        report.get("prompt_metadata") or {}
+        for report in reports
+        if _cache_metrics_available(report.get("prompt_metadata") or {})
+    ]
+    cached_tokens = [
+        int(metadata.get("cache_read_tokens", metadata.get("cached_tokens", 0)) or 0)
+        for metadata in cache_metadata
+    ]
+    cache_hits = [bool(metadata.get("cache_hit")) for metadata in cache_metadata]
+    input_tokens = [int(metadata.get("input_tokens", 0) or 0) for metadata in cache_metadata]
+    cache_available = bool(cache_metadata)
     prefix_reused = [
         not bool((report.get("prompt_metadata") or {}).get("prefix_changed"))
         for report in reports
@@ -141,8 +160,9 @@ def aggregate_run_artifacts(runs_root):
         "avg_tool_steps": _safe_mean(tool_steps),
         "avg_attempts": _safe_mean(attempts),
         "avg_prompt_chars": _safe_mean(prompt_chars),
-        "cache_hit_rate": _safe_ratio(sum(1 for hit in cache_hits if hit), len(cache_hits)),
-        "cached_token_ratio": _safe_ratio(sum(cached_tokens), sum(input_tokens)),
+        "cache_metrics_available": cache_available,
+        "cache_hit_rate": _safe_ratio(sum(1 for hit in cache_hits if hit), len(cache_hits)) if cache_available else None,
+        "cached_token_ratio": _safe_ratio(sum(cached_tokens), sum(input_tokens)) if cache_available else None,
         "avg_cached_tokens": _safe_mean(cached_tokens),
         "prefix_reuse_rate": _safe_ratio(sum(1 for reused in prefix_reused if reused), len(prefix_reused)),
         "tool_status_counts": tool_status_counts,
@@ -660,8 +680,11 @@ def _provider_summary_from_artifact(payload):
     for row in rows:
         report = row.get("report", {})
         prompt_metadata = report.get("prompt_metadata", {})
-        cached_tokens.append(int(prompt_metadata.get("cached_tokens", 0) or 0))
-        cache_hits.append(bool(prompt_metadata.get("cache_hit")))
+        if _cache_metrics_available(prompt_metadata):
+            cached_tokens.append(
+                int(prompt_metadata.get("cache_read_tokens", prompt_metadata.get("cached_tokens", 0)) or 0)
+            )
+            cache_hits.append(bool(prompt_metadata.get("cache_hit")))
         tool_steps.append(int(row.get("tool_steps", 0)))
         attempts.append(int(row.get("attempts", 0)))
     summary = payload.get("summary", {})
@@ -671,7 +694,8 @@ def _provider_summary_from_artifact(payload):
         "pass_rate": float(summary.get("pass_rate", 0.0)),
         "avg_tool_steps": _safe_mean(tool_steps),
         "avg_attempts": _safe_mean(attempts),
-        "cache_hit_rate": _safe_ratio(sum(1 for hit in cache_hits if hit), len(cache_hits)),
+        "cache_metrics_available": bool(cache_hits),
+        "cache_hit_rate": _safe_ratio(sum(1 for hit in cache_hits if hit), len(cache_hits)) if cache_hits else None,
         "avg_cached_tokens": _safe_mean(cached_tokens),
         "artifact_path": payload.get("_artifact_path", ""),
     }
@@ -1125,7 +1149,7 @@ def collect_resume_metrics(
         "resume_highlights": [
             f"Built a fixed benchmark harness with {benchmark['task_count']} tasks and automated pass/fail, verifier, and budget summaries.",
             f"Recorded 3 run artifacts per execution and structured runtime metadata across {runs['run_count']} aggregated runs.",
-            f"Observed prompt-cache telemetry with average cached tokens of {runs['avg_cached_tokens']:.1f} and cache-hit rate of {runs['cache_hit_rate']:.2%} when available.",
+            f"Observed prompt-cache telemetry with average cached tokens of {runs['avg_cached_tokens']:.1f} and cache-hit rate of {_format_cache_hit_rate(runs)}.",
             (
                 f"In a real-model long-context experiment ({real_provider}), context reduction shrank average prompt size from "
                 f"{stress['no_context_reduction']['prompt_chars']} to {stress['full']['prompt_chars']} chars."
@@ -1159,7 +1183,7 @@ def render_resume_metrics_markdown(metrics):
         f"- Aggregated runs: {runs['run_count']}",
         f"- Average tool steps per run: {runs['avg_tool_steps']:.2f}",
         f"- Average attempts per run: {runs['avg_attempts']:.2f}",
-        f"- Cache hit rate: {runs['cache_hit_rate']:.2%}",
+        f"- Cache hit rate: {_format_cache_hit_rate(runs)}",
         (
             f"- Real-model prompt chars (full vs no context reduction): {stress['full']['prompt_chars']} / {stress['no_context_reduction']['prompt_chars']}"
             if metrics.get("experiment_mode") == "real"
@@ -1179,7 +1203,7 @@ def render_resume_metrics_markdown(metrics):
         for provider in providers:
             if provider.get("status") == "completed":
                 lines.append(
-                    f"- {provider['provider']}: pass_rate={provider['pass_rate']:.2%}, avg_attempts={provider['avg_attempts']:.2f}, avg_tool_steps={provider['avg_tool_steps']:.2f}, cache_hit_rate={provider['cache_hit_rate']:.2%}"
+                    f"- {provider['provider']}: pass_rate={provider['pass_rate']:.2%}, avg_attempts={provider['avg_attempts']:.2f}, avg_tool_steps={provider['avg_tool_steps']:.2f}, cache_hit_rate={_format_cache_hit_rate(provider)}"
                 )
             else:
                 lines.append(f"- {provider['provider']}: {provider['status']} ({provider.get('reason', 'unknown')})")
@@ -1239,7 +1263,7 @@ def render_large_scale_experiment_report(metrics):
         for provider in providers:
             if provider.get("status") == "completed":
                 lines.append(
-                    f"- {provider['provider']}: pass_rate={provider['pass_rate']:.2%}, avg_attempts={provider['avg_attempts']:.2f}, avg_tool_steps={provider['avg_tool_steps']:.2f}, cache_hit_rate={provider['cache_hit_rate']:.2%}"
+                    f"- {provider['provider']}: pass_rate={provider['pass_rate']:.2%}, avg_attempts={provider['avg_attempts']:.2f}, avg_tool_steps={provider['avg_tool_steps']:.2f}, cache_hit_rate={_format_cache_hit_rate(provider)}"
                 )
             else:
                 lines.append(f"- {provider['provider']}: {provider['status']} ({provider.get('reason', 'unknown')})")
