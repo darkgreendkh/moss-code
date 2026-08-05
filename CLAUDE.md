@@ -46,7 +46,11 @@ cli.py (装配/REPL/进度渲染)
   **安全判定（路径锚定）不依赖它**，只用来少扫/少展示
 - `repo_map.py`：目录骨架 + 符号索引（Python 走 stdlib `ast`，其它语言走行首前缀），
   缓存在 `.moss/cache/repo_map.json`；`rank_relevant_files` 给出每轮的 `Likely relevant files` 起点锚
-- `trace_events.py`：trace 事件名常量（`instruction_loaded` / `instruction_conflict` / `repo_map_built` / `anchor_miss`）
+- `trace_events.py`：trace 事件名常量（就近文档、repo map、批执行、计划、停滞、预算、中断）
+- `stall.py`：四类停滞检测（`repeat_exact` / `ab_loop` / `no_progress` / `error_storm`），命中后注入**结构化**干预而不是拒绝执行
+- `budget.py`：`RunBudget` 多维预算（步数 / token / 时间 / 金额），软阈值 80% 提醒收敛、硬阈值不再调模型直接优雅收尾。
+  `usd=None` 表示"不知道价格"，**绝不能当成 0**
+- `verification.py`：判断一次 `run_shell` 算不算"跑过验证"。收尾自检和评测的 `unverified_edit_rate` 必须共用它
 - `token_budget.py`：token 估算与全部文本裁剪（`clip_to_budget` 按预算二分；`clip`/`middle` 硬切片，`MAX_TOOL_OUTPUT=16000`、`MAX_HISTORY=32000`）；`clock.py`：统一 UTC 时间戳 `now()`
 - `output_parser.py`：模型输出 → `("tool"|"final"|"retry", payload)` 的纯函数解析层
 - `prompt_prefix.py`：稳定前缀构建。**prompt cache key 用 `stable_hash`（只覆盖身份/规则/Tools/Skills 段），不用整段 hash**——否则 agent 自己写文件会导致 workspace 段变化、缓存键每轮抖动
@@ -63,12 +67,16 @@ cli.py (装配/REPL/进度渲染)
 
 1. **持久化必须原子写**：先写同目录临时文件再 `os.replace`（见 `SessionStore.save` / `RunStore._write_json_atomic`）。session 每次 record 都整份重写，非原子写会在断电/Ctrl-C 时丢整个会话。
 2. **CLI 输出契约**：最终答案走 stdout（可管道），进度/警告/错误走 stderr。进度通过 `agent.progress_observer` 钩子（`emit_progress`），observer 异常必须被吞掉，绝不影响控制流。
-3. **错误收敛，不裸抛**：模型后端异常由 `AgentLoop._finish_model_error` 收敛为已收尾的失败运行（task_state=failed / stop_reason=model_error，trace+report 齐全），并对错误信息脱敏。one-shot 模式下失败必须非零退出（CI 依赖这个）。`KeyboardInterrupt` 继承 BaseException 不会被捕获——REPL 里 Ctrl-C 只取消当前轮。
-4. **所有落盘/展示的文本先过脱敏**：`redact_artifact` / `redact_text`，secret 名单来自 `DEFAULT_SECRET_ENV_NAMES` + `MOSS_SECRET_ENV_NAMES` + `--secret-env-name`。
-5. **路径锚定**：所有文件类工具经 `Moss.path()`，resolve 后必须在 workspace root 之下（防 `../` 和符号链接逃逸）。遍历工作区时不跟随符号链接目录（防死循环）。
-6. **工具是显式注册的白名单**（`BASE_TOOL_SPECS`），risky 工具走审批（`ask`/`auto`/`never`）；审批提示只展示摘要（`tool_executor.approval_summary`：写文件类展示脱敏 diff、shell 展示风险分级），不 dump 完整 args。
-7. **快照 diff 用 `(mtime_ns, size)`**，不做内容 hash——risky 工具每次调用前后各扫一遍工作区，性能敏感。已知盲区：walk 策略下同尺寸覆盖写 + mtime 还原判不出来（git 策略靠变更集兜底），chmod 也不可见。
-8. **注释风格**：中文、解释"为什么存在/在链路里的位置"，新代码保持一致。
+3. **一轮可以有多个动作**：`parse_model_actions` 按出现位置解析多个 `<tool>` 块，`final` 之后的一律丢弃（记 `batch_truncated`）。
+   **顺序不变量**：写回 history/trace 的顺序恒等于 `Action.index`，不是完成顺序——录制回放依赖这条。
+   只读工具批可并发（`--parallel-tools`，默认 off），并发阶段只做纯执行，memory/record/trace 回主线程按序补做。
+4. **错误收敛，不裸抛**：模型后端异常由 `AgentLoop._finish_model_error` 收敛为已收尾的失败运行（task_state=failed / stop_reason=model_error，trace+report 齐全），并对错误信息脱敏。one-shot 模式下失败必须非零退出（CI 依赖这个）。`KeyboardInterrupt` 继承 BaseException 不会被捕获——REPL 里 Ctrl-C 只取消当前轮。
+5. **所有落盘/展示的文本先过脱敏**：`redact_artifact` / `redact_text`，secret 名单来自 `DEFAULT_SECRET_ENV_NAMES` + `MOSS_SECRET_ENV_NAMES` + `--secret-env-name`。
+6. **路径锚定**：所有文件类工具经 `Moss.path()`，resolve 后必须在 workspace root 之下（防 `../` 和符号链接逃逸）。遍历工作区时不跟随符号链接目录（防死循环）。
+7. **工具是显式注册的白名单**（`BASE_TOOL_SPECS`），risky 工具走审批（`ask`/`auto`/`never`）；审批提示只展示摘要（`tool_executor.approval_summary`：写文件类展示脱敏 diff、shell 展示风险分级），不 dump 完整 args。
+8. **快照 diff 用 `(mtime_ns, size)`**，不做内容 hash——risky 工具每次调用前后各扫一遍工作区，性能敏感。已知盲区：walk 策略下同尺寸覆盖写 + mtime 还原判不出来（git 策略靠变更集兜底），chmod 也不可见。
+9. **中断也要留全工件**：`AgentLoop.run` 外层 `except BaseException` 只做收尾（`stop_reason=interrupted` + trace + report）然后**必然重新抛出**；收尾函数自己绝不抛异常。
+10. **注释风格**：中文、解释"为什么存在/在链路里的位置"，新代码保持一致。
 
 ## 配置
 
@@ -84,6 +92,8 @@ cli.py (装配/REPL/进度渲染)
 | ollama | `qwen3:8b` | Ollama `/api/generate` |
 
 仓库上下文相关的开关（见 `.env.example`）：`MOSS_REPO_MAP`（默认 on，一键回退）、`MOSS_REPO_MAP_BUDGET`（默认 800 token）、`MOSS_SNAPSHOT_STRATEGY`（`git`/`walk`/`auto`，默认 auto）、`MOSS_SNAPSHOT_EXCLUDE`（逗号分隔 glob）。
+
+主循环开关：`--parallel-tools`（默认 off）、`--verify-before-final`（默认 on）、`--max-input-tokens` / `--max-output-tokens` / `--max-seconds` / `--max-usd`（默认全 None，不设即老行为）。
 
 CLI 默认：`--max-steps 25`、`--max-new-tokens 4096`、`--approval ask`。ContextManager 预算以**估算 token** 为单位（见 `token_budget.py`，CJK 约 1 char/token、拉丁约 4 chars/token；测试可注入 `measure=len` 走字符级以稳定断言）：总预算 12000 token（section 预算 prefix 3000 / memory 1000 / relevant 800 / history 6000）。
 
