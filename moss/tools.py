@@ -48,7 +48,16 @@ class ToolSpec:
     path_scope: str = "workspace"
 
 
+# O_NOFOLLOW 在 Windows 上不存在。降级必须显式：进 metadata 供 report 记录，
+# 而不是假装这层防护存在。
+NOFOLLOW_SUPPORTED = hasattr(os, "O_NOFOLLOW")
+
+
 def write_text_atomic(path, content):
+    # 不允许写穿软链：审批之后目标被换成指向仓库外的软链，写入就落到了别处。
+    # 原子替换本身会替掉软链而不是跟随它，但先显式拒绝能让这次尝试留下痕迹。
+    if path.is_symlink():
+        raise ValueError(f"refusing to write through a symlink: {path.name}")
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_name = ""
     try:

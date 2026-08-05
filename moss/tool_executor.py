@@ -1,10 +1,12 @@
 """Structured tool execution for the agent runtime."""
 
 import difflib
+import hashlib
 import json
 import re
 from dataclasses import dataclass
 
+from .clock import now
 from .injection import scan as scan_for_injection
 from .token_budget import clip
 from .tools import ToolRunOutput, classify_shell_command
@@ -38,6 +40,23 @@ _SHELL_RISK_LEVELS = {
 class ToolExecutionResult:
     content: str
     metadata: dict
+
+
+@dataclass(frozen=True)
+class ApprovalReceipt:
+    """用户批准的到底是"哪一次改动"。
+
+    为什么需要它：审批展示的是**当时**的 diff，而执行发生在之后。中间文件被换掉
+    （被另一个进程改写、被换成软链）的话，用户批的和实际执行的就不是一回事了。
+    回执把审批那一刻的文件内容指纹记下来，执行前再核一次对不对得上。
+    """
+
+    tool: str
+    resolved_paths: tuple = ()
+    expected_sha256: dict = None      # path -> sha256；None 表示当时文件不存在
+    diff_digest: str = ""
+    approved_at: str = ""
+    scope: str = "once"
 
 
 def _metadata(
@@ -95,6 +114,50 @@ def _scan_result_for_injection(agent, name, args, content):
         return None
     source = f"{name}:{str((args or {}).get('path', '') or (args or {}).get('command', ''))[:60]}"
     return scan_for_injection(content, source=source)
+
+
+def _file_sha256(path):
+    """文件内容指纹；文件不存在返回 None（和"空文件"是两回事）。"""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except (OSError, ValueError):
+        return None
+
+
+def _build_receipt(agent, name, args):
+    """在**展示审批之前**拍下目标文件的状态。"""
+    if name not in {"write_file", "edit_file"}:
+        return None
+    raw_path = str((args or {}).get("path", "")).strip()
+    if not raw_path:
+        return None
+    try:
+        path = agent.path(raw_path)
+        rel_path = path.relative_to(agent.root).as_posix()
+    except Exception:
+        return None
+    preview = file_change_preview(agent, name, args)
+    return ApprovalReceipt(
+        tool=name,
+        resolved_paths=(rel_path,),
+        expected_sha256={rel_path: _file_sha256(path)},
+        diff_digest=hashlib.sha256(preview.encode("utf-8")).hexdigest(),
+        approved_at=now(),
+    )
+
+
+def _stale_preconditions(agent, receipt):
+    """执行前重新核对回执。返回不一致的说明，一致则返回空串。"""
+    if receipt is None:
+        return ""
+    for rel_path, expected in (receipt.expected_sha256 or {}).items():
+        path = agent.root / rel_path
+        if path.is_symlink():
+            # 审批之后目标被换成软链：写入会落到软链指向的地方。
+            return f"{rel_path} is now a symlink"
+        if _file_sha256(path) != expected:
+            return f"{rel_path} changed on disk"
+    return ""
 
 
 def _policy_decision(agent, tool, name, args):
@@ -311,6 +374,7 @@ class ToolExecutor:
                 ),
             )
 
+        receipt = _build_receipt(agent, name, args) if tool["risky"] else None
         if tool["risky"] and not agent.approve(name, args):
             return ToolExecutionResult(
                 content=f"error: approval denied for {name}",
@@ -318,6 +382,22 @@ class ToolExecutor:
                     "rejected",
                     tool_error_code="approval_denied",
                     security_event_type="read_only_block" if agent.read_only else "approval_denied",
+                    risk_level=_risk_level_for(tool, name, args),
+                    read_only=_read_only_for(tool, name, args),
+                    extra=_extra_metadata_for(name, args),
+                ),
+            )
+
+        stale = _stale_preconditions(agent, receipt)
+        if stale:
+            # 审批之后、执行之前文件被换掉了。这正是 TOCTOU 的形状：
+            # 用户批的是当时那份 diff，不是现在这份内容。
+            return ToolExecutionResult(
+                content=f"error: {name} preconditions changed after approval: {stale}; re-request approval",
+                metadata=_metadata(
+                    "rejected",
+                    tool_error_code="precondition_failed",
+                    security_event_type="precondition_failed",
                     risk_level=_risk_level_for(tool, name, args),
                     read_only=_read_only_for(tool, name, args),
                     extra=_extra_metadata_for(name, args),
