@@ -69,8 +69,8 @@ def test_episodic_notes_append_and_retrieve_deterministically():
 
     lines = [line for line in memory.retrieval_view("recall memory", limit=4).splitlines() if line.startswith("- ")]
     assert lines == [
-        "- Exact tag note",
-        "- Keyword overlap note about memory",
+        "- [trust=model] Exact tag note",
+        "- [trust=model] Keyword overlap note about memory",
     ]
 
 

@@ -29,6 +29,9 @@ RUN_INTERRUPTED = "run_interrupted"
 TOOL_REGISTRY_DRIFT = "tool_registry_drift"
 CACHE_CAPABILITY_DETECTED = "cache_capability_detected"
 
+# 结构化记忆（spec-05 §4.9）
+MEMORY_POISONING_BLOCKED = "memory_poisoning_blocked"
+
 __all__ = [
     "TOOLS_BATCH_STARTED",
     "TOOLS_BATCH_FINISHED",
@@ -42,6 +45,7 @@ __all__ = [
     "RUN_INTERRUPTED",
     "TOOL_REGISTRY_DRIFT",
     "CACHE_CAPABILITY_DETECTED",
+    "MEMORY_POISONING_BLOCKED",
     "INSTRUCTION_LOADED",
     "INSTRUCTION_CONFLICT",
     "REPO_MAP_BUILT",

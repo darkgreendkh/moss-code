@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import checkpoint as checkpointlib
 from .features import memory as memorylib
+from .features.memory_records import SourceRef
 from . import security as securitylib
 from .context_manager import ContextManager
 from .checkpoint import CHECKPOINT_NONE_STATUS
@@ -168,6 +169,8 @@ class Moss:
         self.memory = memorylib.LayeredMemory(
             self.session.setdefault("memory", memorylib.default_memory_state()),
             workspace_root=self.root,
+            session_id=self.session["id"],
+            event_callback=self.record_memory_event,
         )
         self.session["memory"] = self.memory.to_dict()
         # skill 先于 tool 构建：tool 注册表会根据是否存在 skill 决定要不要暴露 use_skill。
@@ -569,6 +572,12 @@ class Moss:
         self.run_store.append_trace(task_state, payload)
         return payload
 
+    def record_memory_event(self, event, payload=None):
+        task_state = getattr(self, "current_task_state", None)
+        if task_state is None:
+            return None
+        return self.emit_trace(task_state, event, payload)
+
     def attach_repo_map(self, workspace):
         """把仓库地图挂到 workspace 段。
 
@@ -725,7 +734,13 @@ class Moss:
         promotions, rejections = memorylib.extract_durable_promotions(
             user_message, final_answer, redact_text=self.redact_text
         )
-        promoted, superseded = self.memory.promote_durable(promotions)
+        task_state = getattr(self, "current_task_state", None)
+        source_refs = ()
+        if task_state is not None:
+            source_refs = (SourceRef(run_id=task_state.run_id),)
+        promoted, superseded = self.memory.promote_durable(
+            promotions, source_refs=source_refs, trust="user"
+        )
         self.session["memory"] = self.memory.to_dict()
         self.last_durable_promotions = promoted
         self.last_durable_rejections = rejections
@@ -1124,7 +1139,12 @@ class Moss:
         self.session["history"] = []
         self.session["memory"].clear()
         self.session["memory"].update(memorylib.default_memory_state())
-        self.memory = memorylib.LayeredMemory(self.session["memory"], workspace_root=self.root)
+        self.memory = memorylib.LayeredMemory(
+            self.session["memory"],
+            workspace_root=self.root,
+            session_id=self.session["id"],
+            event_callback=self.record_memory_event,
+        )
         self.session_store.save(self.session)
 
     def path(self, raw_path):

@@ -110,7 +110,7 @@ def test_context_manager_renders_top_three_episodic_notes_per_note_under_budget(
     ]
     assert len(metadata["relevant_memory"]["rendered_notes"]) == 1
     assert metadata["relevant_memory"]["rendered_count"] == 1
-    assert metadata["relevant_memory"]["rendered_notes"][0].startswith("gamma episodi")
+    assert metadata["relevant_memory"]["rendered_notes"][0].startswith("[trust=model] gamma")
     relevant_section = prompt.split("Relevant memory:\n", 1)[1].split("\n\nTranscript:", 1)[0]
     assert len([line for line in relevant_section.splitlines() if line.startswith("- ")]) == 1
     assert "alpha episodi" not in relevant_section
@@ -142,7 +142,9 @@ def test_context_manager_prefers_complete_relevant_memory_notes_under_budget(tmp
     relevant_section = prompt.split("Relevant memory:\n", 1)[1].split("\n\nTranscript:", 1)[0]
 
     assert metadata["relevant_memory"]["selected_count"] == 3
-    assert metadata["relevant_memory"]["rendered_notes"] == [second, first]
+    assert metadata["relevant_memory"]["rendered_notes"] == [
+        "[trust=model] complete recall fact two"
+    ]
     assert third not in relevant_section
     assert "..." not in relevant_section
 

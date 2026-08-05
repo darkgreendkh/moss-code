@@ -107,9 +107,17 @@ class MemoryStore:
     def _persist(self, records):
         _atomic_write(self.records_path, self._serialize(records))
 
-    def append(self, record, *, rebuild=True):
+    @staticmethod
+    def _validate_durable_record(record):
         if not isinstance(record, MemoryRecord):
             raise TypeError("record must be a MemoryRecord")
+        if record.trust == "tool":
+            raise ValueError("tool-derived content cannot be durable")
+        if not record.legacy and not record.source_refs:
+            raise ValueError("non-legacy durable memory requires source_refs")
+
+    def append(self, record, *, rebuild=True):
+        self._validate_durable_record(record)
         events = self._read_events()
         events.append(record)
         self._persist(events)
@@ -123,8 +131,8 @@ class MemoryStore:
         records = list(records)
         if not records:
             return []
-        if not all(isinstance(record, MemoryRecord) for record in records):
-            raise TypeError("records must contain MemoryRecord values")
+        for record in records:
+            self._validate_durable_record(record)
         events = self._read_events()
         events.extend(records)
         self._persist(events)
@@ -146,9 +154,9 @@ class MemoryStore:
     def get(self, record_id):
         return next((record for record in self.all_records() if record.id == str(record_id)), None)
 
-    def update(self, record_id, text, *, observed_at=None):
+    def update(self, record_id, text, *, observed_at=None, source_refs=None, trust=None):
         old = self.get(record_id)
-        if old is None or old.status == "tombstone":
+        if old is None or old.status != "active":
             raise KeyError(f"unknown active memory: {record_id}")
         new = make_record(
             scope=old.scope,
@@ -157,8 +165,8 @@ class MemoryStore:
             subject=old.subject,
             text=str(text).strip(),
             tags=old.tags,
-            trust=old.trust,
-            source_refs=old.source_refs,
+            trust=trust or old.trust,
+            source_refs=tuple(source_refs) if source_refs is not None else old.source_refs,
             created_at=now(),
             observed_at=observed_at or now(),
             confidence=old.confidence,
@@ -202,7 +210,7 @@ class MemoryStore:
             for record in self.active_records()
         ]
 
-    def promote(self, promotions):
+    def promote(self, promotions, *, source_refs=(), trust="user"):
         promoted = []
         superseded = []
         scope_key = project_scope_key(self.workspace_root or self.root)
@@ -223,7 +231,7 @@ class MemoryStore:
                 None,
             )
             if old is not None:
-                new = self.update(old.id, text)
+                new = self.update(old.id, text, source_refs=source_refs, trust=trust)
                 superseded.append(f"{topic}: {old.text} -> {new.text}")
             else:
                 tags = TOPIC_METADATA.get(topic, (topic.replace("-", " ").title(), "", (topic,)))[2]
@@ -234,8 +242,8 @@ class MemoryStore:
                     subject=subject,
                     text=text,
                     tags=tags,
-                    trust="user",
-                    source_refs=(),
+                    trust=trust,
+                    source_refs=tuple(source_refs),
                 )
                 self.append(new)
             promoted.append(f"{topic}: {new.text}")

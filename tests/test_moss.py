@@ -2072,6 +2072,11 @@ def test_explicit_memory_promotion_rejects_secret_shaped_and_transient_lines(tmp
     ]
     assert "Use constrained tools instead of guessing." in conventions_path.read_text(encoding="utf-8")
     assert not dependency_path.exists()
+    from moss.features.memory_store import MemoryStore
+
+    records = MemoryStore(tmp_path / ".moss" / "memory", workspace_root=tmp_path).active_records()
+    assert records and all(record.source_refs for record in records)
+    assert {record.source_refs[0].run_id for record in records} == {agent.current_task_state.run_id}
 
 
 def test_explicit_memory_promotion_supersedes_matching_durable_fact(tmp_path):

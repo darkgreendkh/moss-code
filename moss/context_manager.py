@@ -64,6 +64,13 @@ def _is_shell_signal_line(line):
     return any(keyword in lowered for keyword in _SHELL_SIGNAL_KEYWORDS)
 
 
+def _render_memory_note(note):
+    trust = str(note.get("trust", "model")).strip() or "model"
+    source = str(note.get("source", "")).strip() or "unknown"
+    source_label = f" source={source}" if source != "unknown" else ""
+    return f"[trust={trust}{source_label}] {note.get('text', '')}"
+
+
 @dataclass
 class SectionRender:
     raw: str
@@ -428,7 +435,7 @@ class ContextManager:
         if anchors:
             relevant_lines.append(f"- Likely relevant files: {', '.join(anchors)}")
         if selected_notes:
-            relevant_lines.extend(f"- {note['text']}" for note in selected_notes)
+            relevant_lines.extend(f"- {_render_memory_note(note)}" for note in selected_notes)
         else:
             relevant_lines.append("- none")
         relevant_raw = "\n".join(relevant_lines)
@@ -443,7 +450,7 @@ class ContextManager:
                 rendered=relevant_raw,
                 details={
                     "selected_notes": [note["text"] for note in selected_notes],
-                    "rendered_notes": [note["text"] for note in selected_notes],
+                    "rendered_notes": [_render_memory_note(note) for note in selected_notes],
                     "selected_count": len(selected_notes),
                     "rendered_count": len(selected_notes),
                     "note_budget": 0,
@@ -490,7 +497,11 @@ class ContextManager:
         # 所以共用一个段和一份预算。锚排在笔记前面：它是这一段里最可执行的一条。
         anchor_line = f"- Likely relevant files: {', '.join(anchors)}" if anchors else ""
         lead = [header] + ([anchor_line] if anchor_line else [])
-        note_texts = [str(note.get("text", "")) for note in selected_notes if str(note.get("text", "")).strip()]
+        note_texts = [
+            _render_memory_note(note)
+            for note in selected_notes
+            if str(note.get("text", "")).strip()
+        ]
         raw_lines = lead + [f"- {text}" for text in note_texts]
         raw = "\n".join(raw_lines) if note_texts else "\n".join(lead + ["- none"])
         if not note_texts:
