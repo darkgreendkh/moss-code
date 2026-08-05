@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from .token_budget import clip
 from .tools import ToolRunOutput, classify_shell_command
+from .workspace import invalidate_git_facts_cache
 
 
 # 工具输出超上限时，保留哪一端取决于关键信息的位置。
@@ -231,6 +232,10 @@ class ToolExecutor:
             output = _normalize_tool_output(tool["run"](args))
             content = clip(output.content, keep=_TRUNCATION_KEEP.get(name, "head"))
             after_snapshot = agent.capture_workspace_snapshot() if tool["risky"] else before_snapshot
+            if tool["risky"]:
+                # git 事实带 500ms TTL 缓存，risky 工具刚改完工作区就必须让它失效，
+                # 否则下一轮 prefix 里的 status 还是执行前的样子。
+                invalidate_git_facts_cache()
             affected_paths, diff_summary = agent.diff_workspace_snapshots(before_snapshot, after_snapshot)
             workspace_changed = bool(affected_paths)
             tool_status = "ok"
@@ -270,6 +275,10 @@ class ToolExecutor:
             return ToolExecutionResult(content=content, metadata=metadata)
         except Exception as exc:
             after_snapshot = agent.capture_workspace_snapshot() if tool["risky"] else before_snapshot
+            if tool["risky"]:
+                # git 事实带 500ms TTL 缓存，risky 工具刚改完工作区就必须让它失效，
+                # 否则下一轮 prefix 里的 status 还是执行前的样子。
+                invalidate_git_facts_cache()
             affected_paths, diff_summary = agent.diff_workspace_snapshots(before_snapshot, after_snapshot)
             workspace_changed = bool(affected_paths)
             security_event_type = "path_escape" if "path escapes workspace" in str(exc) else ""

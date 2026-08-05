@@ -18,6 +18,7 @@ from moss import (
 )
 from moss.output_parser import parse_model_output
 from moss.tool_executor import approval_summary
+from moss.workspace import WORKSPACE_FINGERPRINT_VERSION
 
 
 def build_workspace(tmp_path):
@@ -1652,7 +1653,10 @@ def test_resume_marks_workspace_mismatch_when_checkpoint_runtime_identity_is_sta
                 "key_files": [],
                 "freshness": {},
                 "summary": "workspace changed",
-                "runtime_identity": {"workspace_fingerprint": "outdated-fingerprint"},
+                # 指纹带当前版本前缀但内容不同：这才是“工作区真的变了”。
+                "runtime_identity": {
+                    "workspace_fingerprint": f"{WORKSPACE_FINGERPRINT_VERSION}:outdated-fingerprint"
+                },
             }
         },
     }
@@ -1668,6 +1672,47 @@ def test_resume_marks_workspace_mismatch_when_checkpoint_runtime_identity_is_sta
 
     assert resumed.ask("Continue the task") == "Resumed."
     assert resumed.last_prompt_metadata["resume_status"] == "workspace-mismatch"
+
+
+def test_resume_marks_schema_mismatch_when_checkpoint_fingerprint_uses_old_version(tmp_path):
+    """老口径的指纹要报 schema-mismatch，不能报 workspace-mismatch。
+
+    指纹算法升级会让所有历史 checkpoint 的指纹对不上。报 workspace-mismatch
+    会把用户引去查“工作区被谁动了”，而真实原因是 schema 换代了。
+    """
+    agent = build_agent(tmp_path, ["<final>checkpoint ready.</final>"])
+    agent.session["checkpoints"] = {
+        "current_id": "ckpt_legacy",
+        "items": {
+            "ckpt_legacy": {
+                "checkpoint_id": "ckpt_legacy",
+                "parent_checkpoint_id": "",
+                "schema_version": "phase1-v1",
+                "created_at": "2026-04-14T09:00:00+00:00",
+                "current_goal": "Continue after upgrade",
+                "completed": [],
+                "excluded": [],
+                "current_blocker": "",
+                "next_step": "Rebuild runtime state",
+                "key_files": [],
+                "freshness": {},
+                "summary": "fingerprint schema changed",
+                "runtime_identity": {"workspace_fingerprint": "deadbeef"},
+            }
+        },
+    }
+    agent.session_store.save(agent.session)
+
+    resumed = Moss.from_session(
+        model_client=FakeModelClient(["<final>Resumed.</final>"]),
+        workspace=build_workspace(tmp_path),
+        session_store=agent.session_store,
+        session_id=agent.session["id"],
+        approval_policy="auto",
+    )
+
+    assert resumed.ask("Continue the task") == "Resumed."
+    assert resumed.last_prompt_metadata["resume_status"] == "schema-mismatch"
 
 
 def test_write_file_trace_records_minimum_tool_contract_fields(tmp_path):

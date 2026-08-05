@@ -66,6 +66,7 @@ class Moss:
         self.model_client = model_client
         self.workspace = workspace
         self.root = Path(workspace.repo_root)
+        self.invocation_cwd = Path(getattr(workspace, "invocation_cwd", None) or workspace.cwd)
         self.session_store = session_store
         self.approval_policy = approval_policy
         self.max_steps = max_steps
@@ -233,7 +234,10 @@ class Moss:
         previous_hash = getattr(getattr(self, "prefix_state", None), "hash", None)
         previous_workspace_fingerprint = getattr(getattr(self, "prefix_state", None), "workspace_fingerprint", None)
 
-        refreshed_workspace = WorkspaceContext.build(self.root)
+        # 用 invocation_cwd 而不是 repo_root 刷新：在子目录启动的会话里，
+        # 传 repo_root 会让第二轮起 cwd 悄悄退化成仓库根，
+        # 工作区身份和指纹跟着一起变，看起来像“工作区被改过”。
+        refreshed_workspace = WorkspaceContext.build(self.invocation_cwd, repo_root_override=self.root)
         refreshed_workspace_fingerprint = refreshed_workspace.fingerprint()
         workspace_changed = refreshed_workspace_fingerprint != previous_workspace_fingerprint
         if workspace_changed or force:

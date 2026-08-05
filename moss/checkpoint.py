@@ -5,6 +5,7 @@ import uuid
 from .clock import now
 from .features import memory as memorylib
 from .token_budget import clip
+from .workspace import WORKSPACE_FINGERPRINT_VERSION
 
 # 每执行一步工具就会生成一个 checkpoint，且它们全都存在 session JSON 里、
 # 每次保存都整份重写。不设上限的话，一个长期的 REPL 会话里 checkpoint 会无限
@@ -64,6 +65,19 @@ def current_checkpoint(agent):
     return state.get("items", {}).get(checkpoint_id)
 
 
+def _stale_fingerprint_version(checkpoint):
+    """checkpoint 里存的 workspace 指纹是不是旧口径算出来的。
+
+    指纹算法一改，所有历史 checkpoint 的指纹都对不上。如果不识别版本前缀，
+    这会表现成 `workspace-mismatch`——误导用户去找“工作区被谁改了”，
+    而真实原因是 schema 变了。所以前缀不同就直接判 schema-mismatch。
+    """
+    saved = str(dict(checkpoint.get("runtime_identity", {}) or {}).get("workspace_fingerprint", ""))
+    if not saved:
+        return False
+    return not saved.startswith(f"{WORKSPACE_FINGERPRINT_VERSION}:")
+
+
 def evaluate_resume_state(agent):
     previous_resume_state = dict(agent.session.get("resume_state", {}) or {})
     interrupted_runs = list(getattr(agent, "interrupted_runs", []) or previous_resume_state.get("interrupted_runs", []) or [])
@@ -73,7 +87,7 @@ def evaluate_resume_state(agent):
     stale_paths = list(invalidated)
     mismatch_fields = []
     if checkpoint:
-        if checkpoint.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+        if checkpoint.get("schema_version") != CHECKPOINT_SCHEMA_VERSION or _stale_fingerprint_version(checkpoint):
             status = CHECKPOINT_SCHEMA_MISMATCH_STATUS
         else:
             for item in checkpoint.get("key_files", []):
