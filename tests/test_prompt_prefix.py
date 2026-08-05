@@ -38,6 +38,15 @@ def test_tool_signature_is_stable_across_registry_insertion_order(tmp_path):
     assert tool_signature(tools) == tool_signature(reordered)
 
 
+def test_stable_prefix_includes_all_memory_tools(tmp_path):
+    tools = build_tool_registry(_Agent(tmp_path))
+
+    prefix = build_prompt_prefix(WorkspaceContext.build(tmp_path), tools)
+
+    for name in ("memory_write", "memory_update", "memory_delete", "memory_search"):
+        assert name in prefix.text
+
+
 def test_build_prompt_prefix_renders_tools_and_workspace_metadata(tmp_path):
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
     workspace = WorkspaceContext.build(tmp_path)

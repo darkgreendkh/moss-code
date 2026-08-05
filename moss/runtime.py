@@ -578,6 +578,55 @@ class Moss:
             return None
         return self.emit_trace(task_state, event, payload)
 
+    def memory_source_refs(self):
+        task_state = getattr(self, "current_task_state", None)
+        run_id = task_state.run_id if task_state is not None else f"session:{self.session['id']}"
+        return (SourceRef(run_id=run_id),)
+
+    @staticmethod
+    def _memory_rejection(reason):
+        return {"status": "rejected", "reason": str(reason)}
+
+    def memory_write_action(self, args):
+        record, reason = self.memory.write_durable(
+            scope=args.get("scope", ""),
+            topic=args.get("topic", ""),
+            text=args.get("text", ""),
+            tags=args.get("tags", ()),
+            trust="model",
+            source_refs=self.memory_source_refs(),
+        )
+        if record is None:
+            return self._memory_rejection(reason)
+        self._save_memory_state()
+        return {"status": "written", "id": record.id, "scope": record.scope, "trust": record.trust}
+
+    def memory_update_action(self, args):
+        record, reason = self.memory.update_durable(
+            args.get("id", ""),
+            args.get("text", ""),
+            trust="model",
+            source_refs=self.memory_source_refs(),
+        )
+        if record is None:
+            return self._memory_rejection(reason)
+        self._save_memory_state()
+        return {"status": "updated", "id": record.id, "supersedes": list(record.supersedes)}
+
+    def memory_delete_action(self, args):
+        record, reason = self.memory.delete_durable(args.get("id", ""))
+        if record is None:
+            return self._memory_rejection(reason)
+        self._save_memory_state()
+        return {"status": "deleted", "deleted": record.id}
+
+    def memory_search_action(self, args):
+        return self.memory.search(args.get("query", ""), limit=int(args.get("limit", 5)))
+
+    def _save_memory_state(self):
+        self.session["memory"] = self.memory.to_dict()
+        self.session_path = self.session_store.save(self.session)
+
     def attach_repo_map(self, workspace):
         """把仓库地图挂到 workspace 段。
 
@@ -947,6 +996,10 @@ class Moss:
             skills_provider=lambda: self.skills,
             cancel_token=self.cancel_token,
             plan_writer=self.set_plan,
+            memory_writer=self.memory_write_action,
+            memory_updater=self.memory_update_action,
+            memory_deleter=self.memory_delete_action,
+            memory_searcher=self.memory_search_action,
             sandbox_plan=self.sandbox_plan,
         )
 

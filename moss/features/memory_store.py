@@ -206,6 +206,8 @@ class MemoryStore:
                 "trust": record.trust,
                 "subject": record.subject,
                 "status": record.status,
+                "scope": record.scope,
+                "source_refs": [source.to_dict() for source in record.source_refs],
             }
             for record in self.active_records()
         ]

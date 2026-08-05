@@ -20,6 +20,12 @@ class ToolContext:
     # 计划写入回调。计划属于运行时状态（要进 task_state 和 prompt），
     # 而工具函数只认识 ToolContext，所以用回调把写入权交给 runtime。
     plan_writer: Callable[[list], None] = None
+    # 记忆工具只拿到四个窄回调，不持有整个 Moss runtime，避免工具层绕过
+    # runtime 里的来源标注、注入扫描和 session 落盘。
+    memory_writer: Callable[[dict], dict] = None
+    memory_updater: Callable[[dict], dict] = None
+    memory_deleter: Callable[[dict], dict] = None
+    memory_searcher: Callable[[dict], list] = None
     # 沙箱计划。None 表示不包裹，行为与加沙箱前一致。
     sandbox_plan: object = None
 
@@ -36,6 +42,26 @@ class ToolContext:
         if self.plan_writer is None:
             return
         self.plan_writer(list(plan))
+
+    def write_memory(self, args):
+        if self.memory_writer is None:
+            raise RuntimeError("memory_write is unavailable")
+        return self.memory_writer(dict(args))
+
+    def update_memory(self, args):
+        if self.memory_updater is None:
+            raise RuntimeError("memory_update is unavailable")
+        return self.memory_updater(dict(args))
+
+    def delete_memory(self, args):
+        if self.memory_deleter is None:
+            raise RuntimeError("memory_delete is unavailable")
+        return self.memory_deleter(dict(args))
+
+    def search_memory(self, args):
+        if self.memory_searcher is None:
+            raise RuntimeError("memory_search is unavailable")
+        return self.memory_searcher(dict(args))
 
 
 @dataclass(frozen=True)

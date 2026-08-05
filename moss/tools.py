@@ -5,6 +5,7 @@
 """
 
 import os
+import json
 import shutil
 import signal
 import subprocess
@@ -146,6 +147,42 @@ BASE_TOOL_SPECS = {
         capabilities=frozenset({"fs_read", "fs_write", "exec", "network"}),
         description="Run a shell command in the repo root.",
     ),
+    "memory_write": ToolSpec(
+        name="memory_write",
+        fields={
+            "scope": ToolField("str"),
+            "topic": ToolField("str"),
+            "text": ToolField("str"),
+            "tags": ToolField("list", required=False, default=[]),
+        },
+        risky=False,
+        capabilities=frozenset({"memory_write"}),
+        description="Write a session or project memory after safety checks.",
+    ),
+    "memory_update": ToolSpec(
+        name="memory_update",
+        fields={"id": ToolField("str"), "text": ToolField("str")},
+        risky=False,
+        capabilities=frozenset({"memory_write"}),
+        description="Replace an active durable memory with a new version.",
+    ),
+    "memory_delete": ToolSpec(
+        name="memory_delete",
+        fields={"id": ToolField("str")},
+        risky=False,
+        capabilities=frozenset({"memory_write"}),
+        description="Forget an active durable memory by appending a tombstone.",
+    ),
+    "memory_search": ToolSpec(
+        name="memory_search",
+        fields={
+            "query": ToolField("str"),
+            "limit": ToolField("int", required=False, default=5, minimum=1, maximum=20),
+        },
+        risky=False,
+        capabilities=frozenset(),
+        description="Search relevant working, episodic, and durable memory.",
+    ),
 }
 
 DELEGATE_TOOL_SPEC = ToolSpec(
@@ -178,6 +215,10 @@ TOOL_EXAMPLES = {
     "delegate": '<tool>{"name":"delegate","args":{"task":"inspect README.md","max_steps":3}}</tool>',
     "use_skill": '<tool>{"name":"use_skill","args":{"name":"some-skill"}}</tool>',
     "update_plan": '<tool>{"name":"update_plan","args":{"steps":[{"id":"1","title":"read the parser","status":"in_progress"},{"id":"2","title":"add a test","status":"pending"}]}}</tool>',
+    "memory_write": '<tool>{"name":"memory_write","args":{"scope":"project","topic":"key-decisions","text":"Use SQLite","tags":["database"]}}</tool>',
+    "memory_update": '<tool>{"name":"memory_update","args":{"id":"mem_123456789abc","text":"Use SQLite WAL"}}</tool>',
+    "memory_delete": '<tool>{"name":"memory_delete","args":{"id":"mem_123456789abc"}}</tool>',
+    "memory_search": '<tool>{"name":"memory_search","args":{"query":"database choice","limit":5}}</tool>',
 }
 
 # 计划步骤的合法状态。多一个状态就多一种模型会写错的写法，四个够用了。
@@ -369,6 +410,39 @@ def validate_tool(context, name, args):
             raise ValueError("steps must be a list")
         if not normalize_plan(steps):
             raise ValueError("steps must contain at least one step with a title")
+        return
+
+    if name == "memory_write":
+        scope = str(args.get("scope", "")).strip()
+        if scope not in {"session", "project"}:
+            raise ValueError("scope must be session or project")
+        if not str(args.get("topic", "")).strip():
+            raise ValueError("topic must not be empty")
+        if not str(args.get("text", "")).strip():
+            raise ValueError("text must not be empty")
+        tags = args.get("tags", [])
+        if not all(isinstance(tag, str) and tag.strip() for tag in tags):
+            raise ValueError("tags must contain non-empty strings")
+        return
+
+    if name == "memory_update":
+        if not str(args.get("id", "")).strip():
+            raise ValueError("id must not be empty")
+        if not str(args.get("text", "")).strip():
+            raise ValueError("text must not be empty")
+        return
+
+    if name == "memory_delete":
+        if not str(args.get("id", "")).strip():
+            raise ValueError("id must not be empty")
+        return
+
+    if name == "memory_search":
+        if not str(args.get("query", "")).strip():
+            raise ValueError("query must not be empty")
+        limit = int(args.get("limit", 5))
+        if limit < 1 or limit > 20:
+            raise ValueError("limit must be in [1, 20]")
         return
 
     if name == "write_file":
@@ -605,6 +679,27 @@ def tool_update_plan(context, args):
     return f"plan updated: {len(plan)} step(s), {done} done"
 
 
+def _json_result(payload):
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def tool_memory_write(context, args):
+    return _json_result(context.write_memory(args))
+
+
+def tool_memory_update(context, args):
+    return _json_result(context.update_memory(args))
+
+
+def tool_memory_delete(context, args):
+    return _json_result(context.delete_memory(args))
+
+
+def tool_memory_search(context, args):
+    matches = context.search_memory(args)
+    return _json_result(matches) if matches else "no relevant memory"
+
+
 def tool_write_file(context, args):
     path = context.path(args["path"])
     content = str(args["content"])
@@ -657,4 +752,8 @@ _TOOL_RUNNERS = {
     "write_file": tool_write_file,
     "edit_file": tool_edit_file,
     "update_plan": tool_update_plan,
+    "memory_write": tool_memory_write,
+    "memory_update": tool_memory_update,
+    "memory_delete": tool_memory_delete,
+    "memory_search": tool_memory_search,
 }

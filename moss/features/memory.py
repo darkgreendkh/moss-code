@@ -895,6 +895,30 @@ class LayeredMemory:
     def render_memory_text(self):
         return render_memory_text(self.state, self.workspace_root)
 
+    def render_memory_details(self):
+        """Human-facing memory view used by `/memory`.
+
+        The model prompt keeps the compact dashboard; this view expands records so
+        a user can audit trust and provenance without spending prompt budget.
+        """
+        self.state = normalize_memory_state(self.state, self.workspace_root)
+        lines = ["Memory details:"]
+        for note in self.state["episodic_notes"]:
+            source = note.get("source", "") or "unknown"
+            lines.append(
+                f"- [episodic trust={note.get('trust', 'model')} source={source}] {note.get('text', '')}"
+            )
+        if self.durable_store is not None:
+            for record in self.durable_store.store.active_records():
+                sources = _render_source_refs(record.source_refs)
+                lines.append(
+                    f"- [{record.id} scope={record.scope} trust={record.trust} source={sources}] "
+                    f"{record.topic}: {record.text}"
+                )
+        if len(lines) == 1:
+            lines.append("- none")
+        return "\n".join(lines)
+
     def _emit_poisoning_blocked(self, finding):
         if self.event_callback is not None:
             self.event_callback(
@@ -959,6 +983,56 @@ class LayeredMemory:
         self.state = normalize_memory_state(self.state, self.workspace_root)
         return record, ""
 
+    def update_durable(self, record_id, text, *, trust="model", source_refs=()):
+        if self.durable_store is None or not self.durable_store.v2:
+            return None, "memory_v2_disabled"
+        text = str(text or "").strip()
+        finding = injectionlib.scan(text, source="memory_update")
+        if finding is not None:
+            self._emit_poisoning_blocked(finding)
+            return None, "injection_suspected"
+        reason = reject_memory_reason(text)
+        if reason:
+            return None, "too_noisy" if reason == "noisy_output" else reason
+        if trust not in {"user", "model"}:
+            return None, "invalid_trust"
+        store = self.durable_store.store
+        try:
+            record = store.update(
+                str(record_id),
+                text,
+                source_refs=tuple(source_refs),
+                trust=trust,
+            )
+        except KeyError:
+            return None, "not_found"
+        self.state = normalize_memory_state(self.state, self.workspace_root)
+        return record, ""
+
+    def delete_durable(self, record_id):
+        if self.durable_store is None or not self.durable_store.v2:
+            return None, "memory_v2_disabled"
+        try:
+            record = self.durable_store.store.delete(str(record_id))
+        except KeyError:
+            return None, "not_found"
+        self.state = normalize_memory_state(self.state, self.workspace_root)
+        return record, ""
+
+    def search(self, query, limit=5):
+        matches = self.retrieval_candidates(str(query), limit=max(1, int(limit)))
+        return [
+            {
+                "id": note.get("id", ""),
+                "text": note.get("text", ""),
+                "topic": note.get("source", ""),
+                "trust": note.get("trust", "model"),
+                "source": _note_source(note),
+                "kind": note.get("kind", "episodic"),
+            }
+            for note in matches
+        ]
+
     def promote_durable(self, promotions, *, source_refs=(), trust="user"):
         if self.durable_store is None:
             return [], []
@@ -968,6 +1042,29 @@ class LayeredMemory:
         )
         self.state = normalize_memory_state(self.state, self.workspace_root)
         return promoted, superseded
+
+
+def _render_source_refs(source_refs):
+    labels = []
+    for source in source_refs:
+        label = source.path or source.run_id or "unknown"
+        if source.event_seq is not None:
+            label = f"{label}#{source.event_seq}"
+        labels.append(label)
+    return ",".join(labels) or "unknown"
+
+
+def _note_source(note):
+    refs = note.get("source_refs", [])
+    if refs:
+        labels = []
+        for source in refs:
+            label = source.get("path") or source.get("run_id") or "unknown"
+            if source.get("event_seq") is not None:
+                label = f"{label}#{source['event_seq']}"
+            labels.append(label)
+        return ",".join(labels)
+    return note.get("source", "") or "unknown"
 
 
 # ---- runtime 集成：记忆写入与 durable 提炼策略 ----
