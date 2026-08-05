@@ -378,6 +378,58 @@ def _render(repo_map, budget_tokens):
     return "\n".join(lines), truncated
 
 
+_TOKEN_SPLIT = re.compile(r"[^A-Za-z0-9]+")
+_CAMEL_SPLIT = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+# 这些词在任何请求里都会出现，留着只会把打分拉平。
+_STOPWORDS = frozenset(
+    {
+        "the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "with", "is", "are",
+        "add", "fix", "update", "make", "please", "file", "code", "test", "tests", "py",
+    }
+)
+
+
+def tokenize(text):
+    """把路径 / 符号名 / 用户请求切成可比对的小写词。
+
+    snake_case 和 camelCase 都要拆开：模型说的是 “repo map”，
+    仓库里叫 `repo_map.py` 和 `build_repo_map`，不拆就永远对不上。
+    """
+    tokens = []
+    for chunk in _TOKEN_SPLIT.split(str(text)):
+        if not chunk:
+            continue
+        for part in _CAMEL_SPLIT.split(chunk):
+            part = part.lower()
+            if part and part not in _STOPWORDS and len(part) > 1:
+                tokens.append(part)
+    return tokens
+
+
+def rank_relevant_files(repo_map, query, limit=5):
+    """按词频给文件打分，返回最可能相关的路径。
+
+    这是 spec-01 PR-6 的简化版起点锚：TODO 等 spec-05 的 BM25 落地后换成它，
+    这里的接口保持不变。路径命中权重高于符号命中——文件名是人给的、
+    信息密度最高，符号名里噪声更多。
+    """
+    query_tokens = set(tokenize(query))
+    if not query_tokens or not repo_map or not repo_map.entries:
+        return []
+    scored = []
+    for entry in repo_map.entries:
+        path_tokens = tokenize(entry.path)
+        symbol_tokens = []
+        for symbol in entry.symbols:
+            symbol_tokens.extend(tokenize(symbol.name))
+        score = 3 * len(query_tokens & set(path_tokens)) + len(query_tokens & set(symbol_tokens))
+        if score:
+            scored.append((-score, entry.path))
+    # 分数打平时按路径字典序：起点锚每轮都会重算，顺序抖动会让缓存白白失效。
+    scored.sort()
+    return [path for _, path in scored[:limit]]
+
+
 def compute_cache_key(root, ignore_files=(), *, budget_tokens=DEFAULT_BUDGET_TOKENS, max_depth=DEFAULT_MAX_DEPTH):
     """缓存键：.git 的 HEAD/index、各顶层目录的 mtime、忽略规则内容、schema 版本。
 

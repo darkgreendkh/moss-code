@@ -84,6 +84,8 @@ class Moss:
         # 就近指令文档：一次会话里每份只注入一次，避免重复占预算。
         self.loaded_instruction_docs = {}
         self.pending_instruction_notices = []
+        self.last_relevant_anchors = []
+        self._anchor_checked = False
         self.session_store = session_store
         self.approval_policy = approval_policy
         self.max_steps = max_steps
@@ -429,6 +431,37 @@ class Moss:
             workspace.repo_map_text = ""
             self.last_repo_map = None
         return workspace
+
+    def relevant_file_anchors(self, user_message, limit=5):
+        """给当前请求算一组“最可能相关的文件”，作为模型的起点锚。
+
+        进的是 relevant_memory 段而不是 prefix：它随每轮请求变化，
+        放进稳定段会让 prompt 缓存每轮失效。
+        """
+        if self.last_repo_map is None:
+            self.last_relevant_anchors = []
+            return []
+        try:
+            anchors = repo_maplib.rank_relevant_files(self.last_repo_map, user_message, limit=limit)
+        except Exception:
+            anchors = []
+        self.last_relevant_anchors = anchors
+        return anchors
+
+    def note_anchor_outcome(self, path):
+        """记录起点锚有没有命中：模型第一次真正读的文件在不在候选里。
+
+        为什么只看第一次：锚的价值就是省掉“认路”那几步，模型读完第一个文件之后
+        它已经自己会走了，后面读什么不能算在锚头上。
+        anchor_miss 率超过 50% 就该把这个特性关掉（spec-01 §7）。
+        """
+        if self._anchor_checked or not self.last_relevant_anchors:
+            return None
+        self._anchor_checked = True
+        path = str(path or "").replace("\\", "/").lstrip("./")
+        if path in self.last_relevant_anchors:
+            return None
+        return {"path": path, "anchors": list(self.last_relevant_anchors)}
 
     def note_nearby_instructions(self, path):
         """文件类工具碰到某个目录后，把该目录祖先链上的就近指令文档排队注入。

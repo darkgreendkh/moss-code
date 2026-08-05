@@ -210,6 +210,10 @@ class AgentLoop:
                         "created_at": now(),
                     }
                 )
+                if name in ("read_file", "write_file", "edit_file"):
+                    anchor_miss = agent.note_anchor_outcome(args.get("path", ""))
+                    if anchor_miss:
+                        agent.emit_trace(task_state, trace_events.ANCHOR_MISS, anchor_miss)
                 _record_instruction_notices(agent, task_state)
                 agent.write_task_state(task_state)
                 agent.emit_trace(

@@ -7,7 +7,9 @@ from moss.repo_map import (
     compute_cache_key,
     extract_symbols,
     get_repo_map,
+    rank_relevant_files,
     render_repo_map,
+    tokenize,
 )
 from moss.token_budget import estimate_tokens
 
@@ -183,3 +185,81 @@ def test_repo_map_off_restores_the_previous_prefix(tmp_path, monkeypatch):
     )
 
     assert "Repo map:" not in agent.prefix
+
+
+def test_rank_relevant_files_matches_paths_and_symbols(tmp_path):
+    _sample_repo(tmp_path)
+    repo_map = build_repo_map(tmp_path)
+
+    assert rank_relevant_files(repo_map, "fix the engine start bug")[0] == "moss/core.py"
+    assert rank_relevant_files(repo_map, "update the cli entry point")[0] == "moss/cli.py"
+
+
+def test_rank_relevant_files_is_deterministic_and_bounded(tmp_path):
+    _sample_repo(tmp_path)
+    repo_map = build_repo_map(tmp_path)
+
+    first = rank_relevant_files(repo_map, "engine cli", limit=1)
+    second = rank_relevant_files(repo_map, "engine cli", limit=1)
+
+    assert first == second
+    assert len(first) == 1
+
+
+def test_rank_relevant_files_returns_nothing_for_an_unrelated_query(tmp_path):
+    _sample_repo(tmp_path)
+
+    assert rank_relevant_files(build_repo_map(tmp_path), "kubernetes ingress") == []
+
+
+def test_tokenize_splits_snake_and_camel_case():
+    assert tokenize("build_repoMap") == ["build", "repo", "map"]
+
+
+def test_anchor_line_lands_in_the_relevant_memory_section(tmp_path, monkeypatch):
+    from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
+
+    _sample_repo(tmp_path)
+    monkeypatch.delenv("MOSS_REPO_MAP", raising=False)
+    agent = Moss(
+        model_client=FakeModelClient([]),
+        workspace=WorkspaceContext.build(tmp_path),
+        session_store=SessionStore(tmp_path / ".moss" / "sessions"),
+    )
+
+    prompt = agent.prompt("fix the engine start bug")
+
+    assert "Likely relevant files: moss/core.py" in prompt
+    # 起点锚必须待在 relevant_memory 段：它每轮都会变，进 prefix 会打掉 prompt 缓存。
+    assert "Likely relevant files" not in prompt.split("Relevant memory:")[0]
+
+
+def test_anchor_miss_is_traced_when_the_model_reads_something_else(tmp_path, monkeypatch):
+    import json
+
+    from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
+
+    _sample_repo(tmp_path)
+    monkeypatch.delenv("MOSS_REPO_MAP", raising=False)
+    agent = Moss(
+        model_client=FakeModelClient(
+            [
+                '<tool>{"name":"read_file","args":{"path":"README.md"}}</tool>',
+                "<final>Done.</final>",
+            ]
+        ),
+        workspace=WorkspaceContext.build(tmp_path),
+        session_store=SessionStore(tmp_path / ".moss" / "sessions"),
+        approval_policy="auto",
+    )
+
+    assert agent.ask("fix the engine start bug") == "Done."
+
+    events = [
+        json.loads(line)
+        for line in agent.run_store.trace_path(agent.current_task_state).read_text(encoding="utf-8").splitlines()
+    ]
+    misses = [event for event in events if event["event"] == "anchor_miss"]
+    assert len(misses) == 1
+    assert misses[0]["path"] == "README.md"
+    assert "moss/core.py" in misses[0]["anchors"]

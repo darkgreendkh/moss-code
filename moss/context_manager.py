@@ -148,9 +148,14 @@ class ContextManager:
         selected_notes = []
         if memory_enabled and relevant_memory_enabled and hasattr(self.agent, "memory") and hasattr(self.agent.memory, "retrieval_candidates"):
             selected_notes = self.agent.memory.retrieval_candidates(user_message, limit=RELEVANT_MEMORY_LIMIT)
+        anchors = []
+        if relevant_memory_enabled and hasattr(self.agent, "relevant_file_anchors"):
+            anchors = list(self.agent.relevant_file_anchors(user_message))
 
         if not context_reduction_enabled:
-            rendered = self._render_sections_without_reduction(section_texts, selected_notes=selected_notes)
+            rendered = self._render_sections_without_reduction(
+                section_texts, selected_notes=selected_notes, anchors=anchors
+            )
             prompt = self._assemble_prompt(rendered)
             metadata = self._metadata(
                 prompt=prompt,
@@ -164,7 +169,7 @@ class ContextManager:
             return prompt, metadata
 
         budgets = dict(self.section_budgets)
-        rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes)
+        rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes, anchors=anchors)
         prompt = self._assemble_prompt(rendered)
         reduction_log = []
 
@@ -200,7 +205,7 @@ class ContextManager:
                     }
                 )
                 budgets[section] = new_budget
-                rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes)
+                rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes, anchors=anchors)
                 prompt = self._assemble_prompt(rendered)
                 reduced = True
                 break
@@ -224,9 +229,11 @@ class ContextManager:
         )
         return prompt, metadata
 
-    def _render_sections_without_reduction(self, section_texts, selected_notes=None):
+    def _render_sections_without_reduction(self, section_texts, selected_notes=None, anchors=()):
         selected_notes = selected_notes or []
         relevant_lines = ["Relevant memory:"]
+        if anchors:
+            relevant_lines.append(f"- Likely relevant files: {', '.join(anchors)}")
         if selected_notes:
             relevant_lines.extend(f"- {note['text']}" for note in selected_notes)
         else:
@@ -266,7 +273,7 @@ class ContextManager:
         floors.update(self._section_floor_overrides)
         return floors
 
-    def _render_sections(self, section_texts, budgets, selected_notes=None):
+    def _render_sections(self, section_texts, budgets, selected_notes=None, anchors=()):
         rendered = {}
         for section in SECTION_ORDER:
             budget = budgets.get(section)
@@ -274,7 +281,7 @@ class ContextManager:
                 raw = section_texts[section]
                 rendered[section] = SectionRender(raw=raw, budget=0, rendered=raw, details={})
             elif section == "relevant_memory":
-                rendered[section] = self._render_relevant_memory(selected_notes or [], int(budget or 0))
+                rendered[section] = self._render_relevant_memory(selected_notes or [], int(budget or 0), anchors=anchors)
             elif section == "history":
                 rendered[section] = self._render_history_section(int(budget or 0))
             else:
@@ -284,13 +291,17 @@ class ContextManager:
                 rendered[section] = SectionRender(raw=raw, budget=int(budget) if budget is not None else 0, rendered=rendered_text, details={})
         return rendered
 
-    def _render_relevant_memory(self, selected_notes, budget):
+    def _render_relevant_memory(self, selected_notes, budget, anchors=()):
         header = "Relevant memory:"
+        # 起点锚和相关记忆同属"与当前请求相关、每轮可能变"的内容，
+        # 所以共用一个段和一份预算。锚排在笔记前面：它是这一段里最可执行的一条。
+        anchor_line = f"- Likely relevant files: {', '.join(anchors)}" if anchors else ""
+        lead = [header] + ([anchor_line] if anchor_line else [])
         note_texts = [str(note.get("text", "")) for note in selected_notes if str(note.get("text", "")).strip()]
-        raw_lines = [header] + [f"- {text}" for text in note_texts]
-        raw = "\n".join(raw_lines) if note_texts else "\n".join([header, "- none"])
+        raw_lines = lead + [f"- {text}" for text in note_texts]
+        raw = "\n".join(raw_lines) if note_texts else "\n".join(lead + ["- none"])
         if not note_texts:
-            rendered = raw
+            rendered = self._clip(raw, budget, keep="head") if budget > 0 else raw
             return SectionRender(
                 raw=raw,
                 budget=budget,
@@ -307,16 +318,16 @@ class ContextManager:
         rendered_notes = []
         for text in note_texts:
             candidate_notes = [*rendered_notes, text]
-            candidate = "\n".join([header] + [f"- {item}" for item in candidate_notes])
+            candidate = "\n".join(lead + [f"- {item}" for item in candidate_notes])
             if budget <= 0 or self.measure(candidate) <= budget:
                 rendered_notes = candidate_notes
         if rendered_notes:
-            rendered = "\n".join([header] + [f"- {text}" for text in rendered_notes])
+            rendered = "\n".join(lead + [f"- {text}" for text in rendered_notes])
             per_note_budget = 0
         else:
-            per_note_budget = max(1, budget - self.measure(header) - 3)
+            per_note_budget = max(1, budget - self.measure("\n".join(lead)) - 3)
             rendered_notes = [self._clip(note_texts[0], per_note_budget, keep="head")]
-            rendered = "\n".join([header, f"- {rendered_notes[0]}"])
+            rendered = "\n".join(lead + [f"- {rendered_notes[0]}"])
             if self.measure(rendered) > budget and budget > 0:
                 rendered = self._clip(raw, budget, keep="head")
                 rendered_notes = [rendered]
