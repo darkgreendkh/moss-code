@@ -402,6 +402,7 @@ def build_agent(args):
             max_steps=args.max_steps,
             max_new_tokens=args.max_new_tokens,
             secret_env_names=configured_secret_names,
+            parallel_tools=getattr(args, "parallel_tools", "off") == "on",
         )
     return Moss(
         model_client=model,
@@ -411,6 +412,7 @@ def build_agent(args):
         max_steps=args.max_steps,
         max_new_tokens=args.max_new_tokens,
         secret_env_names=configured_secret_names,
+        parallel_tools=getattr(args, "parallel_tools", "off") == "on",
     )
 
 
@@ -446,6 +448,12 @@ def build_arg_parser():
         help="Extra environment variable names to treat as secrets for trace/report redaction.",
     )
     parser.add_argument("--max-steps", type=int, default=25, help="Maximum tool/model iterations per request.")
+    parser.add_argument(
+        "--parallel-tools",
+        choices=("on", "off"),
+        default="off",
+        help="Run a batch of read-only tool calls concurrently. Risky tools always run serially.",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=4096, help="Maximum model output tokens per step.")
     parser.add_argument("--temperature", type=float, default=0.2, help="Sampling temperature sent to Ollama.")
     parser.add_argument("--top-p", type=float, default=0.9, help="Top-p sampling value sent to Ollama.")
