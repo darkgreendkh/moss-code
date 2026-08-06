@@ -187,10 +187,19 @@ BASE_TOOL_SPECS = {
 
 DELEGATE_TOOL_SPEC = ToolSpec(
     name="delegate",
-    fields={"task": ToolField("str"), "max_steps": ToolField("int", required=False, default=3, minimum=1)},
+    fields={
+        # task 与 tasks 二选一，所以两个都不是 schema 级必填；
+        # "至少给一个"由 validate_tool 判，报错信息才说得清。
+        "task": ToolField("str", required=False, default=""),
+        "max_steps": ToolField("int", required=False, default=3, minimum=1),
+        # 并行 fan-out：给多条问题时子 agent 并发跑，结果按提交顺序聚合。
+        "tasks": ToolField("list", required=False, default=[]),
+        # 父 agent 显式指定的相关文件。不给就用 repo map 的起点锚。
+        "focus": ToolField("list", required=False, default=[]),
+    },
     risky=False,
     capabilities=frozenset({"fs_read", "spawn"}),
-    description="Ask a bounded read-only child agent to investigate.",
+    description="Ask bounded read-only child agents to investigate; returns findings with evidence anchors.",
 )
 
 USE_SKILL_TOOL_SPEC = ToolSpec(
@@ -212,7 +221,7 @@ TOOL_EXAMPLES = {
     "run_shell": '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":20}}</tool>',
     "write_file": '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
     "edit_file": '<tool name="edit_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
-    "delegate": '<tool>{"name":"delegate","args":{"task":"inspect README.md","max_steps":3}}</tool>',
+    "delegate": '<tool>{"name":"delegate","args":{"task":"where is retry handled?","focus":["moss/agent_loop.py"],"max_steps":3}}</tool>',
     "use_skill": '<tool>{"name":"use_skill","args":{"name":"some-skill"}}</tool>',
     "update_plan": '<tool>{"name":"update_plan","args":{"steps":[{"id":"1","title":"read the parser","status":"in_progress"},{"id":"2","title":"add a test","status":"pending"}]}}</tool>',
     "memory_write": '<tool>{"name":"memory_write","args":{"scope":"project","topic":"key-decisions","text":"Use SQLite","tags":["database"]}}</tool>',
@@ -482,9 +491,12 @@ def validate_tool(context, name, args):
         return
 
     if name == "delegate":
+        tasks = [str(item).strip() for item in (args.get("tasks") or ()) if str(item).strip()]
         task = str(args.get("task", "")).strip()
-        if not task:
+        if not task and not tasks:
             raise ValueError("task must not be empty")
+        if not all(isinstance(item, str) for item in (args.get("focus") or ())):
+            raise ValueError("focus must contain strings")
         if context.depth >= context.max_depth:
             raise ValueError("delegate depth exceeded")
         return
@@ -757,8 +769,8 @@ def tool_edit_file(context, args):
 def tool_delegate(context, args):
     if context.depth >= context.max_depth:
         raise ValueError("delegate depth exceeded")
-    task = str(args.get("task", "")).strip()
-    if not task:
+    tasks = [str(item).strip() for item in (args.get("tasks") or ()) if str(item).strip()]
+    if not str(args.get("task", "")).strip() and not tasks:
         raise ValueError("task must not be empty")
     return context.spawn_delegate(args)
 

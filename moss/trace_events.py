@@ -55,6 +55,10 @@ CONTEXT_OVERFLOW = "context_overflow"
 CONTEXT_COMPACTED = "context_compacted"
 REQUEST_OFFLOADED = "request_offloaded"
 
+# 子 agent（spec-09 §9.1）。父 run 要能回答"这次委派花了多少、拿回了什么"。
+DELEGATE_SPAWNED = "delegate_spawned"
+DELEGATE_FINISHED = "delegate_finished"
+
 # 确定性录制回放（spec-09 §9.8）。磁带里没有这次请求——要么 prompt 改了，
 # 要么轨迹分叉了。无论哪种，"回放结果和真实运行一致"这个前提都已经不成立。
 REPLAY_MISS = "replay_miss"
@@ -100,6 +104,8 @@ __all__ = [
     "ACTION_RECEIPT",
     "ACTION_RECONCILED",
     "REPLAY_MISS",
+    "DELEGATE_SPAWNED",
+    "DELEGATE_FINISHED",
     "ALL_EVENTS",
 ]
 

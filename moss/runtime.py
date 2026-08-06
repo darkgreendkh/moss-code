@@ -7,8 +7,10 @@ Moss 就是包在模型外面的控制循环：负责组 prompt、解析模型�
 import os
 import sys
 import threading
+import time
 import warnings
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +18,7 @@ from pathlib import Path
 from . import atomic_io
 from . import checkpoint as checkpointlib
 from . import compaction as compactionlib
+from . import delegation as delegationlib
 from .features import memory as memorylib
 from .features.memory_records import SourceRef
 from . import security as securitylib
@@ -27,6 +30,7 @@ from .run_store import RunStore
 from . import rewind as rewindlib
 from .session_store import SessionStore
 from . import skills as skilllib
+from .task_state import STOP_REASON_FINAL_ANSWER_RETURNED
 from .tool_context import ToolContext
 from .tool_executor import ToolExecutor, approval_summary
 from . import tools as toolkit
@@ -1176,28 +1180,127 @@ class Moss:
         # 污染 latest()，又保留可审计的委派轨迹。
         return SessionStore(str(self.root / ".moss" / "delegates"))
 
-    def spawn_delegate(self, args):
-        task = str(args.get("task", "")).strip()
-        child = Moss(
-            model_client=self.model_client,
-            workspace=self.workspace,
-            session_store=self.delegate_session_store(),
-            run_store=self.run_store,
-            approval_policy="never",
-            max_steps=int(args.get("max_steps", 3)),
-            max_new_tokens=self.max_new_tokens,
-            depth=self.depth + 1,
-            max_depth=self.max_depth,
-            read_only=True,
-            reflect_mode="off",
-            secret_env_names=self.secret_env_names,
-            shell_env_allowlist=self.shell_env_allowlist,
+    def capability_set(self):
+        """本 agent 当前真正握有的能力集合（工具声明的并集，按策略过滤）。
+
+        子 agent 的能力必须是它的子集——判断"有没有越权"要有一个明确的被比较对象，
+        不能靠"看起来是只读的"。
+        """
+        capabilities = set()
+        for tool in self.tools.values():
+            capabilities |= set(tool.get("capabilities") or frozenset())
+        if self.policy is not None and self.policy.read_only:
+            capabilities &= {"fs_read"}
+        return frozenset(capabilities)
+
+    def delegate_contract(self, goal, args=None):
+        """把一次委派请求变成结构化契约。
+
+        `context_seed` 在这里被**显式构造**：当前任务目标 + 相关文件路径。
+        刻意不带父 history——截断的对话既不是必要背景也不是完整背景，
+        而 sub-agent 作为上下文治理手段的意义正在于此。
+        """
+        args = args or {}
+        goal = str(goal).strip()
+        seed = []
+        task_summary = str(self.memory.to_dict().get("working", {}).get("task_summary", "")).strip()
+        if task_summary:
+            seed.append(f"The parent agent is working on: {task_summary}")
+        focus = [str(item).strip() for item in (args.get("focus") or ()) if str(item).strip()]
+        anchors = [str(path) for path in (focus or self.relevant_file_anchors(goal)) if str(path)][:5]
+        if anchors:
+            seed.append("Files the parent believes are relevant: " + ", ".join(anchors))
+        contract = delegationlib.DelegateContract(
+            goal=goal,
+            allowed_tools=("list_files", "read_file", "search_text"),
+            capabilities=delegationlib.DELEGATE_CAPABILITIES & self.capability_set(),
+            max_steps=max(1, int(args.get("max_steps", 3))),
+            max_usd=args.get("max_usd"),
+            context_seed=tuple(seed),
         )
-        # 委派的目标是“调查”，不是“放权执行”。
-        # 子 agent 以只读方式运行、步数更少，最后只把结论文本返回给父 agent。
-        child.session["memory"]["task"] = task
-        child.session["memory"]["notes"] = [clip(self.history_text(), 300)]
-        return "delegate_result:\n" + child.ask(task)
+        contract.validate_against(self.capability_set())
+        return contract
+
+    def spawn_delegate(self, args):
+        """执行一次委派。`tasks` 给多条时并行 fan-out，结果按提交顺序聚合。"""
+        args = args or {}
+        goals = [str(item).strip() for item in (args.get("tasks") or ()) if str(item).strip()]
+        if not goals:
+            goals = [str(args.get("task", "")).strip()]
+        goals = goals[: delegationlib.MAX_FANOUT]
+        contracts = [self.delegate_contract(goal, args) for goal in goals]
+        if len(contracts) == 1:
+            results = [self.run_delegate(contracts[0])]
+        else:
+            # 只读子 agent 之间没有共享可变状态，可以并发。聚合顺序仍按提交顺序，
+            # 不按完成顺序——父 history 的内容必须与调用顺序一一对应。
+            with ThreadPoolExecutor(max_workers=len(contracts)) as pool:
+                results = list(pool.map(self.run_delegate, contracts))
+        return "\n\n".join(result.render() for result in results)
+
+    def run_delegate(self, contract):
+        """跑一个子 agent，返回结构化结果。异常收敛成带 error 的结果，不上抛。"""
+        task_state = getattr(self, "current_task_state", None)
+        if task_state is not None:
+            self.emit_trace(task_state, trace_events.DELEGATE_SPAWNED, contract.to_dict())
+        started_at = time.monotonic()
+        try:
+            child = Moss(
+                model_client=self.model_client,
+                workspace=self.workspace,
+                session_store=self.delegate_session_store(),
+                run_store=self.run_store,
+                approval_policy="never",
+                max_steps=contract.max_steps,
+                max_new_tokens=self.max_new_tokens,
+                depth=self.depth + 1,
+                max_depth=self.max_depth,
+                read_only=True,
+                reflect_mode="off",
+                secret_env_names=self.secret_env_names,
+                shell_env_allowlist=self.shell_env_allowlist,
+                allowed_tools=contract.allowed_tools,
+                # 独立预算。子 agent 花的钱和步数仍然计入父 run 的总账，
+                # 但它自己不能把父 run 的预算一口气跑光。
+                run_budget_limits={"max_usd": contract.max_usd} if contract.max_usd else None,
+            )
+            child.session["memory"]["task"] = contract.goal
+            child.session["memory"]["notes"] = [contract.seed_text()]
+            answer = child.ask(contract.goal)
+            child_state = child.current_task_state
+            stop_reason = str(getattr(child_state, "stop_reason", "") or "")
+            if stop_reason and stop_reason != STOP_REASON_FINAL_ANSWER_RETURNED:
+                # 子 agent 没能正常收尾（后端出错、预算耗尽、步数打满）。它最后
+                # 那段话不是结论，是收尾提示——当成 finding 会把一句错误信息
+                # 变成"有出处的事实"。
+                result = delegationlib.DelegateResult(
+                    goal=contract.goal, error=f"{stop_reason}: {self.redact_text(answer)}"
+                )
+            else:
+                result = delegationlib.parse_delegate_output(
+                    answer, goal=contract.goal, verify_anchor=self._delegate_anchor_exists
+                )
+            cost = dict(child.last_run_budget.snapshot() if child.last_run_budget else {})
+            cost["steps"] = child_state.tool_steps if child_state else 0
+            cost["wall_s"] = round(time.monotonic() - started_at, 3)
+            result = replace(result, cost=cost)
+        except Exception as exc:
+            # 委派失败不该炸掉父 run：父 agent 拿到一条"这条路没走通"就够了。
+            result = delegationlib.DelegateResult(
+                goal=contract.goal,
+                error=self.redact_text(str(exc)),
+                cost={"wall_s": round(time.monotonic() - started_at, 3)},
+            )
+        if task_state is not None:
+            self.emit_trace(task_state, trace_events.DELEGATE_FINISHED, result.to_dict())
+        return result
+
+    def _delegate_anchor_exists(self, raw_path):
+        """证据锚点必须真的指向工作区里的一个文件。假锚点比没锚点更糟。"""
+        try:
+            return self.path(raw_path).is_file()
+        except Exception:
+            return False
 
     # 以下是**未经护栏**的原始工具调用。它们必须保持私有：
     # 公开出去就等于在 ToolExecutor（allowlist -> 校验 -> deny -> 重复检测 ->
