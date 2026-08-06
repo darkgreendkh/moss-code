@@ -296,18 +296,18 @@ git commit -m "refactor(packages): group execution safety and extensions"
 - Produces: `moss.agent.loop.AgentLoop`, `moss.agent.state.TaskState`, `moss.agent.output_parser.Action`.
 - Preserves: stop reasons, multi-action writeback order, one-shot exit status and budget behavior.
 
-- [ ] **Step 1: Move agent modules and update all imports**
-- [ ] **Step 2: Run loop, parser, budget, stall and verification tests**
+- [x] **Step 1: Move agent modules and update all imports**
+- [x] **Step 2: Run loop, parser, budget, stall and verification tests**
 
 Run: `uv run --with pytest python -m pytest tests/ -q -k "agent_loop or output_parser or budget or stall or verification or task_state"`
 
-- [ ] **Step 3: Run the package-layout test**
+- [x] **Step 3: Run the package-layout test**
 
 Run: `uv run --with pytest python -m pytest tests/test_package_layout.py -q`
 
 Expected: PASS; all agent modules are at their target paths. `cli.py` remains the only planned root migration and is removed in Task 6.
 
-- [ ] **Step 4: Run full tests and lint, then commit**
+- [x] **Step 4: Run full tests and lint, then commit**
 
 ```bash
 uv run --with pytest python -m pytest tests/ -q

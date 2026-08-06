@@ -11,7 +11,7 @@ from moss.runs.checkpoint import (
     evaluate_resume_state,
 )
 from moss.runs.store import RunStore
-from moss.task_state import TaskState
+from moss.agent.state import TaskState
 
 
 def build_agent(tmp_path, outputs=None, **kwargs):

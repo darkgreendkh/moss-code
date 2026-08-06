@@ -1,6 +1,6 @@
 """停滞检测（spec-02 §4.5）。"""
 
-from moss.stall import args_digest, detect_stall, is_repeated_call
+from moss.agent.stall import args_digest, detect_stall, is_repeated_call
 
 
 def _event(name, path="a.py", changed=False, error=""):

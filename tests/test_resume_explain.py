@@ -16,7 +16,7 @@ from moss.runs.checkpoint import (
 )
 from moss.cli import build_agent, build_arg_parser, main
 from moss.runs.store import RunStore
-from moss.task_state import TaskState
+from moss.agent.state import TaskState
 
 
 def _agent(tmp_path, outputs=()):

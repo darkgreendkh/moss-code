@@ -10,11 +10,11 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from ..memory import service as memorylib
-from ..task_state import STOP_REASON_BUDGET_EXCEEDED
+from ..agent.state import STOP_REASON_BUDGET_EXCEEDED
 from ..providers.clients import FakeModelClient
 from ..runtime import Moss, SessionStore
 from ..runs.store import RunStore
-from ..task_state import STOP_REASON_FINAL_ANSWER_RETURNED
+from ..agent.state import STOP_REASON_FINAL_ANSWER_RETURNED
 from ..execution.registry import legal_tool_names
 from ..context.repository.workspace import WORKSPACE_FINGERPRINT_VERSION, WorkspaceContext
 from . import cassettes

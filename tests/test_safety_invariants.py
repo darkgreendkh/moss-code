@@ -7,7 +7,7 @@ import pytest
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
 from moss import cli as moss_cli
-from moss.task_state import TaskState
+from moss.agent.state import TaskState
 
 
 def build_workspace(tmp_path):

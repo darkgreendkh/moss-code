@@ -3,8 +3,8 @@
 import json
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.budget import RunBudget, usage_from_metadata
-from moss.task_state import STOP_REASON_BUDGET_EXCEEDED, TaskState
+from moss.agent.budget import RunBudget, usage_from_metadata
+from moss.agent.state import STOP_REASON_BUDGET_EXCEEDED, TaskState
 
 
 def test_hard_exceeded_reports_the_first_breached_dimension():
@@ -188,7 +188,7 @@ def test_no_limits_means_the_previous_behaviour(tmp_path):
 
 
 def test_graceful_final_names_what_was_done(tmp_path):
-    from moss.budget import graceful_final
+    from moss.agent.budget import graceful_final
 
     state = TaskState.create(task_id="t", user_request="x")
     state.record_model_turn()

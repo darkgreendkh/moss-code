@@ -242,7 +242,7 @@ TOOL_EXAMPLES = {
     "run_shell": '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":20}}</tool>',
     "write_file": '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
     "edit_file": '<tool name="edit_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
-    "delegate": '<tool>{"name":"delegate","args":{"task":"where is retry handled?","focus":["moss/agent_loop.py"],"max_steps":3}}</tool>',
+    "delegate": '<tool>{"name":"delegate","args":{"task":"where is retry handled?","focus":["moss/agent/loop.py"],"max_steps":3}}</tool>',
     "use_skill": '<tool>{"name":"use_skill","args":{"name":"some-skill"}}</tool>',
     "describe_tool": '<tool>{"name":"describe_tool","args":{"name":"search_text"}}</tool>',
     "run_orchestration": (

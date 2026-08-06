@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
-from .clock import now
+from ..clock import now
 
 STATUS_RUNNING = "running"
 STATUS_COMPLETED = "completed"

@@ -1,6 +1,6 @@
 """一轮输出里的多个动作（spec-02 §4.1）。"""
 
-from moss.output_parser import parse_model_actions, parse_model_output, truncate_after_final
+from moss.agent.output_parser import parse_model_actions, parse_model_output, truncate_after_final
 
 
 def test_single_tool_output_degrades_to_the_legacy_result():

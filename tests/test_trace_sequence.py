@@ -8,7 +8,7 @@ import json
 import time
 
 from moss.runs.store import TRACE_CHAIN_GENESIS, RunStore, event_digest
-from moss.task_state import TaskState
+from moss.agent.state import TaskState
 
 
 def _store(tmp_path):

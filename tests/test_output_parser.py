@@ -1,4 +1,4 @@
-from moss.output_parser import parse_model_output, parse_xml_tool, retry_notice
+from moss.agent.output_parser import parse_model_output, parse_xml_tool, retry_notice
 
 
 def test_parse_json_tool_call():

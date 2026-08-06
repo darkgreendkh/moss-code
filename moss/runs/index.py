@@ -98,7 +98,7 @@ class RunIndex:
         return None
 
     def running_run_ids(self):
-        from ..task_state import STATUS_RUNNING
+        from ..agent.state import STATUS_RUNNING
 
         return [entry["run_id"] for entry in self.entries() if entry.get("status") == STATUS_RUNNING]
 

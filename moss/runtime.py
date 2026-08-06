@@ -34,7 +34,7 @@ from .runs.store import RunStore
 from .runs import rewind as rewindlib
 from .runs.session import SessionStore
 from .extensions import skills as skilllib
-from .task_state import STOP_REASON_FINAL_ANSWER_RETURNED
+from .agent.state import STOP_REASON_FINAL_ANSWER_RETURNED
 from .execution.executor import ToolExecutor, approval_summary
 from .execution.protocol import ToolContext
 from .execution import registry as toolkit
@@ -49,11 +49,11 @@ from .context.token_budget import (
 )
 from .context.repository import ignore as ignorelib
 from .context.repository import repo_map as repo_maplib
-from . import budget as budgetlib
+from .agent import budget as budgetlib
 from .execution.safety import policy as policylib
 from .execution.safety import sandbox as sandboxlib
-from . import stall as stalllib
-from .verification import is_verification_command
+from .agent import stall as stalllib
+from .agent.verification import is_verification_command
 from .runs.observability import events as trace_events
 from .context.repository.workspace import (
     SnapshotResult,
@@ -1081,7 +1081,7 @@ class Moss:
         return [record.id for record in stored]
 
     def ask(self, user_message):
-        from .agent_loop import AgentLoop
+        from .agent.loop import AgentLoop
 
         return AgentLoop(self).run(user_message)
 

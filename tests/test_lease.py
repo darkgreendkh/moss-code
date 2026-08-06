@@ -17,7 +17,7 @@ from moss.runs.lease import (
     age_seconds,
 )
 from moss.runs.store import RunStore
-from moss.task_state import STATUS_FAILED, STATUS_RUNNING, TaskState
+from moss.agent.state import STATUS_FAILED, STATUS_RUNNING, TaskState
 
 
 def _ago(seconds):

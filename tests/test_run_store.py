@@ -2,7 +2,7 @@ import json
 import os
 
 from moss.runs.store import TRACE_CHAIN_GENESIS, RunStore, event_digest
-from moss.task_state import (
+from moss.agent.state import (
     STATUS_FAILED,
     STOP_REASON_FINAL_ANSWER_RETURNED,
     STOP_REASON_INTERRUPTED,

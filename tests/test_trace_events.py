@@ -9,7 +9,7 @@ import pathlib
 
 from moss.runs.observability import events as trace_events
 from moss.runs.store import RunStore
-from moss.task_state import TaskState
+from moss.agent.state import TaskState
 
 EVALUATION_DIR = pathlib.Path(trace_events.__file__).parent / "evaluation"
 

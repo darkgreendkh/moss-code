@@ -3,7 +3,7 @@
 import json
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.verification import is_verification_command
+from moss.agent.verification import is_verification_command
 
 
 def _build_agent(tmp_path, outputs, **kwargs):

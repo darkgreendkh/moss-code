@@ -1,7 +1,7 @@
 import json
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.agent_loop import AgentLoop
+from moss.agent.loop import AgentLoop
 
 
 def build_agent(tmp_path, outputs):

@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
+from moss.agent.state import TaskState
 from moss.execution.safety.sandbox import SandboxPlan, detect, wrap_command
 from moss.execution.safety.shell import extract_hosts, host_allowed
 
@@ -105,7 +106,7 @@ def _build_agent(tmp_path, **kwargs):
 def test_sandbox_state_reaches_the_report(tmp_path):
     agent = _build_agent(tmp_path)
 
-    report = agent.build_report(__import__("moss").task_state.TaskState.create(task_id="t", user_request="x"))
+    report = agent.build_report(TaskState.create(task_id="t", user_request="x"))
 
     assert report["sandbox"]["mode"] == "none"
     assert report["sandbox"]["requested"] == "off"

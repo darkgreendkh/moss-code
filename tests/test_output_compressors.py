@@ -7,7 +7,7 @@
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
 from moss.context import compressors as output_compressors
 from moss.context.compressors import compress, detect_kind, register, registered_kinds
-from moss.task_state import TaskState
+from moss.agent.state import TaskState
 from moss.execution.executor import prepare_tool_output
 
 PYTEST_OUTPUT = """exit_code: 1
