@@ -8,9 +8,17 @@ from dataclasses import dataclass
 
 from .clock import now
 from .injection import scan as scan_for_injection
-from .token_budget import clip
+from .token_budget import MAX_TOOL_OUTPUT, clip
 from .tools import ToolRunOutput, classify_shell_command
 from .workspace import invalidate_git_facts_cache
+
+
+# 超过这个字符数的工具输出就落盘，prompt 里只放摘要 + 指针。
+# 阈值刻意偏低：一份 4000 字符的输出进 prompt 已经是上千 token，
+# 而它里面通常只有几行是决策需要的。
+ARTIFACT_THRESHOLD = 4000
+# 卸载后进 prompt 的摘要上限（字符）。
+ARTIFACT_PREVIEW_CHARS = 2000
 
 
 # 工具输出超上限时，保留哪一端取决于关键信息的位置。
@@ -166,21 +174,26 @@ def _policy_decision(agent, tool, name, args):
     spec = tool.get("spec")
     if policy is None or spec is None:
         return None
-    return policy.decide(spec, args, resolved_paths=_resolved_relative_paths(agent, name, args))
+    return policy.decide(
+        spec,
+        args,
+        resolved_paths=_resolved_relative_paths(agent, name, args, path_scope=spec.path_scope),
+    )
 
 
-def _resolved_relative_paths(agent, name, args):
+def _resolved_relative_paths(agent, name, args, path_scope="workspace"):
     """把工具参数里的路径解析成仓库内相对路径。
 
-    解析失败（逃逸、不存在）不在这里报错——路径锚定是 Moss.path() 的职责，
-    策略层只回答"允不允许碰这些路径"。
+    解析失败（逃逸、不存在）不在这里报错——路径锚定是 Moss.path() / Moss.run_path()
+    的职责，策略层只回答"允不允许碰这些路径"。作用域要按 ToolSpec 走：run_dir 的
+    工具用工作区根去解析会得到一个根本不存在的路径，策略判定就跟着错位。
     """
     raw = str((args or {}).get("path", "")).strip()
     if not raw:
         return ()
+    resolver = agent.run_path if path_scope == "run_dir" else agent.path
     try:
-        resolved = agent.path(raw)
-        return (resolved.relative_to(agent.root).as_posix(),)
+        return (resolver(raw).relative_to(agent.root).as_posix(),)
     except Exception:
         return (raw.replace("\\", "/").lstrip("./"),)
 
@@ -218,6 +231,53 @@ def _extra_metadata_for(name, args):
         "shell_risk_reasons": shell_metadata["shell_risk_reasons"],
         "shell_undecidable": shell_metadata["shell_undecidable"],
     }
+
+
+def prepare_tool_output(agent, name, args, raw_text):
+    """把工具原始输出变成"进 prompt 的内容 + 相应 metadata"。
+
+    为什么要这一层：硬截断是**有损**的——砍掉的 12000 行既不进摘要也不落盘，
+    模型无从取回，而失败原因偏偏常常在那里面。这里改成：完整输出落进 run 目录，
+    prompt 里放摘要和一个可以用 read_artifact 取回的指针。
+    """
+    raw_text = str(raw_text)
+    keep = _TRUNCATION_KEEP.get(name, "head")
+    # read_artifact 自己的输出不再卸载：模型刚按行区间取回的内容又被换成指针，
+    # 只会让它绕圈。
+    if name == "read_artifact" or len(raw_text) <= ARTIFACT_THRESHOLD:
+        content = clip(raw_text, keep=keep)
+        return content, {"truncated_bytes_lost": max(0, len(raw_text) - MAX_TOOL_OUTPUT)}
+
+    # 落盘的文本先过脱敏边界：artifact 和 trace/report 一样是长期留在磁盘上的工件。
+    safe_text = agent.redact_text(raw_text)
+    stored = agent.store_tool_artifact(name, safe_text)
+    if stored is None:
+        content = clip(raw_text, keep=keep)
+        return content, {"truncated_bytes_lost": max(0, len(raw_text) - MAX_TOOL_OUTPUT)}
+
+    artifact_path, lines = stored
+    summary = compress_tool_output(name, args, safe_text, ARTIFACT_PREVIEW_CHARS)
+    pointer = (
+        f'... full output is {lines} lines; '
+        f'read it with read_artifact("{artifact_path}", start, end)'
+    )
+    return (
+        f"{summary}\n{pointer}",
+        {
+            "artifact_path": artifact_path,
+            "artifact_lines": lines,
+            "truncated_bytes_lost": 0,
+        },
+    )
+
+
+def compress_tool_output(name, args, text, budget_chars):
+    """把大输出压成进 prompt 的摘要。
+
+    PR-3 会把这里换成按工具类型注册的压缩器；现在先用既有的保头/保两端切片，
+    保证卸载这一步本身不改变"模型看到什么形状的内容"。
+    """
+    return clip(text, budget_chars, keep=_TRUNCATION_KEEP.get(name, "head"))
 
 
 def approval_summary(agent, name, args):
@@ -408,7 +468,7 @@ class ToolExecutor:
         after_snapshot = before_snapshot
         try:
             output = _normalize_tool_output(tool["run"](args))
-            content = clip(output.content, keep=_TRUNCATION_KEEP.get(name, "head"))
+            content, output_metadata = prepare_tool_output(agent, name, args, output.content)
             after_snapshot = agent.capture_workspace_snapshot() if tool["risky"] else before_snapshot
             if tool["risky"]:
                 # git 事实带 500ms TTL 缓存，risky 工具刚改完工作区就必须让它失效，
@@ -419,6 +479,10 @@ class ToolExecutor:
             tool_status = "ok"
             tool_error_code = ""
             extra_metadata = _extra_metadata_for(name, args)
+            extra_metadata.update(output_metadata)
+            lost = int(output_metadata.get("truncated_bytes_lost", 0))
+            if lost:
+                agent.truncated_bytes_lost = getattr(agent, "truncated_bytes_lost", 0) + lost
             if name == "run_shell":
                 exit_code = output.exit_code
                 if exit_code is None:

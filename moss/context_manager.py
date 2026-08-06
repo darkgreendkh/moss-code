@@ -64,6 +64,25 @@ def _is_shell_signal_line(line):
     return any(keyword in lowered for keyword in _SHELL_SIGNAL_KEYWORDS)
 
 
+def tool_result_open_tag(item):
+    """`<tool_result ...>` 开标签。
+
+    卸载过的输出要在标签上带 `artifact` 和 `lines`：模型看到的是摘要，
+    但它得知道完整输出在哪、有多长，否则"可以取回"只是一句空话。
+    """
+    name = str(item.get("name", "tool"))
+    attributes = [
+        'untrusted="true"',
+        f'source="{name}"',
+        f"args={json.dumps(item.get('args', {}), sort_keys=True)}",
+    ]
+    artifact = str(item.get("artifact", "") or "")
+    if artifact:
+        attributes.append(f'artifact="{artifact}"')
+        attributes.append(f'lines="{int(item.get("artifact_lines", 0) or 0)}"')
+    return f"<tool_result {' '.join(attributes)}>"
+
+
 def _render_memory_note(note):
     trust = str(note.get("trust", "model")).strip() or "model"
     source = str(note.get("source", "")).strip() or "unknown"
@@ -402,9 +421,8 @@ class ContextManager:
         role = str(item.get("role", "user"))
         if role == "tool":
             name = str(item.get("name", "tool"))
-            args = json.dumps(item.get("args", {}), sort_keys=True)
             text = (
-                f'<tool_result untrusted="true" source="{name}" args={args}>\n'
+                f'{tool_result_open_tag(item)}\n'
                 f'{item.get("content", "")}\n</tool_result>'
             )
             return Message(
@@ -793,9 +811,7 @@ class ContextManager:
         lines = []
         for item in history:
             if item["role"] == "tool":
-                lines.append(
-                    f'<tool_result untrusted="true" source="{item["name"]}" args={json.dumps(item["args"], sort_keys=True)}>'
-                )
+                lines.append(tool_result_open_tag(item))
                 lines.append(str(item["content"]))
                 lines.append("</tool_result>")
             else:
@@ -807,7 +823,7 @@ class ContextManager:
             # 工具结果带上不可信标记：它是**数据**，不是指令。
             # prefix 里有一条对应规则说明这一点，两者缺一都不成立
             # （光标注没规则模型不会当回事，光有规则则标不出边界在哪）。
-            prefix = f'<tool_result untrusted="true" source="{item["name"]}" args={json.dumps(item["args"], sort_keys=True)}>'
+            prefix = tool_result_open_tag(item)
             keep = _HISTORY_KEEP.get(item["name"], "head")
             content = self._clip(item["content"], max(20, line_limit), keep=keep)
             return [prefix, content, "</tool_result>"]

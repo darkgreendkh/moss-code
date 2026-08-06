@@ -49,6 +49,37 @@ class RunStore:
     def report_path(self, run_id):
         return self.run_dir(run_id) / "report.json"
 
+    def artifacts_dir(self, run_id):
+        """大工具输出的卸载目录。
+
+        为什么和 trace 分开：trace 是"发生了什么"的时间线，artifacts 是
+        "那一步的完整输出"。前者要能整份读进内存，后者可能是几 MB 的 pytest 日志。
+        """
+        return self.run_dir(run_id) / "artifacts"
+
+    def context_dir(self, run_id):
+        """被 compaction 压缩掉的原始历史。摘要里附路径，模型可用 read_artifact 取回。"""
+        return self.run_dir(run_id) / "context"
+
+    def write_artifact(self, run_id, sequence, tool, text):
+        """把一份大输出落盘，返回 (相对 run 目录的路径, 行数)。
+
+        文件名带内容 sha12，并且先按 sha12 找现成的：同一份 pytest 输出被读三次
+        只该占一份盘，也让"同一内容 = 同一指针"，模型不会以为拿到了不同的东西。
+        """
+        text = str(text)
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+        directory = self.artifacts_dir(run_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        lines = len(text.splitlines()) or 1
+        existing = sorted(directory.glob(f"*-{digest}.txt"))
+        if existing:
+            return f"artifacts/{existing[0].name}", lines
+        safe_tool = "".join(ch for ch in str(tool) if ch.isalnum() or ch in "-_") or "tool"
+        path = directory / f"{int(sequence):03d}-{safe_tool}-{digest}.txt"
+        self._write_text_atomic(path, text)
+        return f"artifacts/{path.name}", lines
+
     def start_run(self, task_state):
         # 每次 ask() 都会生成一个 run 目录。
         # 这样一次用户请求对应一组独立工件，后续排查更容易。
@@ -198,6 +229,22 @@ class RunStore:
         if not events:
             return 1
         return max(int(event.get("sequence", 0) or 0) for event in events) + 1
+
+    def _write_text_atomic(self, path, text):
+        # 和 _write_json_atomic 同样的理由：半截 artifact 比没有 artifact 更难排查，
+        # 而模型会照着指针去读它。
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            delete=False,
+            dir=str(path.parent),
+            prefix=path.name + ".",
+            suffix=".tmp",
+        ) as handle:
+            handle.write(str(text))
+            temp_name = handle.name
+        Path(temp_name).replace(path)
+        return path
 
     def _write_json_atomic(self, path, payload):
         # 原子写：先写临时文件，再 replace。

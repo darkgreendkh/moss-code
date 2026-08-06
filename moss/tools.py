@@ -173,6 +173,20 @@ BASE_TOOL_SPECS = {
         capabilities=frozenset({"memory_write"}),
         description="Forget an active durable memory by appending a tombstone.",
     ),
+    "read_artifact": ToolSpec(
+        name="read_artifact",
+        fields={
+            "path": ToolField("str"),
+            "start": ToolField("int", required=False, default=1, minimum=1),
+            "end": ToolField("int", required=False, default=200, minimum=1),
+        },
+        risky=False,
+        capabilities=frozenset({"fs_read"}),
+        # 作用域是当前 run 目录，不是工作区：卸载的输出是本次运行的证据，
+        # 让模型拿这个工具去读仓库文件等于多开一个绕过 read_file 的口子。
+        path_scope="run_dir",
+        description="Read a byte-for-byte offloaded tool output from this run by line range.",
+    ),
     "memory_search": ToolSpec(
         name="memory_search",
         fields={
@@ -219,6 +233,7 @@ TOOL_EXAMPLES = {
     "memory_update": '<tool>{"name":"memory_update","args":{"id":"mem_123456789abc","text":"Use SQLite WAL"}}</tool>',
     "memory_delete": '<tool>{"name":"memory_delete","args":{"id":"mem_123456789abc"}}</tool>',
     "memory_search": '<tool>{"name":"memory_search","args":{"query":"database choice","limit":5}}</tool>',
+    "read_artifact": '<tool>{"name":"read_artifact","args":{"path":"artifacts/007-run_shell-a1b2c3d4e5f6.txt","start":1,"end":200}}</tool>',
 }
 
 # 计划步骤的合法状态。多一个状态就多一种模型会写错的写法，四个够用了。
@@ -388,6 +403,16 @@ def validate_tool(context, name, args):
             raise ValueError("invalid line range")
         return
 
+    if name == "read_artifact":
+        path = context.run_path(args["path"])
+        if not path.is_file():
+            raise ValueError("path is not an artifact file")
+        start = int(args.get("start", 1))
+        end = int(args.get("end", 200))
+        if start < 1 or end < start:
+            raise ValueError("invalid line range")
+        return
+
     if name == "search_text":
         pattern = str(args.get("pattern", "")).strip()
         if not pattern:
@@ -513,6 +538,24 @@ def tool_read_file(context, args):
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     body = "\n".join(f"{number:>4}: {line}" for number, line in enumerate(lines[start - 1:end], start=start))
     return f"# {path.relative_to(context.root)}\n{body}"
+
+
+def tool_read_artifact(context, args):
+    """按行区间取回一份被卸载的工具输出。
+
+    存在的意义是让"截断"从有损变成可逆：prompt 里只放摘要 + 指针，
+    模型真的需要那 1800 行时还能自己拿回来，而不是永远丢了。
+    """
+    path = context.run_path(args["path"])
+    if not path.is_file():
+        raise ValueError("path is not an artifact file")
+    start = int(args.get("start", 1))
+    end = int(args.get("end", 200))
+    if start < 1 or end < start:
+        raise ValueError("invalid line range")
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    body = "\n".join(f"{number:>4}: {line}" for number, line in enumerate(lines[start - 1:end], start=start))
+    return f"# {path.name} (lines {start}-{min(end, len(lines))} of {len(lines)})\n{body}"
 
 
 def tool_search_text(context, args):
@@ -748,6 +791,7 @@ _TOOL_RUNNERS = {
     "list_files": tool_list_files,
     "read_file": tool_read_file,
     "search_text": tool_search_text,
+    "read_artifact": tool_read_artifact,
     "run_shell": tool_run_shell,
     "write_file": tool_write_file,
     "edit_file": tool_edit_file,

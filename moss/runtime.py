@@ -190,6 +190,12 @@ class Moss:
         self.session_path = self.session_store.save(self.session)
         self.current_task_state = None
         self.current_run_dir = None
+        # 卸载 artifact 的序号。只读工具批可以并发执行，序号必须自己加锁，
+        # 否则同一批里两个大输出会抢到同一个文件名。
+        self._artifact_seq = 0
+        self._artifact_lock = threading.Lock()
+        # 本次运行因硬截断而永久丢掉的字节数。卸载生效后它应当恒为 0。
+        self.truncated_bytes_lost = 0
         # 可选的进度观察者：CLI 用它把 agent 每一步在做什么实时打给用户看。
         # 默认 None（比如 benchmark / 子 agent 场景），完全不影响控制循环。
         self.progress_observer = None
@@ -1001,6 +1007,8 @@ class Moss:
             # 沙箱状态进 report：降级必须看得见，评测口径也要能区分。
             "sandbox": self.sandbox_plan.to_dict(),
             "snapshot_strategy": self.snapshot_strategy(),
+            # 卸载生效后这个数应当恒为 0：大输出全部落盘，没有字节被永久丢掉。
+            "truncated_bytes_lost": int(getattr(self, "truncated_bytes_lost", 0)),
             "redacted_env": self.detected_secret_env_summary(),
         }
 
@@ -1027,6 +1035,7 @@ class Moss:
             memory_deleter=self.memory_delete_action,
             memory_searcher=self.memory_search_action,
             sandbox_plan=self.sandbox_plan,
+            run_path_resolver=self.run_path,
         )
 
     def delegate_session_store(self):
@@ -1236,3 +1245,38 @@ class Moss:
         if os.path.commonpath([str(self.root), str(resolved)]) != str(self.root):
             raise ValueError(f"path escapes workspace: {raw_path}")
         return resolved
+
+    def run_path(self, raw_path):
+        """把路径锚定在**当前 run 目录**之下（read_artifact 专用）。
+
+        为什么不复用 `path()`：run 目录在工作区里面，`path()` 会放行整个仓库，
+        那样 read_artifact 就成了绕过 read_file 审计的另一条读文件通道。
+        跨 run 也不允许——模型只该看见自己这次运行的证据。
+        """
+        run_dir = getattr(self, "current_run_dir", None)
+        if run_dir is None:
+            raise ValueError("no active run directory")
+        run_root = Path(run_dir).resolve()
+        path = Path(raw_path)
+        path = path if path.is_absolute() else run_root / path
+        resolved = path.resolve()
+        if os.path.commonpath([str(run_root), str(resolved)]) != str(run_root):
+            raise ValueError(f"path escapes run directory: {raw_path}")
+        return resolved
+
+    def store_tool_artifact(self, tool_name, text):
+        """把一份超阈值的工具输出卸载到 run 目录，返回 (相对路径, 行数)。
+
+        没有活跃 run（比如直接调 run_tool 的测试和评测）时返回 None，
+        调用方退回原来的硬截断——卸载是增强，不该成为新的失败点。
+        """
+        task_state = getattr(self, "current_task_state", None)
+        if task_state is None or getattr(self, "current_run_dir", None) is None:
+            return None
+        with self._artifact_lock:
+            self._artifact_seq += 1
+            sequence = self._artifact_seq
+        try:
+            return self.run_store.write_artifact(task_state.run_id, sequence, tool_name, text)
+        except OSError:
+            return None

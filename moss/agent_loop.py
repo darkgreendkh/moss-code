@@ -446,6 +446,11 @@ class AgentLoop:
             }
             if action.call_id:
                 entry["call_id"] = action.call_id
+            if metadata.get("artifact_path"):
+                # 指针跟着历史条目走：模型下一轮看到的摘要必须带上"完整输出在哪"，
+                # 否则"可以取回"只是一句空话。
+                entry["artifact"] = metadata["artifact_path"]
+                entry["artifact_lines"] = int(metadata.get("artifact_lines", 0) or 0)
             agent.record(entry)
             if action.name in ("read_file", "write_file", "edit_file"):
                 anchor_miss = agent.note_anchor_outcome((action.args or {}).get("path", ""))

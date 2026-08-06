@@ -28,9 +28,17 @@ class ToolContext:
     memory_searcher: Callable[[dict], list] = None
     # 沙箱计划。None 表示不包裹，行为与加沙箱前一致。
     sandbox_plan: object = None
+    # run 目录内的路径锚定（read_artifact 用）。和 path_resolver 分开是刻意的：
+    # 两者的根不同，混用会让"只能读本次运行的工件"这条约束失效。
+    run_path_resolver: Callable[[str], Path] = None
 
     def path(self, raw_path):
         return self.path_resolver(str(raw_path))
+
+    def run_path(self, raw_path):
+        if self.run_path_resolver is None:
+            raise ValueError("no active run directory")
+        return self.run_path_resolver(str(raw_path))
 
     def shell_env(self):
         return self.shell_env_provider()
