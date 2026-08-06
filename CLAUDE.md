@@ -32,6 +32,8 @@ cli.py (装配/REPL/进度渲染)
             ├─ tool_executor.py     执行护栏：allowlist→存在性→校验→重复检测→审批→快照 diff→大输出卸载
             │    └─ tools.py        工具白名单（显式注册，非动态发现）
             ├─ compaction.py        上下文压缩：结构化交接（可逆/幂等/闭合），默认 off
+            ├─ model_router.py      脏活（compaction/反思/judge）走 aux model，主线走主模型
+            ├─ hooks.py             用户钩子 pre_tool/post_tool/pre_final/post_run
             ├─ checkpoint.py        每步落 checkpoint（上限 CHECKPOINT_HISTORY_LIMIT=40，自动裁剪）
             ├─ action_ledger.py     risky 动作的 intent/receipt 两阶段 + 崩溃后对账
             └─ run_store.py         .moss/runs/<run_id>/{task_state.json, trace.jsonl, report.json, lease.json}
@@ -96,10 +98,40 @@ cli.py (装配/REPL/进度渲染)
 - `security.py`：secret 检测/脱敏；`run_shell` 只继承 `DEFAULT_SHELL_ENV_ALLOWLIST` 里的环境变量（**含 Windows 必需的 COMSPEC/SYSTEMROOT 等，删了 run_shell 在 Windows 上直接崩**）
 - `config.py`：`.env` 加载（坏行跳过并警告，不允许让整个启动崩掉）；`.moss/config.json` 装结构化配置（如 `repo_context.doc_names`）
 - `skills.py`：`.moss/skills/*.md`（frontmatter: name/description，正文按 `use_skill` 懒加载）
+- `providers/recording.py`：确定性录制回放（spec-09 §9.8）。`RecordingModelClient` / `ReplayModelClient`
+  是**包在真实 client 外面的装饰器**，对主循环透明；身份属性（provider/model/capabilities）必须透传。
+  `request_fingerprint` 规范化剔除时间戳、run/session id、workspace 绝对路径前缀、长 hex、耗时——
+  取舍是**宁可 miss 也不撞车**（miss 有 `on_miss` 兜底并告警，撞车是静默回放出错误的回答）。
+  磁带落盘前过 `redact_artifact`（磁带进 git）。`on_miss=fail` 是 CI 默认
+- `delegation.py`：子 agent 契约（spec-09 §9.1）。`DelegateContract.context_seed` 由父 agent
+  **显式构造**（任务目标 + 相关文件路径），不再截断父 history；`DelegateResult.findings` 带证据锚点，
+  父 agent 可直接 `read_file` 核验。能力必须是父集的子集且不越只读边界（fail-closed）。
+  锚点指不到工作区内的文件就丢掉锚点只留结论——**假锚点比没锚点更糟**
+- `model_router.py`：多模型路由（spec-09 §9.7）。`AUX_TASKS` 显式列出脏活；`bind()` 给子系统
+  一个只认 `complete()` 的门面，aux 失败自动回落主模型并记 `aux_degraded`。
+  **未配置 aux 时行为与加路由前逐字节一致**（这是消融基线）；aux 的输出不进主线 history
+- `mcp/`：MCP 客户端与服务端（spec-09 §9.2），JSON-RPC 2.0 over stdio 手写。
+  外部工具在**启动期**转成 `ToolSpec` 落白名单并进 `tool_signature`，**不做运行期动态发现**；
+  必须在 `.moss/config.json` 声明 capabilities（fail-closed），一律加隐含 `network` + risky。
+  server 侧走 `Moss.execute(ActionRequest)` 唯一入口，默认只导出只读工具
+- `hooks.py`：用户钩子（spec-09 §9.5）。`.moss/hooks/<point>`，只认可执行位，超时 3s、失败不阻断。
+  **唯一能改控制流的是 `pre_tool` 的退出码 2**，且必须记 `hook_denied`。钩子拿到的是脱敏后的 JSON。
+  agent 写不进 `.moss/`（`policy.DEFAULT_DENY` 已覆盖），否则它能给自己装后门
+- `code_mode.py`：受限 Python 编排（spec-09 §9.3）。**默认关闭 + 沙箱硬前置**。
+  节点类型 / 属性名 / 自由名字**三层全部白名单**——只做节点白名单挡不住 `eval(...)`，
+  那在 AST 上就是普通的 `Call(Name)`。每次工具调用仍逐条走 `ToolExecutor`
+- `trace_html.py`：`moss runs show <id> --html`，单文件、内联 CSS/SVG、**零外部请求**；
+  工具输出进 HTML 前一律转义（它是不可信数据）
 - `evaluation/`：benchmark 与 ablation，不属于运行时路径
+  - `cassettes.py`：L1 磁带按 `benchmarks/cassettes/<prompt_version>/<task_id>/` 存放；
+    `UNCASSETTABLE_TASKS` 登记了两条**做不到**指纹稳定的任务及原因
   - L0–L4 证据不得跨层混写；scripted 入口只属于 L1，不能声称模型能力
   - L2/L3 必须使用临时 workspace、RunManifest、成本字段与统计区间；infra failure 单列
   - judge 不能决定 binary pass；公开 adapter 不负责下载数据或宣称榜单分数
+
+磁带 `benchmarks/cassettes/<prompt_version>/<task_id>/` **进 git**（小、脱敏过、CI 要用）；
+录制走 `scripts/record_cassettes.py`，manifest 里的 `source` 区分 `scripted-bootstrap` 与 `provider`——
+从脚本引导出来的磁带不能声称是真实模型轨迹。
 
 公共 API 只从 `moss/__init__.py` 导出；旧的 `moss.evaluator`/`moss.metrics`/`moss.models`/`moss.memory` 平铺模块已删除，不要复活它们。
 
@@ -134,6 +166,14 @@ cli.py (装配/REPL/进度渲染)
     同一次执行还会把旧内容存进 `.moss/runs/<id>/undo/<action_id>/` 供 `/rewind` 用，
     回滚前必须比对 `after_sha`：用户自己的未提交改动绝不能被悄悄盖掉。
 13. **注释风格**：中文、解释"为什么存在/在链路里的位置"，新代码保持一致。
+14. **外部能力一律 fail-closed**：MCP 工具没声明 capabilities 就拒绝注册；
+    skill 的 `allowed-tools` 越出 run 级白名单就拒绝点亮（不静默取交集——
+    静默降级的 skill 会因为缺工具而做错事，报错比降级有用）；
+    code mode 没有沙箱就不暴露工具。
+15. **稳定前缀不随注册表规模线性膨胀**：Tools 段超过 `catalog_threshold`（默认 16）
+    切成目录 + `describe_tool` 按需取 schema，段落有 600 token 预算；
+    Skills 段有 400 token 预算。两者都是**按比例缩短描述**而不是砍掉后面的条目——
+    被砍掉的东西在模型眼里就是不存在。
 
 ## 配置
 
@@ -153,6 +193,14 @@ cli.py (装配/REPL/进度渲染)
 安全开关：`--sandbox`（默认 auto）、`--allow-network`、`--allow` / `--deny`（能力+glob）、`--injection-scan`（默认 on）。
 
 主循环开关：`--parallel-tools`（默认 off）、`--verify-before-final`（默认 on）、`--max-input-tokens` / `--max-output-tokens` / `--max-seconds` / `--max-usd`（默认全 None，不设即老行为）。
+
+spec-09 扩展点开关（全部默认关闭或行为不变）：
+`--record <dir>` / `--replay <dir>` / `--replay-on-miss=fail|nearest|passthrough`（默认 fail）、
+`--aux-model` / `--aux-provider`（不设即全部回落主模型）、
+`--enable-code-mode`（**沙箱不可用时即使开了也不暴露 `run_orchestration`**，并打 stderr）。
+MCP server 与 `catalog_threshold` 写在 `.moss/config.json` 的 `mcp` 段（结构化配置，不进 `.env`）；
+用户钩子放在 `.moss/hooks/<point>`（需要可执行位）。
+子命令 `moss mcp serve` 把 moss 的只读工具暴露成 MCP server。
 
 提示词开关：`--tool-protocol=auto|native|text`（默认 auto）、`--context-mode=rerender|append_only`（默认 rerender）、`--no-prompt-cache`。内置 prompt 版本是 `p1`；`.moss/prompts/system.md` 可覆盖稳定 system head，版本记为 `file:<sha256前12位>` 并写入 report/run_manifest。
 
@@ -185,6 +233,8 @@ CLI 默认：`--max-steps 25`、`--max-new-tokens 4096`、`--approval ask`。Con
                    artifacts/ 卸载的大工具输出（read_artifact 按行取回）
                    context/   被 compaction 压掉的原始历史 turns-N.jsonl
                    undo/<action_id>/  risky 动作前的旧内容 + manifest.json（/rewind 用）
-.moss/skills/      技能 markdown
+.moss/skills/      技能 markdown（frontmatter: name/description/allowed-tools/scope/resources/source）
+.moss/hooks/       用户钩子 pre_tool/post_tool/pre_final/post_run（需可执行位；agent 写不进来）
+.moss/cache/skill_trust.json  第三方 skill 的内容指纹台账（改动后首次使用要确认）
 .env               本地密钥（仓库只保留 .env.example）
 ```
