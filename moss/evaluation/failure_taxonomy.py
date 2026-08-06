@@ -2,6 +2,8 @@
 
 import json
 
+from ..trace_events import CONTEXT_OVERFLOW
+
 
 LABELS = (
     "wrong_file_targeted",
@@ -15,7 +17,7 @@ LABELS = (
     "no_progress_loop",
     "ab_loop",
     "retry_storm",
-    "context_overflow",
+    CONTEXT_OVERFLOW,
     "error_signal_lost",
     "forgot_constraint",
     "path_escape_attempt",
@@ -152,7 +154,7 @@ def label_trial(trace_events, task, diff):
         "no_progress_loop": _no_progress_loop(events),
         "ab_loop": _ab_loop(events),
         "retry_storm": _repeated_error(events, threshold=3),
-        "context_overflow": _has_code(events, "context_overflow"),
+        CONTEXT_OVERFLOW: _has_code(events, CONTEXT_OVERFLOW),
         "error_signal_lost": has_error and final_lost_error,
         "forgot_constraint": any(_name(event) == "constraint_violation" for event in events),
         "path_escape_attempt": _has_code(events, "path_escape", "path_escape_attempt"),
