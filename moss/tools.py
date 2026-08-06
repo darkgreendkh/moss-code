@@ -9,12 +9,12 @@ import json
 import shutil
 import signal
 import subprocess
-import tempfile
 import textwrap
 import time
 from dataclasses import dataclass
 from functools import partial
 
+from . import atomic_io
 from . import sandbox
 from . import shell_policy
 from .workspace import IGNORED_PATH_NAMES
@@ -60,23 +60,9 @@ def write_text_atomic(path, content):
     # 原子替换本身会替掉软链而不是跟随它，但先显式拒绝能让这次尝试留下痕迹。
     if path.is_symlink():
         raise ValueError(f"refusing to write through a symlink: {path.name}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_name = ""
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            delete=False,
-            dir=str(path.parent),
-            prefix=path.name + ".",
-            suffix=".tmp",
-        ) as handle:
-            handle.write(str(content))
-            temp_name = handle.name
-        os.replace(temp_name, path)
-    finally:
-        if temp_name and os.path.exists(temp_name):
-            os.unlink(temp_name)
+    # 原子 + fsync 统一走 atomic_io：agent 写用户源码是最不该"看起来写了其实没落盘"
+    # 的一类写入。
+    atomic_io.write_atomic(path, content)
 
 
 def classify_shell_command(command):

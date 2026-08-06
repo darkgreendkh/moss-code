@@ -13,6 +13,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
+from . import atomic_io
 from . import checkpoint as checkpointlib
 from . import compaction as compactionlib
 from .features import memory as memorylib
@@ -1065,6 +1066,8 @@ class Moss:
             "usage": self.last_run_budget.snapshot() if self.last_run_budget else {},
             # 沙箱状态进 report：降级必须看得见，评测口径也要能区分。
             "sandbox": self.sandbox_plan.to_dict(),
+            # 持久化降级（比如 Windows 上目录 fsync 不可用）。空列表 = 承诺兑现了。
+            "durability_degradations": atomic_io.degradations(),
             "snapshot_strategy": self.snapshot_strategy(),
             # 卸载生效后这个数应当恒为 0：大输出全部落盘，没有字节被永久丢掉。
             "truncated_bytes_lost": int(getattr(self, "truncated_bytes_lost", 0)),

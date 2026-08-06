@@ -6,9 +6,9 @@ session.json 负责保存“可恢复的会话状态”；RunStore 负责保存�
 
 import hashlib
 import json
-import tempfile
 from pathlib import Path
 
+from .atomic_io import write_atomic, write_json_atomic
 from .task_state import STATUS_RUNNING, TaskState
 
 # 哈希链的起点。第一条事件的 prev_hash 用它，链条才有明确的头。
@@ -248,32 +248,10 @@ class RunStore:
 
     def _write_text_atomic(self, path, text):
         # 和 _write_json_atomic 同样的理由：半截 artifact 比没有 artifact 更难排查，
-        # 而模型会照着指针去读它。
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            delete=False,
-            dir=str(path.parent),
-            prefix=path.name + ".",
-            suffix=".tmp",
-        ) as handle:
-            handle.write(str(text))
-            temp_name = handle.name
-        Path(temp_name).replace(path)
-        return path
+        # 而模型会照着指针去读它。原子 + fsync 都在 atomic_io 里统一实现。
+        return write_atomic(path, text)
 
     def _write_json_atomic(self, path, payload):
-        # 原子写：先写临时文件，再 replace。
-        # 这样即使中途异常，也不容易留下半截 JSON。
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            delete=False,
-            dir=str(path.parent),
-            prefix=path.name + ".",
-            suffix=".tmp",
-        ) as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-            temp_name = handle.name
-        Path(temp_name).replace(path)
+        # 原子写：先写临时文件、fsync，再 replace。
+        # 这样即使中途断电，也不会留下半截 JSON。
+        return write_json_atomic(path, payload, ensure_ascii=True)
