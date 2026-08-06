@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
+from .clock import now
+
 STATUS_RUNNING = "running"
 STATUS_COMPLETED = "completed"
 STATUS_STOPPED = "stopped"
@@ -40,6 +42,9 @@ class TaskState:
     final_answer: str = ""
     checkpoint_id: str = ""
     resume_status: str = ""
+    # run 开始的 UTC 时间戳。run 索引按它排序、保留策略按它算过期，
+    # 拿目录 mtime 顶替不行——工件写完之后 mtime 还会继续动。
+    started_at: str = ""
     # 记账字段（spec-02 §4.2）。tool_steps 的语义完全不动，这里只增不改：
     # model_turns 是"模型被调用了几轮"（成本的主口径），
     # tool_calls 是"工具被调用了几次，含失败的"（用来算失败率/无效调用率）。
@@ -54,7 +59,7 @@ class TaskState:
     def create(cls, task_id, user_request, run_id=""):
         if not run_id:
             run_id = "run_" + datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:6]
-        return cls(run_id=run_id, task_id=task_id, user_request=user_request)
+        return cls(run_id=run_id, task_id=task_id, user_request=user_request, started_at=now())
 
     @classmethod
     def from_dict(cls, data):
@@ -70,6 +75,7 @@ class TaskState:
             final_answer=str(data.get("final_answer", "")),
             checkpoint_id=str(data.get("checkpoint_id", "")),
             resume_status=str(data.get("resume_status", "")),
+            started_at=str(data.get("started_at", "")),
             model_turns=int(data.get("model_turns", 0)),
             tool_calls=int(data.get("tool_calls", 0)),
             verification_requested=bool(data.get("verification_requested", False)),
@@ -147,6 +153,7 @@ class TaskState:
             "final_answer": self.final_answer,
             "checkpoint_id": self.checkpoint_id,
             "resume_status": self.resume_status,
+            "started_at": self.started_at,
             "model_turns": self.model_turns,
             "tool_calls": self.tool_calls,
             "verification_requested": self.verification_requested,

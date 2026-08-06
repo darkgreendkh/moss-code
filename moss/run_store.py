@@ -6,7 +6,10 @@ session.json 负责保存“可恢复的会话状态”；RunStore 负责保存�
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
+
+from .clock import now
 
 from .atomic_io import (
     append_line,
@@ -16,6 +19,7 @@ from .atomic_io import (
     write_json_atomic,
 )
 from .lease import RunLease
+from .run_index import RunIndex, archive_run_dir, expired_run_ids, retention_limits
 from .trace_events import TRACE_SCHEMA_VERSION
 from .task_state import STATUS_RUNNING, TaskState
 
@@ -50,6 +54,8 @@ class RunStore:
         # {run_id: (上一条事件的 digest, 上一条的 sequence)}。只在首次访问时扫盘，
         # 之后每次追加就地推进——序号和哈希链因此都是 O(1)。
         self._trace_tails = {}
+        # run 索引：启动时只读它，不再 glob + 解析全部 task_state.json。
+        self.index = RunIndex(self.root)
 
     def run_dir(self, run_id):
         return self.root / _run_id(run_id)
@@ -119,7 +125,54 @@ class RunStore:
         # 租约先于任何执行：run 目录一旦是 running，别的进程就可能来接管它，
         # 这段窗口里必须已经能证明"我还活着"。
         self.lease.acquire(_run_id(task_state))
+        self.index_run(task_state)
         return run_dir
+
+    def index_run(self, task_state, cost_usd=None):
+        """把一次 run 的状态摘要写进索引。start / 收尾 各调一次。"""
+        self.ensure_index()
+        return self.index.record(
+            _run_id(task_state),
+            started_at=str(getattr(task_state, "started_at", "") or "") or now(),
+            status=str(getattr(task_state, "status", "")),
+            stop_reason=str(getattr(task_state, "stop_reason", "")),
+            task_summary=str(getattr(task_state, "user_request", ""))[:200],
+            cost_usd=cost_usd,
+        )
+
+    def prune(self, *, keep_count=None, keep_days=None, protected=(), dry_run=False, now_=None):
+        """把过期 run 打包成 <run_id>.jsonl.gz 并删掉原目录，返回被归档的 id。
+
+        永不清理：pinned、持有有效租约（还在跑）、被评测工件引用的 run。
+        前两类由这里保证，第三类靠调用方把 id 传进 `protected`。
+        """
+        self.ensure_index()
+        limits = retention_limits()
+        keep_count = limits[0] if keep_count is None else keep_count
+        keep_days = limits[1] if keep_days is None else keep_days
+        protected = set(protected or ()) | set(self.active_runs())
+        entries = self.index.entries()
+        expired = expired_run_ids(
+            entries, keep_count=keep_count, keep_days=keep_days, protected=protected, now=now_
+        )
+        if dry_run:
+            return expired
+        archived = []
+        for run_id in expired:
+            directory = self.run_dir(run_id)
+            if not directory.is_dir():
+                continue
+            archive_run_dir(directory, self.index.archive_path(run_id))
+            shutil.rmtree(directory, ignore_errors=True)
+            archived.append(run_id)
+        if archived:
+            remaining = [entry for entry in entries if entry["run_id"] not in set(archived)]
+            self.index.rewrite(remaining)
+        return archived
+
+    def pin(self, run_id, pinned=True):
+        self.ensure_index()
+        return self.index.set_pinned(_run_id(run_id), pinned)
 
     def heartbeat(self, run_id):
         """刷新租约心跳。主循环每步调用，长工具期间由心跳线程调用。"""
@@ -198,11 +251,28 @@ class RunStore:
                 raise
         return sorted(events, key=lambda item: int(item.get("sequence", 0) or 0))
 
+    def run_dirs(self):
+        return sorted(path.parent for path in self.root.glob("*/task_state.json"))
+
+    def ensure_index(self):
+        """索引不在就重建一次（首次升级、或索引被删掉）。"""
+        if self.index.path.exists():
+            return False
+        self.index.rebuild(self.run_dirs())
+        return True
+
     def find_running_runs(self):
+        """还标着 running 的 run。走索引，只打开真正命中的那几个文件。
+
+        原来是 glob 全部 `*/task_state.json` 再逐个 json.loads —— 跑过一千次之后，
+        每次启动都要开一千个文件，而用户还在等提示符。
+        """
+        self.ensure_index()
         running = []
-        for task_path in sorted(self.root.glob("*/task_state.json")):
+        for run_id in self.index.running_run_ids():
+            path = self.task_state_path(run_id)
             try:
-                payload = json.loads(task_path.read_text(encoding="utf-8"))
+                payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
             if str(payload.get("status", "")) == STATUS_RUNNING:
@@ -267,6 +337,10 @@ class RunStore:
         path = self.report_path(task_state)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._write_json_atomic(path, report)
+        # report 落盘 = 这次 run 收尾了。顺手把最终状态和花费写进索引，
+        # 这样 `moss runs list` 不用打开任何 run 目录就能给出结论。
+        usage = dict((report or {}).get("usage", {}) or {})
+        self.index_run(task_state, cost_usd=usage.get("usd"))
         return path
 
     def load_task_state(self, task_id):
