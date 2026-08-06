@@ -240,6 +240,10 @@ class AgentLoop:
             input_tokens, output_tokens, estimated = usage_from_metadata(
                 completion_metadata, prompt=prompt, completion=raw, measure=estimate_tokens
             )
+            if not estimated:
+                # 后端报了真实 usage：记一条 (我们估了多少 / 后端说是多少)，
+                # 下一轮的预算就按这个比例算。估算出来的数不能当真值用。
+                agent.record_token_usage_sample(prompt_metadata.get("prompt_tokens"), input_tokens)
             budget.consume(
                 steps=1,
                 input_tokens=input_tokens,

@@ -28,7 +28,14 @@ from .tool_context import ToolContext
 from .tool_executor import ToolExecutor, approval_summary
 from . import tools as toolkit
 from .clock import now
-from .token_budget import MAX_HISTORY, clip
+from .token_budget import (
+    MAX_HISTORY,
+    TokenCalibrationStore,
+    calibrated_measure,
+    clip,
+    estimate_tokens,
+    exact_token_counter,
+)
 from . import ignore as ignorelib
 from . import repo_map as repo_maplib
 from . import budget as budgetlib
@@ -185,7 +192,13 @@ class Moss:
         self.attach_repo_map(self.workspace)
         self.prefix_state = self.build_prefix()
         self.prefix = self.prefix_state.text
-        self.context_manager = ContextManager(self)
+        self.token_calibration_store = TokenCalibrationStore(
+            self.root / ".moss" / "cache" / "token_calibration.json"
+        )
+        self.token_calibration = self.token_calibration_store.calibration(
+            getattr(model_client, "provider", ""), getattr(model_client, "model", "")
+        )
+        self.context_manager = ContextManager(self, measure=self.token_measure())
         self.resume_state = self.evaluate_resume_state()
         self.session_path = self.session_store.save(self.session)
         self.current_task_state = None
@@ -457,6 +470,35 @@ class Moss:
 
     def feature_enabled(self, name):
         return bool(self.feature_flags.get(str(name), False))
+
+    def token_measure(self):
+        """这一轮预算用的计量函数：真值优先，其次校准过的估算。
+
+        探测到 tiktoken 就直接用真值（ratio 强制 1.0）；否则用
+        `estimate_tokens * ratio`，ratio 来自最近 50 条"我估了多少 / 后端说是多少"。
+        """
+        exact = exact_token_counter(getattr(self.model_client, "model", ""))
+        if exact is not None:
+            self.token_calibration = replace(self.token_calibration, ratio=1.0, exact=True)
+            return exact
+        return calibrated_measure(estimate_tokens, self.token_calibration)
+
+    def record_token_usage_sample(self, estimated_tokens, actual_tokens):
+        """记一条 (估算, 后端真值) 样本，并把校准结果用到下一轮预算上。
+
+        只在后端**真的报了** usage 时才记：拿我们自己的估算当"真值"去校准
+        我们自己的估算，只会把偏差固化下来。
+        """
+        if self.token_calibration.exact:
+            return self.token_calibration
+        self.token_calibration = self.token_calibration_store.record(
+            getattr(self.model_client, "provider", ""),
+            getattr(self.model_client, "model", ""),
+            estimated_tokens,
+            actual_tokens,
+        )
+        self.context_manager.measure = self.token_measure()
+        return self.token_calibration
 
     def prompt(self, user_message):
         prompt, _ = self._build_prompt_and_metadata(user_message)
@@ -1013,6 +1055,7 @@ class Moss:
             # 卸载生效后这个数应当恒为 0：大输出全部落盘，没有字节被永久丢掉。
             "truncated_bytes_lost": int(getattr(self, "truncated_bytes_lost", 0)),
             "error_signal_lost_count": int(getattr(self, "error_signal_lost_count", 0)),
+            "token_calibration": self.token_calibration.to_dict(),
             "redacted_env": self.detected_secret_env_summary(),
         }
 
