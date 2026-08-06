@@ -130,9 +130,9 @@ Observed: `1187 passed, 16 warnings`；warnings 均为现有评测兼容入口�
 
 **Interfaces:**
 - Consumes: ADR 0004 的目标目录和依赖规则。
-- Produces: `TARGET_PACKAGES`、`ROOT_MODULE_ALLOWLIST` 和禁止能力包反向导入 facade 的 AST 契约。
+- Produces: `TARGET_PACKAGES`、`ROOT_MODULE_ALLOWLIST`、`MIGRATION_TARGETS` 和禁止能力包反向导入 facade 的 AST 契约。
 
-- [ ] **Step 1: Write the failing layout test**
+- [x] **Step 1: Write the failing layout test**
 
 ```python
 from pathlib import Path
@@ -145,6 +145,8 @@ ROOT_MODULE_ALLOWLIST = {
     "__init__.py", "__main__.py", "atomic_io.py", "clock.py",
     "config.py", "runtime.py",
 }
+# MIGRATION_TARGETS 逐项包含 Locked File Map 中所有根级 .py 迁移，
+# 另加 "cli.py": "cli/__init__.py"；完整字典落在 tests/test_package_layout.py。
 
 
 def test_runtime_modules_live_in_capability_packages():
@@ -152,26 +154,28 @@ def test_runtime_modules_live_in_capability_packages():
     packages = {path.name for path in root.iterdir() if path.is_dir() and not path.name.startswith("__")}
     assert TARGET_PACKAGES <= packages
     root_modules = {path.name for path in root.glob("*.py")}
-    assert root_modules <= ROOT_MODULE_ALLOWLIST
+    assert root_modules <= ROOT_MODULE_ALLOWLIST | MIGRATION_TARGETS.keys()
+    for source, target in MIGRATION_TARGETS.items():
+        assert (root / source).exists() != (root / target).exists()
 ```
 
-- [ ] **Step 2: Run it and verify it fails on the current flat modules**
+- [x] **Step 2: Run it and verify it fails on the current flat modules**
 
 Run: `uv run --with pytest python -m pytest tests/test_package_layout.py -q`
 
-Expected: FAIL because root modules still exceed `ROOT_MODULE_ALLOWLIST`.
+Expected: FAIL because the capability package directories do not exist yet. The migration map keeps the test green while each file moves, and its XOR assertion prevents duplicate old/new implementations.
 
-- [ ] **Step 3: Add an AST rule that capability packages do not import facade modules**
+- [x] **Step 3: Add an AST rule that capability packages do not import facade modules**
 
 The same test file parses every `moss/{agent,context,execution,memory,runs,extensions}/**/*.py`.
 Fail when an `Import` or `ImportFrom` resolves to `moss.runtime` or `moss.cli`.
 The test excludes `moss/evaluation/` because evaluation intentionally consumes the public runtime.
 
-- [ ] **Step 4: Create package directories and empty `__init__.py` files**
+- [x] **Step 4: Create package directories and empty `__init__.py` files**
 
-Do not export implementation classes yet; exports are added with each move so incomplete packages cannot look usable.
+Do not export implementation classes yet; exports are added with each move so incomplete packages cannot look usable. Re-run `tests/test_package_layout.py`; it must now pass before commit.
 
-- [ ] **Step 5: Commit the contract test and skeleton**
+- [x] **Step 5: Commit the contract test and skeleton**
 
 ```bash
 git add tests/test_package_layout.py moss/agent moss/context moss/execution moss/memory moss/runs moss/extensions
@@ -301,7 +305,7 @@ Run: `uv run --with pytest python -m pytest tests/ -q -k "agent_loop or output_p
 
 Run: `uv run --with pytest python -m pytest tests/test_package_layout.py -q`
 
-Expected: PASS; root modules are now only the allowlisted facade/foundation files.
+Expected: PASS; all agent modules are at their target paths. `cli.py` remains the only planned root migration and is removed in Task 6.
 
 - [ ] **Step 4: Run full tests and lint, then commit**
 
@@ -330,6 +334,7 @@ git commit -m "refactor(packages): complete capability module layout"
 - [ ] **Step 1: Add characterization assertions for public CLI exports and deterministic tool schema order**
 - [ ] **Step 2: Watch the new tests fail when importing the not-yet-created submodules**
 - [ ] **Step 3: Split CLI by command responsibility and keep re-exports in `moss/cli/__init__.py`**
+- [ ] **Step 3a: Remove `cli.py` from `MIGRATION_TARGETS` and assert the final root allowlist directly**
 - [ ] **Step 4: Split tool specs from built-in implementations; keep explicit registry assembly**
 - [ ] **Step 5: Extract native-history grouping and context-health calculation as pure helpers**
 - [ ] **Step 6: Run CLI, tools and context tests**
