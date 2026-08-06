@@ -2,6 +2,20 @@ from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
 from moss.context_manager import ContextManager
 
 
+def transcript_of(prompt):
+    """取出 prompt 里 Transcript 段的正文。
+
+    段落之间现在隔着一行用途说明（spec-06 §4.5），所以不能再按
+    "\n\nTranscript:\n" 这样的固定间隔切。
+    """
+    return section_of(prompt, "Transcript:\n")
+
+
+def section_of(prompt, header):
+    """取出 prompt 里某一段的正文（到下一段的用途说明为止）。"""
+    return prompt.split(header, 1)[1].split("\n\n#", 1)[0]
+
+
 def build_workspace(tmp_path):
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
     return WorkspaceContext.build(tmp_path)
@@ -28,12 +42,20 @@ def test_context_manager_assembles_sections_in_expected_order(tmp_path):
 
     prompt, metadata = ContextManager(agent).build("Where is the deploy key?")
 
-    assert prompt.index("You are moss") < prompt.index("Memory:")
+    # spec-06 §4.5 的新顺序：稳定的在前，硬约束靠近末尾，当前请求永远最后。
+    assert prompt.index("You are moss") < prompt.index("Transcript:")
+    assert prompt.index("Transcript:") < prompt.index("Memory:")
     assert prompt.index("Memory:") < prompt.index("Relevant memory:")
-    assert prompt.index("Relevant memory:") < prompt.index("Transcript:")
-    assert prompt.index("Transcript:") < prompt.index("Current user request:")
+    assert prompt.index("Relevant memory:") < prompt.index("Current user request:")
     assert prompt.rstrip().endswith("Current user request:\nWhere is the deploy key?")
-    assert metadata["section_order"] == ["prefix", "memory", "relevant_memory", "history", "current_request"]
+    assert metadata["section_order"] == [
+        "prefix",
+        "history",
+        "memory",
+        "relevant_memory",
+        "constraints",
+        "current_request",
+    ]
     assert metadata["relevant_memory"]["retrieval_explain"][0]["doc_id"].startswith("episodic:")
     assert set(metadata["relevant_memory"]["retrieval_explain"][0]["breakdown"]) == {
         "bm25",
@@ -91,7 +113,7 @@ def test_context_manager_renders_top_three_episodic_notes_per_note_under_budget(
 
     prompt, metadata = ContextManager(
         agent,
-        total_budget=250,
+        total_budget=500,
         section_budgets={
             "prefix": 60,
             "memory": 60,
@@ -111,7 +133,7 @@ def test_context_manager_renders_top_three_episodic_notes_per_note_under_budget(
     assert len(metadata["relevant_memory"]["rendered_notes"]) == 1
     assert metadata["relevant_memory"]["rendered_count"] == 1
     assert metadata["relevant_memory"]["rendered_notes"][0].startswith("[trust=model] gamma")
-    relevant_section = prompt.split("Relevant memory:\n", 1)[1].split("\n\nTranscript:", 1)[0]
+    relevant_section = section_of(prompt, "Relevant memory:\n")
     assert len([line for line in relevant_section.splitlines() if line.startswith("- ")]) == 1
     assert "alpha episodi" not in relevant_section
     assert "beta episodic" not in relevant_section
@@ -130,7 +152,7 @@ def test_context_manager_prefers_complete_relevant_memory_notes_under_budget(tmp
 
     prompt, metadata = ContextManager(
         agent,
-        total_budget=400,
+        total_budget=650,
         section_budgets={
             "prefix": 80,
             "memory": 80,
@@ -139,7 +161,7 @@ def test_context_manager_prefers_complete_relevant_memory_notes_under_budget(tmp
         },
         measure=len,
     ).build("recall")
-    relevant_section = prompt.split("Relevant memory:\n", 1)[1].split("\n\nTranscript:", 1)[0]
+    relevant_section = section_of(prompt, "Relevant memory:\n")
 
     assert metadata["relevant_memory"]["selected_count"] == 3
     assert metadata["relevant_memory"]["rendered_notes"] == [
@@ -203,7 +225,7 @@ def test_context_manager_collapses_older_duplicate_reads_into_one_summary_line(t
         )
 
     prompt, metadata = ContextManager(agent).build("check the file")
-    transcript = prompt.split("\n\nTranscript:\n", 1)[1].split("\n\nCurrent user request:", 1)[0]
+    transcript = transcript_of(prompt)
 
     assert transcript.count('source="read_file"') == 0
     assert "sample.txt -> alpha | beta" in transcript
@@ -235,7 +257,7 @@ def test_context_manager_summarizes_older_tool_output_into_one_line(tmp_path):
         )
 
     prompt, metadata = ContextManager(agent).build("check failures")
-    transcript = prompt.split("\n\nTranscript:\n", 1)[1].split("\n\nCurrent user request:", 1)[0]
+    transcript = transcript_of(prompt)
 
     assert 'pytest -q -> FAIL test_one | FAIL test_two | FAIL test_three' in transcript
     assert "FAIL test_four" not in transcript
@@ -268,7 +290,7 @@ def test_context_manager_relevant_memory_can_mix_durable_notes(tmp_path):
     agent = build_agent(tmp_path, [])
 
     prompt, metadata = ContextManager(agent).build("What conventions should I follow?")
-    relevant_section = prompt.split("Relevant memory:\n", 1)[1].split("\n\nTranscript:", 1)[0]
+    relevant_section = section_of(prompt, "Relevant memory:\n")
 
     assert "Use constrained tools instead of guessing." in relevant_section
     assert any("Use constrained tools instead of guessing." in item for item in metadata["relevant_memory"]["selected_notes"])
@@ -311,7 +333,7 @@ def test_context_manager_shell_summary_prioritizes_error_lines(tmp_path):
         )
 
     prompt, _ = ContextManager(agent).build("what failed")
-    transcript = prompt.split("\n\nTranscript:\n", 1)[1].split("\n\nCurrent user request:", 1)[0]
+    transcript = transcript_of(prompt)
 
     # 报错在输出末尾：错误优先的摘要应保留它，而不是只取无信息的前 3 行。
     assert "ValueError: boom" in transcript

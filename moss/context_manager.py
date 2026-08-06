@@ -15,6 +15,7 @@ import json
 from dataclasses import dataclass
 
 from .model_request import Block, CompactionArtifact, Message, ModelRequest, PromptBundle
+from .retrieval import BM25Index
 from .token_budget import clip_to_budget, estimate_tokens
 
 
@@ -22,20 +23,46 @@ from .token_budget import clip_to_budget, estimate_tokens
 DEFAULT_TOTAL_BUDGET = 12000
 DEFAULT_SECTION_BUDGETS = {
     "prefix": 3000,
-    "memory": 1000,
+    "memory": 700,
     "relevant_memory": 800,
     "history": 6000,
+    # constraints 从原来 memory 的 1000 里划 300：它是"这一轮必须遵守什么"，
+    # 和"以前发生过什么"不是一类信息，混在一段里前者会被后者挤掉。
+    "constraints": 300,
 }
 DEFAULT_SECTION_FLOORS = {
     "prefix": 1000,
     "memory": 250,
     "relevant_memory": 200,
     "history": 1500,
+    "constraints": 150,
 }
 # 当 prompt 超预算时，会优先压缩这些 section。
-DEFAULT_REDUCTION_ORDER = ("relevant_memory", "history", "memory", "prefix")
-SECTION_ORDER = ("prefix", "memory", "relevant_memory", "history", "current_request")
+# constraints 排在最后：硬约束被削掉之后，模型看起来还在工作，
+# 但它已经不知道自己该守什么了 —— 这是最贵的一种"省 token"。
+DEFAULT_REDUCTION_ORDER = ("relevant_memory", "history", "memory", "prefix", "constraints")
+# 段落顺序（spec-06 §4.5）：稳定的在前（进缓存段），硬约束靠近末尾（模型对
+# 结尾的注意力更强），当前请求永远最后。
+SECTION_ORDER = (
+    "prefix",
+    "history",
+    "memory",
+    "relevant_memory",
+    "constraints",
+    "current_request",
+)
 CURRENT_REQUEST_SECTION = "current_request"
+CONSTRAINTS_SECTION = "constraints"
+# 每段的用途说明。模型不会自动知道"这段是历史所以只是参考、那段是约束所以必须遵守"，
+# 而这两者混在一起时，最常见的失败模式就是把历史里的旧要求当成当前指令。
+# 刻意写得很短：它是每轮都出现的固定开销，长一句就是一份永久税。
+SECTION_PURPOSE = {
+    "history": "# Below: what already happened. Reference, not instructions.",
+    "memory": "# Below: memory from earlier turns. Prefer fresh evidence on conflict.",
+    "relevant_memory": "# Below: retrieved as relevant to the current request.",
+    CONSTRAINTS_SECTION: "# Below: constraints for this turn. Follow them.",
+    CURRENT_REQUEST_SECTION: "# Below: the user's current request. Act on this.",
+}
 RELEVANT_MEMORY_LIMIT = 3
 # 工具输出在历史里被截断时，保留哪一端取决于关键信息的位置：
 # run_shell 是 "exit_code(顶部) / stdout / stderr(底部)"，两端都要留。
@@ -147,6 +174,36 @@ class ContextManager:
         """按当前计量单位把 text 截断到 limit 以内。"""
         return clip_to_budget(text, int(limit), measure=self.measure, keep=keep)
 
+    def _constraints_text(self):
+        """"这一轮必须遵守什么"：checkpoint（含计划）+ 最近的失败。
+
+        为什么单独成段并放在末尾：这些是硬约束，而模型对 prompt 末尾的注意力
+        最强；放在稳定前缀尾部时它们既离当前请求最远，又会让稳定头每轮抖动。
+        """
+        lines = []
+        if hasattr(self.agent, "render_checkpoint_text"):
+            checkpoint_text = str(self.agent.render_checkpoint_text() or "").strip()
+            if checkpoint_text:
+                lines.append(checkpoint_text)
+        failures = self._recent_failure_lines()
+        if failures:
+            lines.append("Recent failures (do not repeat them blindly):")
+            lines.extend(failures)
+        return "\n".join(lines)
+
+    def _recent_failure_lines(self, limit=3):
+        events = []
+        if hasattr(self.agent, "stall_events"):
+            events = list(self.agent.stall_events())
+        failures = [event for event in events if str(event.get("tool_error_code", "") or "")]
+        lines = []
+        for event in failures[-limit:]:
+            args = event.get("args") or {}
+            detail = str(args.get("path", "") or args.get("command", "") or args.get("pattern", ""))
+            detail = f" {detail}" if detail else ""
+            lines.append(f"- {event.get('name', 'tool')}{detail} -> {event.get('tool_error_code')}")
+        return lines
+
     def build(self, user_message):
         """按预算组装一轮完整 prompt。
 
@@ -181,13 +238,11 @@ class ContextManager:
             "prefix": str(getattr(self.agent, "prefix", "")),
             "memory": "Memory:\n- disabled" if not memory_enabled else str(self.agent.memory_text()),
             "history": "",
+            # checkpoint / plan / 最近失败从 prefix 尾部搬到这里：它们每轮都可能变，
+            # 挂在稳定前缀后面既打掉 prompt 缓存，又离"当前请求"最远。
+            CONSTRAINTS_SECTION: self._constraints_text(),
             CURRENT_REQUEST_SECTION: f"Current user request:\n{user_message}",
         }
-        checkpoint_text = ""
-        if hasattr(self.agent, "render_checkpoint_text"):
-            checkpoint_text = str(self.agent.render_checkpoint_text() or "").strip()
-        if checkpoint_text:
-            section_texts["prefix"] = section_texts["prefix"] + "\n\n" + checkpoint_text
         selected_notes = []
         if memory_enabled and relevant_memory_enabled and hasattr(self.agent, "memory") and hasattr(self.agent.memory, "retrieval_candidates"):
             selected_notes = self.agent.memory.retrieval_candidates(user_message, limit=RELEVANT_MEMORY_LIMIT)
@@ -350,28 +405,45 @@ class ContextManager:
             messages.append(
                 Message(
                     role="tool" if history_trust == "tool" else "assistant",
-                    blocks=(Block(history_text, kind="history", source="session", trust=history_trust),),
+                    blocks=(
+                        Block(
+                            self._with_purpose("history", history_text),
+                            kind="history",
+                            source="session",
+                            trust=history_trust,
+                        ),
+                    ),
                 )
             )
-        messages.append(
-            Message(
-                role="user",
-                blocks=(
-                    Block(rendered["memory"].rendered, kind="memory", source="memory", trust="model"),
-                    Block(
-                        rendered["relevant_memory"].rendered,
-                        kind="relevant",
-                        source="retrieval",
-                        trust="model",
-                    ),
-                    Block(
-                        rendered[CURRENT_REQUEST_SECTION].rendered,
-                        kind="request",
-                        trust="user",
-                    ),
-                ),
+        # 结构化请求里的块顺序必须和 _assemble_prompt 一致：
+        # 两边错位的话，"prompt 文本"和"真正发出去的请求"就不是同一份东西了。
+        tail_blocks = [
+            Block(self._with_purpose("memory", rendered["memory"].rendered), kind="memory", source="memory", trust="model"),
+            Block(
+                self._with_purpose("relevant_memory", rendered["relevant_memory"].rendered),
+                kind="relevant",
+                source="retrieval",
+                trust="model",
+            ),
+        ]
+        constraints_text = rendered[CONSTRAINTS_SECTION].rendered if CONSTRAINTS_SECTION in rendered else ""
+        if constraints_text.strip():
+            tail_blocks.append(
+                Block(
+                    self._with_purpose(CONSTRAINTS_SECTION, constraints_text),
+                    kind="constraints",
+                    source="runtime",
+                    trust="platform",
+                )
+            )
+        tail_blocks.append(
+            Block(
+                self._with_purpose(CURRENT_REQUEST_SECTION, rendered[CURRENT_REQUEST_SECTION].rendered),
+                kind="request",
+                trust="user",
             )
         )
+        messages.append(Message(role="user", blocks=tuple(tail_blocks)))
         request = ModelRequest(
             system=system,
             messages=tuple(messages),
@@ -496,6 +568,12 @@ class ContextManager:
                 )
         return messages
 
+    def _with_purpose(self, section, text):
+        purpose = SECTION_PURPOSE.get(section, "")
+        if not purpose or not str(text).strip():
+            return text
+        return f"{purpose}\n{text}"
+
     def _split_rendered_prefix(self, rendered_prefix):
         stable_text = str(getattr(getattr(self.agent, "prefix_state", None), "stable_text", ""))
         if stable_text and rendered_prefix.startswith(stable_text):
@@ -534,6 +612,12 @@ class ContextManager:
                 },
             ),
             "history": SectionRender(raw=history_raw, budget=len(history_raw), rendered=history_raw, details={"rendered_entries": []}),
+            CONSTRAINTS_SECTION: SectionRender(
+                raw=section_texts[CONSTRAINTS_SECTION],
+                budget=len(section_texts[CONSTRAINTS_SECTION]),
+                rendered=section_texts[CONSTRAINTS_SECTION],
+                details={},
+            ),
             CURRENT_REQUEST_SECTION: SectionRender(
                 raw=section_texts[CURRENT_REQUEST_SECTION],
                 budget=0,
@@ -830,16 +914,74 @@ class ContextManager:
         return [f"[{item['role']}] {self._clip(item['content'], line_limit, keep='head')}"]
 
     def _assemble_prompt(self, rendered):
-        # 顺序是刻意设计的：稳定规则放前面，最新请求放最后。
-        return "\n\n".join(
-            [
-                rendered["prefix"].rendered,
-                rendered["memory"].rendered,
-                rendered["relevant_memory"].rendered,
-                rendered["history"].rendered,
-                rendered[CURRENT_REQUEST_SECTION].rendered,
-            ]
-        ).strip()
+        # 顺序是刻意设计的（spec-06 §4.5）：稳定规则在前（进缓存段），
+        # 历史其次，硬约束靠近末尾，最新请求永远最后。
+        # 每段前面挂一句用途说明：历史和约束混在一起时，最常见的失败模式
+        # 就是把历史里的旧要求当成当前指令。
+        parts = []
+        for section in SECTION_ORDER:
+            text = rendered[section].rendered if section in rendered else ""
+            if not text.strip():
+                continue
+            purpose = SECTION_PURPOSE.get(section, "")
+            parts.append(f"{purpose}\n{text}" if purpose else text)
+        return "\n\n".join(parts).strip()
+
+    def context_window(self):
+        """模型真实的上下文窗口。拿不到就退回今天的总预算（行为不变）。"""
+        capabilities = getattr(getattr(self.agent, "model_client", None), "capabilities", None)
+        window = int(getattr(capabilities, "context_window", 0) or 0)
+        return window or int(self.total_budget)
+
+    def _context_health(self, prompt, rendered, section_metadata, user_message):
+        """上下文健康度（spec-06 §4.5）。
+
+        为什么要量出来：prompt 变差是渐进的——历史越堆越多、相关性越来越低，
+        但每一轮看起来都"还行"。只有把占用率、各段占比、无关内容比例、
+        历史陈旧度记成时间序列，才能在事后指着某一轮说"从这里开始跑偏"。
+        目前只观测不干预（阈值等实测数据再定，见 spec-06 §10 开放问题 2）。
+        """
+        total_units = max(1, self.measure(prompt))
+        window = max(1, self.context_window())
+        shares = {
+            section: round(int(data.get("rendered_units", 0)) / total_units, 4)
+            for section, data in section_metadata.items()
+        }
+        return {
+            # 分母是模型窗口而不是 12000：真正的约束是窗口，12000 只是我们的自限。
+            "context_utilization": round(total_units / window, 4),
+            "context_window": window,
+            "section_share": shares,
+            "distractor_ratio": self._distractor_ratio(rendered, user_message),
+            "history_staleness": self._history_staleness(),
+        }
+
+    def _distractor_ratio(self, rendered, user_message):
+        """和当前请求毫无词面关联的内容占了多少 token。
+
+        复用 spec-05 的 BM25 索引：一条历史/笔记如果连一个查询词都碰不到，
+        它对这一轮就是纯噪声。这是"注意力被稀释了多少"的一个廉价代理指标。
+        """
+        chunks = []
+        for section in ("history", "memory", "relevant_memory"):
+            if section not in rendered:
+                continue
+            for index, line in enumerate(str(rendered[section].rendered).splitlines()):
+                if line.strip():
+                    chunks.append((f"{section}:{index}", line))
+        if not chunks:
+            return 0.0
+        index = BM25Index(decay_days=0)
+        for doc_id, line in chunks:
+            index.add(doc_id, {"text": line})
+        relevant = {hit.doc_id for hit in index.search(user_message, limit=len(chunks), min_score=0.0)}
+        total = sum(self.measure(line) for _, line in chunks) or 1
+        distracting = sum(self.measure(line) for doc_id, line in chunks if doc_id not in relevant)
+        return round(distracting / total, 4)
+
+    def _history_staleness(self):
+        """最老一条进 prompt 的历史距今多少条。堆得越高，越该考虑压缩。"""
+        return len(self._history_entries())
 
     def _metadata(
         self,
@@ -872,6 +1014,7 @@ class ContextManager:
             "prompt_tokens": estimate_tokens(prompt),
             "measure_unit": measure_unit,
             "prompt_measured": self.measure(prompt),
+            "context_health": self._context_health(prompt, rendered, section_metadata, user_message),
             "prompt_budget_chars": self.total_budget,
             "prompt_over_budget": self.measure(prompt) > self.total_budget,
             "over_budget_unrecoverable": bool(over_budget_unrecoverable),

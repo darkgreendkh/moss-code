@@ -27,7 +27,7 @@ def test_rerender_remains_the_default_context_mode(tmp_path):
 
     assert agent.context_mode == "rerender"
     assert bundle.metadata["context_mode"] == "rerender"
-    assert any(block.text.startswith("Transcript:") for message in bundle.request.messages for block in message.blocks)
+    assert any("\nTranscript:" in block.text for message in bundle.request.messages for block in message.blocks)
 
 
 def test_append_only_keeps_existing_message_serialization_when_new_history_arrives(tmp_path):
