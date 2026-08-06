@@ -1,6 +1,7 @@
 import hashlib
 import json
 import locale as locale_module
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -16,6 +17,7 @@ from ..run_store import RunStore
 from ..task_state import STOP_REASON_FINAL_ANSWER_RETURNED
 from ..tools import legal_tool_names
 from ..workspace import WORKSPACE_FINGERPRINT_VERSION, WorkspaceContext
+from .verifier import run_verification
 
 BENCHMARK_SCHEMA_VERSION = 1
 EVALUATION_ARTIFACT_SCHEMA_VERSION = 3
@@ -245,7 +247,8 @@ def validate_benchmark(data, repo_root=None):
         normalized_task["allowed_tools"] = normalized_allowed_tools
         normalized_task["step_budget"] = step_budget
         normalized_task["expected_artifact"] = str(task["expected_artifact"]).strip()
-        normalized_task["verifier"] = str(task["verifier"]).strip()
+        verifier = task["verifier"]
+        normalized_task["verifier"] = dict(verifier) if isinstance(verifier, dict) else str(verifier).strip()
         normalized_task["category"] = str(task["category"]).strip()
         normalized_tasks.append(normalized_task)
 
@@ -521,16 +524,25 @@ class BenchmarkEvaluator:
         expected_artifact_exists = artifact_file.exists()
         artifact_digest = _digest_file(artifact_file) if expected_artifact_exists else ""
 
-        verifier = subprocess.run(
-            task["verifier"],
-            cwd=fixture_copy_root,
-            shell=True,
-            capture_output=True,
-            text=True,
+        verifier_spec = task["verifier"]
+        if not isinstance(verifier_spec, dict):
+            verifier_spec = {
+                "argv": shlex.split(str(verifier_spec)),
+                "cwd": ".",
+                "clean_env": True,
+                "timeout_s": 120,
+                "network": "deny",
+            }
+        verification = run_verification(
+            {**task, "verifier": verifier_spec},
+            fixture_copy_root,
+            fixture_source,
+            trace_events=agent.run_store.read_trace(task_state.run_id),
         )
 
         within_budget = task_state.tool_steps <= int(task["step_budget"])
-        verifier_passed = verifier.returncode == 0
+        verifier_run = verification.runs[0]
+        verifier_passed = verification.passed
         non_failure_stop_reason = task_state.stop_reason == STOP_REASON_FINAL_ANSWER_RETURNED
         passed = within_budget and verifier_passed and expected_artifact_exists and non_failure_stop_reason
         failure_category = None if passed else self._failure_category(
@@ -558,9 +570,10 @@ class BenchmarkEvaluator:
             "artifact_exists": expected_artifact_exists,
             "artifact_digest": artifact_digest,
             "verifier": task["verifier"],
-            "verifier_exit_code": verifier.returncode,
-            "verifier_stdout": verifier.stdout,
-            "verifier_stderr": verifier.stderr,
+            "verifier_exit_code": verifier_run.returncode,
+            "verifier_stdout": verifier_run.stdout,
+            "verifier_stderr": verifier_run.stderr,
+            "verification_labels": list(verification.labels),
             "category": task["category"],
             "status": "pass" if passed else "fail",
             "passed": passed,
