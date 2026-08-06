@@ -27,6 +27,8 @@ def test_load_benchmark_validates_fixed_schema():
     }
     for task in benchmark["tasks"]:
         assert {"id", "prompt", "fixture_repo", "allowed_tools", "step_budget", "expected_artifact", "verifier", "category"} <= set(task)
+        assert task["suite"] == "contract-smoke"
+        assert task["eval_level"] == "L1"
         assert isinstance(task["allowed_tools"], list)
         assert task["step_budget"] > 0
 
@@ -91,7 +93,9 @@ def test_run_fixed_benchmark_reports_metadata_and_success_definition(tmp_path):
     persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
     assert persisted == artifact
 
-    assert artifact["schema_version"] == 1
+    assert artifact["schema_version"] == 3
+    assert artifact["eval_level"] == "L1"
+    assert artifact["suite"] == "contract-smoke"
     assert artifact["summary"] == {
         "total_tasks": 12,
         "passed": 12,
@@ -123,6 +127,8 @@ def test_run_fixed_benchmark_reports_metadata_and_success_definition(tmp_path):
         assert not row["task_state_relpath"].startswith("/")
         assert not row["report_relpath"].startswith("/")
         assert row["status"] == "pass"
+        assert row["eval_level"] == "L1"
+        assert row["suite"] == "contract-smoke"
         assert row["passed"] is True
         assert row["within_budget"] is True
         assert row["verifier_passed"] is True

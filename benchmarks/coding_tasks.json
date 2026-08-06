@@ -4,6 +4,8 @@
   "tasks": [
     {
       "id": "readme_intro_locked",
+      "suite": "contract-smoke",
+      "eval_level": "L1",
       "prompt": "In the README fixture, replace the placeholder opening sentence with 'This fixture is a locked benchmark workspace.'",
       "fixture_repo": "tests/fixtures/bench_repo_readme",
       "allowed_tools": ["read_file", "edit_file"],
@@ -14,6 +16,8 @@
     },
     {
       "id": "readme_schema_note",
+      "suite": "contract-smoke",
+      "eval_level": "L1",
       "prompt": "Replace the first README bullet with a sentence that says the benchmark schema and baseline are fixed.",
       "fixture_repo": "tests/fixtures/bench_repo_readme",
       "allowed_tools": ["read_file", "edit_file"],
@@ -24,6 +28,8 @@
     },
     {
       "id": "sample_beta_locked",
+      "suite": "contract-smoke",
+      "eval_level": "L1",
       "prompt": "In sample.txt, replace beta with beta-locked.",
       "fixture_repo": "tests/fixtures/bench_repo_patch",
       "allowed_tools": ["read_file", "edit_file"],
@@ -34,6 +40,8 @@
     },
     {
       "id": "sample_gamma_locked",
+      "suite": "contract-smoke",
+      "eval_level": "L1",
       "prompt": "In sample.txt, replace gamma with gamma-locked.",
       "fixture_repo": "tests/fixtures/bench_repo_patch",
       "allowed_tools": ["read_file", "edit_file"],
@@ -44,6 +52,8 @@
     },
     {
       "id": "invalid_patch_recovery",
+      "suite": "contract-smoke",
+      "eval_level": "L1",
       "prompt": "Recover after invalid patch arguments and finish the README patch.",
       "fixture_repo": "tests/fixtures/bench_repo_readme",
       "allowed_tools": ["edit_file", "read_file"],
@@ -54,6 +64,8 @@
     },
     {
       "id": "path_escape_recovery",
+      "suite": "contract-smoke",
+      "eval_level": "L1",
       "prompt": "Reject a path escape attempt and still finish the sample.txt patch.",
       "fixture_repo": "tests/fixtures/bench_repo_patch",
       "allowed_tools": ["read_file", "edit_file"],
@@ -64,6 +76,8 @@
     },
     {
       "id": "repeated_read_recovery",
+      "suite": "contract-smoke",
+      "eval_level": "L1",
       "prompt": "Recover after repeated identical reads and still finish the sample.txt patch.",
       "fixture_repo": "tests/fixtures/bench_repo_patch",
       "allowed_tools": ["read_file", "edit_file"],
@@ -74,6 +88,8 @@
     },
     {
       "id": "context_reduction_checkpoint",
+      "suite": "contract-smoke",
+      "eval_level": "L1",
       "prompt": "Finish the README update after prompt compression creates a checkpoint.",
       "fixture_repo": "tests/fixtures/bench_repo_readme",
       "allowed_tools": ["read_file"],
@@ -96,6 +112,8 @@
     },
     {
       "id": "freshness_reanchor_resume",
+      "suite": "contract-smoke",
+      "eval_level": "L1",
       "prompt": "Resume the stale benchmark task and finish without trusting the old summary.",
       "fixture_repo": "tests/fixtures/bench_repo_patch",
       "allowed_tools": ["read_file"],
@@ -112,6 +130,8 @@
     },
     {
       "id": "workspace_mismatch_resume",
+      "suite": "contract-smoke",
+      "eval_level": "L1",
       "prompt": "Resume after benchmark workspace drift and rebuild runtime state.",
       "fixture_repo": "tests/fixtures/bench_repo_readme",
       "allowed_tools": ["read_file"],
@@ -125,6 +145,8 @@
     },
     {
       "id": "durable_promotion_accept",
+      "suite": "contract-smoke",
+      "eval_level": "L1",
       "prompt": "Capture the stable benchmark facts as durable memory and respond with only the promoted facts.",
       "fixture_repo": "tests/fixtures/bench_repo_readme",
       "allowed_tools": ["read_file"],
@@ -135,6 +157,8 @@
     },
     {
       "id": "durable_promotion_reject",
+      "suite": "contract-smoke",
+      "eval_level": "L1",
       "prompt": "Capture only the stable benchmark facts into durable memory and reject anything transient or secret-shaped.",
       "fixture_repo": "tests/fixtures/bench_repo_readme",
       "allowed_tools": ["read_file"],

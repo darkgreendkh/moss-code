@@ -18,6 +18,7 @@ from ..tools import legal_tool_names
 from ..workspace import WORKSPACE_FINGERPRINT_VERSION, WorkspaceContext
 
 BENCHMARK_SCHEMA_VERSION = 1
+EVALUATION_ARTIFACT_SCHEMA_VERSION = 3
 DEFAULT_BENCHMARK_PATH = Path("benchmarks/coding_tasks.json")
 DEFAULT_ARTIFACT_PATH = Path("benchmarks/benchmark-v1.json")
 DEFAULT_HARNESS_REGRESSION_V2_ARTIFACT_PATH = Path("artifacts/harness-regression-v2.json")
@@ -409,6 +410,8 @@ class BenchmarkEvaluator:
         timezone_name=DEFAULT_TIMEZONE,
         model_client_factory=None,
         allow_dirty_workspace=False,
+        eval_level="L1",
+        suite="contract-smoke",
     ):
         self.benchmark_path = Path(benchmark_path)
         self.artifact_path = Path(artifact_path)
@@ -424,6 +427,8 @@ class BenchmarkEvaluator:
         self.max_new_tokens = max_new_tokens
         self.timezone_name = timezone_name
         self.model_client_factory = model_client_factory
+        self.eval_level = str(eval_level)
+        self.suite = str(suite)
         self.repo_root = self.benchmark_path.resolve().parent.parent
 
     def load(self):
@@ -434,7 +439,9 @@ class BenchmarkEvaluator:
         rows = [self.run_task(task) for task in benchmark["tasks"]]
         summary = summarize_rows(rows)
         artifact = {
-            "schema_version": BENCHMARK_SCHEMA_VERSION,
+            "schema_version": EVALUATION_ARTIFACT_SCHEMA_VERSION,
+            "eval_level": self.eval_level,
+            "suite": self.suite,
             "captured_at": _now_in_timezone(self.timezone_name),
             "runtime": {
                 "commit_sha": _git_value(["rev-parse", "HEAD"], cwd=self.repo_root),
@@ -535,6 +542,8 @@ class BenchmarkEvaluator:
 
         return {
             "id": task["id"],
+            "eval_level": self.eval_level,
+            "suite": self.suite,
             "prompt": task["prompt"],
             "fixture_repo": task["fixture_repo"],
             "fixture_copy_relpath": _workspace_relative(fixture_copy_root, self.workspace_root),
@@ -610,6 +619,8 @@ def run_fixed_benchmark(
     timezone_name=DEFAULT_TIMEZONE,
     model_client_factory=None,
     allow_dirty_workspace=False,
+    eval_level="L1",
+    suite="contract-smoke",
 ):
     evaluator = BenchmarkEvaluator(
         benchmark_path=benchmark_path,
@@ -623,6 +634,8 @@ def run_fixed_benchmark(
         timezone_name=timezone_name,
         model_client_factory=model_client_factory,
         allow_dirty_workspace=allow_dirty_workspace,
+        eval_level=eval_level,
+        suite=suite,
     )
     return evaluator.run()
 
@@ -640,7 +653,9 @@ def run_harness_regression_v2(
     model_client_factory=None,
     allow_dirty_workspace=False,
 ):
-    return run_fixed_benchmark(
+    from .levels.l1_contract import run_contract_smoke
+
+    return run_contract_smoke(
         benchmark_path=benchmark_path,
         artifact_path=artifact_path,
         workspace_root=workspace_root,
