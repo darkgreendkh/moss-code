@@ -105,6 +105,7 @@ class Moss:
         context_mode="rerender",
         reflect_mode="rule",
         compaction_mode="off",
+        aux_model_client=None,
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -144,6 +145,9 @@ class Moss:
         # 默认 off = 今天的纯截断行为，也是消融基线（spec-06 §5）。
         # 等评测证明收益之后再翻默认值。
         self.compaction_mode = compaction_mode
+        # compaction 模型模式用的辅助后端。None 表示复用主后端；
+        # 独立的小模型接进来的口子留给 spec-09。
+        self._aux_model_client = aux_model_client
         # 历史段连续几轮触发了收缩。连续两轮说明不是偶发的大输出，
         # 而是历史本身已经装不下了 —— 那是该压缩而不是继续削的信号。
         self.history_reduction_streak = 0

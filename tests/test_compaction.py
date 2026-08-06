@@ -316,3 +316,167 @@ def test_oversized_request_is_offloaded_before_giving_up(tmp_path):
     run_dir = agent.run_store.run_dir(agent.current_task_state.run_id)
     assert list((run_dir / "artifacts").glob("*user_request*.txt"))
     assert 'read_artifact("artifacts/' in agent.model_client.prompts[-1]
+
+
+class _AuxClient:
+    """一个只会按脚本回话的辅助后端。"""
+
+    def __init__(self, response):
+        self.response = response
+        self.prompts = []
+
+    def complete(self, prompt, max_new_tokens, **kwargs):
+        self.prompts.append(prompt)
+        if isinstance(self.response, Exception):
+            raise self.response
+        return self.response
+
+
+def _denied_case():
+    history = [
+        {"role": "user", "content": "wire up the parser", "created_at": "2026-04-07T09:00:00+00:00"},
+        {"role": "tool", "name": "write_file", "args": {"path": "moss/helper.py"},
+         "content": "wrote moss/helper.py", "created_at": "2026-04-07T09:01:00+00:00"},
+        {"role": "tool", "name": "read_file", "args": {"path": "a.py"},
+         "content": "# a.py\n   1: def go(): pass", "created_at": "2026-04-07T09:02:00+00:00"},
+    ]
+    events = [
+        {"event": "tool_executed", "sequence": 1, "name": "write_file", "args": {"path": "moss/helper.py"},
+         "result": "wrote moss/helper.py", "tool_status": "ok", "tool_error_code": "",
+         "affected_paths": ["moss/helper.py"]},
+        {"event": "tool_executed", "sequence": 2, "name": "read_file", "args": {"path": "a.py", "start": 1},
+         "result": "# a.py\n   1: def go(): pass", "tool_status": "ok", "tool_error_code": "",
+         "affected_paths": []},
+    ]
+    return history, events
+
+
+def test_model_mode_uses_the_aux_answer_when_it_parses():
+    history, events = _denied_case()
+    aux = _AuxClient(
+        "Sure, here you go:\n"
+        + json.dumps(
+            {
+                "goals": ["wire up the parser end to end"],
+                "completed": ["write_file moss/helper.py -> changed moss/helper.py"],
+                "excluded": [],
+                "findings": [{"text": "a.py only defines go()", "evidence": "a.py:1"}],
+                "open_questions": ["is go() still called anywhere?"],
+            }
+        )
+    )
+
+    artifact, _ = compact(history, events, method="model", aux_client=aux, keep_recent=0)
+
+    assert artifact.method == "model"
+    assert artifact.goals == ("wire up the parser end to end",)
+    assert artifact.findings[0].text == "a.py only defines go()"
+    assert artifact.open_questions == ("is go() still called anywhere?",)
+    assert "Rule-based draft" in aux.prompts[0]
+
+
+def test_model_mode_falls_back_to_rule_when_the_answer_is_unusable():
+    history, events = _denied_case()
+
+    for response in ("not json at all", "", RuntimeError("aux backend down")):
+        artifact, _ = compact(
+            history, events, method="model", aux_client=_AuxClient(response), keep_recent=0
+        )
+        rule_artifact, _ = compact(history, events, keep_recent=0)
+        assert artifact.method == "rule"
+        assert artifact.fingerprint() == rule_artifact.fingerprint()
+
+
+def test_model_mode_without_an_aux_client_is_honestly_labelled_rule():
+    history, events = _denied_case()
+
+    artifact, _ = compact(history, events, method="model", aux_client=None, keep_recent=0)
+
+    assert artifact.method == "rule"
+
+
+def test_model_mode_cannot_invent_evidence_or_completions():
+    history, events = _denied_case()
+    aux = _AuxClient(
+        json.dumps(
+            {
+                "goals": ["ship it"],
+                "completed": ["shipped the whole feature", "migrated the database"],
+                "excluded": [],
+                "findings": [
+                    {"text": "everything works", "evidence": "imaginary.py:99"},
+                    {"text": "a.py only defines go()", "evidence": "a.py:1"},
+                ],
+                "open_questions": [],
+            }
+        )
+    )
+
+    artifact, _ = compact(history, events, method="model", aux_client=aux, keep_recent=0)
+
+    # 编造的 completion 和编造的证据锚点都被丢掉，只留下规则模式认得的那些。
+    assert artifact.completed == ()
+    assert [finding.evidence for finding in artifact.findings] == ["a.py:1"]
+
+
+def test_model_mode_cannot_promote_a_partial_success_to_completed():
+    history = [
+        {"role": "user", "content": "apply the patch", "created_at": "2026-04-07T09:00:00+00:00"},
+        {"role": "tool", "name": "run_shell", "args": {"command": "patch -p1"},
+         "content": "exit_code: 1\napplied 1 of 3 hunks", "created_at": "2026-04-07T09:01:00+00:00"},
+    ]
+    events = [
+        {"event": "tool_executed", "sequence": 1, "name": "run_shell", "args": {"command": "patch -p1"},
+         "result": "exit_code: 1\napplied 1 of 3 hunks", "tool_status": "partial_success",
+         "tool_error_code": "tool_partial_success", "affected_paths": ["moss/parser.py"]},
+    ]
+    aux = _AuxClient(
+        json.dumps(
+            {
+                "goals": ["apply the patch"],
+                "completed": ["run_shell patch -p1 -> changed moss/parser.py"],
+                "excluded": [],
+                "findings": [],
+                "open_questions": [],
+            }
+        )
+    )
+
+    artifact, _ = compact(history, events, method="model", aux_client=aux, keep_recent=0)
+
+    assert artifact.completed == ()
+    assert any("partial_success" in question for question in artifact.open_questions)
+
+
+def test_runtime_model_mode_uses_the_configured_aux_client(tmp_path):
+    aux = _AuxClient(
+        json.dumps(
+            {
+                "goals": ["explore the repo"],
+                "completed": [],
+                "excluded": [],
+                "findings": [],
+                "open_questions": ["which module owns parsing?"],
+            }
+        )
+    )
+    agent = build_agent(
+        tmp_path, ["<final>done</final>"], compaction_mode="model", aux_model_client=aux
+    )
+    agent.ask("start")
+    for index in range(8):
+        agent.record(
+            {
+                "role": "tool",
+                "name": "read_file",
+                "args": {"path": f"moss/module_{index}.py"},
+                "content": f"# moss/module_{index}.py\n   1: def handler(): pass",
+                "created_at": f"2026-04-07T09:{index:02d}:00+00:00",
+            }
+        )
+
+    artifact = agent.compact_context(trigger="test")
+
+    assert artifact.method == "model"
+    assert aux.prompts
+    assert "which module owns parsing?" in agent.session["history"][0]["content"]

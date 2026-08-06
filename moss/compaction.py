@@ -363,7 +363,12 @@ def extract_model(covered_entries, covered_events, *, aux_client, budget):
 
     输入是规则模式的产物加上原始历史的指针，而不是把整段历史再灌一遍——
     压缩的目的就是省 token，为它花掉一份全量输入是本末倒置。
-    解析失败一律退回规则模式：一份读不懂的 JSON 比一份朴素的规则摘要糟糕得多。
+
+    三道校验，全部是**代码级**的，不靠 prompt 里的措辞：
+    - 解析不出 JSON 对象 → 退回规则模式（读不懂的 JSON 比朴素摘要糟糕得多）；
+    - `completed` 只能从规则模式的集合里选：规则模式永远不会把 partial_success
+      放进 completed，于是"把半成品说成做完了"在结构上就不可能发生；
+    - findings 的证据锚点必须是规则模式见过的那些，编造的一律丢弃。
     """
     baseline = extract_rule(covered_entries, covered_events)
     prompt = _model_prompt(baseline, covered_entries, budget)
@@ -374,19 +379,27 @@ def extract_model(covered_entries, covered_events, *, aux_client, budget):
     payload = _parse_json_object(raw)
     if payload is None:
         return None
+
+    allowed_completed = set(baseline.completed)
+    allowed_evidence = {finding.evidence for finding in baseline.findings}
     try:
-        findings = tuple(
+        findings = [
             Finding(text=str(item["text"]), evidence=str(item["evidence"]))
             for item in payload.get("findings", [])
-            if str(item.get("text", "")).strip() and str(item.get("evidence", "")).strip()
-        )
+            if str(item.get("text", "")).strip() and str(item.get("evidence", "")) in allowed_evidence
+        ]
+        completed = [
+            str(item) for item in payload.get("completed", []) if str(item) in allowed_completed
+        ]
     except (AttributeError, KeyError, TypeError):
         return None
     return _Extraction(
         goals=[str(item) for item in payload.get("goals", []) if str(item).strip()] or baseline.goals,
-        completed=[str(item) for item in payload.get("completed", []) if str(item).strip()],
+        completed=completed,
         excluded=[str(item) for item in payload.get("excluded", []) if str(item).strip()] or baseline.excluded,
-        findings=list(findings) or baseline.findings,
+        findings=findings or baseline.findings,
+        # open_questions 允许模型自由发挥：漏一条待办的代价，
+        # 远小于把一个未解决的问题说成已解决。
         open_questions=[str(item) for item in payload.get("open_questions", []) if str(item).strip()]
         or baseline.open_questions,
         plan=baseline.plan,
@@ -409,8 +422,9 @@ def _model_prompt(baseline, covered_entries, budget):
         "You are compacting an agent run's transcript into a structured handoff.\n"
         "Return ONLY a JSON object with keys: goals, completed, excluded, findings, open_questions.\n"
         "findings is a list of {text, evidence}; evidence must be a 'path:line' or 'event:<seq>' anchor "
-        "taken from the rule-based draft. Never invent evidence.\n"
-        "Never describe a partial_success as a success.\n"
+        "taken from the rule-based draft. Never invent evidence: unknown anchors are dropped.\n"
+        "completed may only contain entries that already appear in the draft's completed list; "
+        "anything else is dropped. Never describe a partial_success as a success.\n"
         f"There are {len(covered_entries)} compacted transcript entries.\n"
         f"Rule-based draft:\n{clip_to_budget(rule_summary, max(400, int(budget)), measure=len)}\n"
     )
