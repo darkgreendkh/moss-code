@@ -11,6 +11,9 @@ class ModelCapabilities:
     cache_style: str
     reports_cache_usage: bool
     max_output_tokens: int
+    # 这一行是不是"我们真的认识这个模型"。保守默认里的 32000 是个占位数，
+    # 拿它去推上下文预算等于拿猜的窗口当事实（spec-06 §4.6）。
+    known: bool = True
 
 
 CONSERVATIVE_CAPABILITIES = ModelCapabilities(
@@ -20,6 +23,7 @@ CONSERVATIVE_CAPABILITIES = ModelCapabilities(
     cache_style="none",
     reports_cache_usage=False,
     max_output_tokens=4096,
+    known=False,
 )
 
 

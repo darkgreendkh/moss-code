@@ -2349,3 +2349,89 @@ def test_update_plan_rejects_a_plan_with_no_usable_step(tmp_path):
 
     tool_entries = [item for item in agent.session["history"] if item.get("role") == "tool"]
     assert "invalid arguments" in tool_entries[0]["content"]
+
+
+def test_context_budget_is_derived_from_a_large_model_window(tmp_path):
+    """大窗口模型不该被 12000 这个 2024 年的数字困住（spec-06 §4.6）。"""
+    workspace = build_workspace(tmp_path)
+    client = AnthropicCompatibleModelClient(
+        model="claude-opus-5",
+        api_key="test",
+        base_url="https://example.invalid/v1",
+        temperature=0.2,
+        timeout=1,
+    )
+    agent = Moss(
+        model_client=client,
+        workspace=workspace,
+        session_store=SessionStore(tmp_path / ".moss" / "sessions"),
+        approval_policy="auto",
+        max_new_tokens=4096,
+    )
+
+    # min(200000 * 0.5, 60000) - max(4096, 1024)
+    assert agent.context_manager.total_budget == 60000 - 4096
+    assert agent.context_manager.total_budget > 12000
+    assert agent.context_manager.section_budgets["history"] > 12000
+
+
+def test_context_budget_respects_the_ratio_and_hard_cap_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOSS_CONTEXT_RATIO", "0.25")
+    monkeypatch.setenv("MOSS_CONTEXT_HARD_CAP", "20000")
+    workspace = build_workspace(tmp_path)
+    client = AnthropicCompatibleModelClient(
+        model="claude-opus-5",
+        api_key="test",
+        base_url="https://example.invalid/v1",
+        temperature=0.2,
+        timeout=1,
+    )
+    agent = Moss(
+        model_client=client,
+        workspace=workspace,
+        session_store=SessionStore(tmp_path / ".moss" / "sessions"),
+        approval_policy="auto",
+        max_new_tokens=2048,
+    )
+
+    # min(200000 * 0.25, 20000) - max(2048, 1024)
+    assert agent.context_manager.total_budget == 20000 - 2048
+
+
+def test_small_window_provider_keeps_a_small_budget(tmp_path):
+    """Ollama 的 32K 窗口推出来的预算必须仍然很小，不能被大模型的口径带跑。"""
+    workspace = build_workspace(tmp_path)
+    client = OllamaModelClient(
+        model="qwen3:8b", host="http://localhost:11434", temperature=0.2, top_p=0.9, timeout=1
+    )
+    agent = Moss(
+        model_client=client,
+        workspace=workspace,
+        session_store=SessionStore(tmp_path / ".moss" / "sessions"),
+        approval_policy="auto",
+        max_new_tokens=1024,
+    )
+
+    assert agent.context_manager.total_budget == 32000 // 2 - 1024
+    assert agent.context_manager.total_budget < 20000
+
+
+def test_unknown_model_keeps_the_historical_budget(tmp_path):
+    """认不出来的模型退回 12000：拿猜出来的窗口放大预算，撞的是 provider 的报错。"""
+    agent = build_agent(tmp_path, [])
+
+    assert agent.model_client.capabilities.known is False
+    assert agent.context_manager.total_budget == 12000
+
+
+def test_edit_phase_shifts_budget_from_history_to_constraints(tmp_path):
+    agent = build_agent(tmp_path, [])
+    explore = agent.context_manager._phase_adjusted_budgets()
+
+    agent.record_tool_outcome("write_file", {"path": "a.py"}, {"workspace_changed": True})
+    edit = agent.context_manager._phase_adjusted_budgets()
+
+    assert agent.context_manager.task_phase() == "edit"
+    assert edit["history"] < explore["history"]
+    assert edit["constraints"] > explore["constraints"]
+    assert edit["relevant_memory"] > explore["relevant_memory"]

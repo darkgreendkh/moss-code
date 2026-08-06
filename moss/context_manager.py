@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 
 from .model_request import Block, CompactionArtifact, Message, ModelRequest, PromptBundle
@@ -53,6 +54,25 @@ SECTION_ORDER = (
 )
 CURRENT_REQUEST_SECTION = "current_request"
 CONSTRAINTS_SECTION = "constraints"
+
+# ---- 预算按模型窗口推导（spec-06 §4.6） ----
+# 12000 是 2024 年的数字，而 2026 的窗口普遍 200K+：写死等于主动只用 6%。
+# 但也不能把窗口用满——留给输出的余量、以及"一次请求别太大"的成本约束都是真的。
+DEFAULT_CONTEXT_RATIO = 0.5
+DEFAULT_CONTEXT_HARD_CAP = 60000
+MIN_OUTPUT_RESERVE = 1024
+MIN_DERIVED_BUDGET = 2000
+# 各段占比。prefix 这一段在实现里同时装稳定头和 workspace/repo_map，
+# 所以是 spec 里 prefix 25% + workspace 10% 的合计。
+SECTION_SHARES = {
+    "prefix": 0.35,
+    "history": 0.45,
+    "memory": 0.08,
+    "relevant_memory": 0.07,
+    CONSTRAINTS_SECTION: 0.05,
+}
+# 任务阶段微调：探索期主要在读，历史值钱；编辑期在改，相关文件和约束更值钱。
+PHASE_SHARE_SHIFT = 0.05
 # 每段的用途说明。模型不会自动知道"这段是历史所以只是参考、那段是约束所以必须遵守"，
 # 而这两者混在一起时，最常见的失败模式就是把历史里的旧要求当成当前指令。
 # 刻意写得很短：它是每轮都出现的固定开销，长一句就是一份永久税。
@@ -89,6 +109,45 @@ _SHELL_SIGNAL_KEYWORDS = (
 def _is_shell_signal_line(line):
     lowered = line.lower()
     return any(keyword in lowered for keyword in _SHELL_SIGNAL_KEYWORDS)
+
+
+def _env_float(name, default):
+    try:
+        value = float(os.environ.get(name, ""))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def derive_total_budget(capabilities, max_new_tokens):
+    """按模型窗口推出这一轮的总预算。
+
+    `capabilities.known` 为假时退回今天的 12000：保守能力表里的窗口是个占位数，
+    拿猜出来的窗口去放大预算，撞的是 provider 的 context-length 报错。
+    """
+    if capabilities is None or not getattr(capabilities, "known", False):
+        return DEFAULT_TOTAL_BUDGET
+    window = int(getattr(capabilities, "context_window", 0) or 0)
+    if window <= 0:
+        return DEFAULT_TOTAL_BUDGET
+    ratio = _env_float("MOSS_CONTEXT_RATIO", DEFAULT_CONTEXT_RATIO)
+    hard_cap = _env_float("MOSS_CONTEXT_HARD_CAP", DEFAULT_CONTEXT_HARD_CAP)
+    # 输出也要占窗口。不扣这一块的话，输入刚好塞满窗口、模型一个 token 都吐不出来。
+    reserve = max(int(max_new_tokens or 0), MIN_OUTPUT_RESERVE)
+    budget = int(min(window * ratio, hard_cap)) - reserve
+    return max(MIN_DERIVED_BUDGET, budget)
+
+
+def derive_section_budgets(total_budget, phase="explore"):
+    """按占比把总预算分到各段，并按任务阶段微调。"""
+    shares = dict(SECTION_SHARES)
+    if phase == "edit":
+        # 已经在改文件了：历史里那些"读过什么"的价值下降，
+        # 而"改哪个文件、要守什么"直接决定下一步对不对。
+        shares["history"] -= PHASE_SHARE_SHIFT
+        shares["relevant_memory"] += PHASE_SHARE_SHIFT / 2
+        shares[CONSTRAINTS_SECTION] += PHASE_SHARE_SHIFT / 2
+    return {section: max(20, int(total_budget * share)) for section, share in shares.items()}
 
 
 def tool_result_open_tag(item):
@@ -153,7 +212,7 @@ class ContextManager:
     def __init__(
         self,
         agent,
-        total_budget=DEFAULT_TOTAL_BUDGET,
+        total_budget=None,
         section_budgets=None,
         section_floors=None,
         reduction_order=None,
@@ -162,8 +221,15 @@ class ContextManager:
         self.agent = agent
         # measure 决定预算的计量单位：默认 token 估算；测试可注入 len 走字符级。
         self.measure = measure or estimate_tokens
-        self.total_budget = int(total_budget)
-        self.section_budgets = dict(DEFAULT_SECTION_BUDGETS)
+        # 预算按模型窗口推导（spec-06 §4.6）；显式传入时以显式为准。
+        capabilities = getattr(getattr(agent, "model_client", None), "capabilities", None)
+        self.derived_total_budget = derive_total_budget(
+            capabilities, getattr(agent, "max_new_tokens", 4096)
+        )
+        self.total_budget = int(
+            self.derived_total_budget if total_budget is None else total_budget
+        )
+        self.section_budgets = derive_section_budgets(self.total_budget)
         if section_budgets:
             self.section_budgets.update({str(key): int(value) for key, value in section_budgets.items()})
         self._section_floor_overrides = {str(key): int(value) for key, value in (section_floors or {}).items()}
@@ -173,6 +239,30 @@ class ContextManager:
     def _clip(self, text, limit, keep="head"):
         """按当前计量单位把 text 截断到 limit 以内。"""
         return clip_to_budget(text, int(limit), measure=self.measure, keep=keep)
+
+    def task_phase(self):
+        """探索期还是编辑期。只看"这次运行改过文件没有"，不做更花哨的推断。"""
+        events = list(self.agent.stall_events()) if hasattr(self.agent, "stall_events") else []
+        return "edit" if any(event.get("workspace_changed") for event in events) else "explore"
+
+    def _phase_adjusted_budgets(self):
+        """按任务阶段给这一轮的段预算做微调。
+
+        只是一层临时的加减，不改 `self.section_budgets`——那份是可以被评测和
+        调用方覆盖的配置，被每轮悄悄重写的话就没法解释预算到底是谁定的。
+        """
+        budgets = dict(self.section_budgets)
+        if self.task_phase() != "edit":
+            return budgets
+        shift = int(self.total_budget * PHASE_SHARE_SHIFT)
+        history_floor = int(self.section_floors.get("history", 0))
+        shift = max(0, min(shift, budgets.get("history", 0) - history_floor))
+        if not shift:
+            return budgets
+        budgets["history"] -= shift
+        budgets["relevant_memory"] = budgets.get("relevant_memory", 0) + shift // 2
+        budgets[CONSTRAINTS_SECTION] = budgets.get(CONSTRAINTS_SECTION, 0) + (shift - shift // 2)
+        return budgets
 
     def _constraints_text(self):
         """"这一轮必须遵守什么"：checkpoint（含计划）+ 最近的失败。
@@ -267,7 +357,7 @@ class ContextManager:
             )
             return prompt, metadata
 
-        budgets = dict(self.section_budgets)
+        budgets = self._phase_adjusted_budgets()
         rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes, anchors=anchors)
         prompt = self._assemble_prompt(rendered)
         reduction_log = []
@@ -996,18 +1086,26 @@ class ContextManager:
     ):
         measure_unit = "chars" if self.measure is len else "tokens"
         section_metadata = {}
+        # *_chars 是历史字段名（评测代码在用），但预算的单位其实是 token。
+        # 新增同名 *_tokens 并让报告改用后者，旧字段保留一个版本周期。
         for section in SECTION_ORDER[:-1]:
             section_metadata[section] = {
                 "raw_chars": rendered[section].raw_chars,
                 "budget_chars": int(budgets.get(section, 0)),
                 "rendered_chars": rendered[section].rendered_chars,
                 "rendered_units": self.measure(rendered[section].rendered),
+                "raw_tokens": estimate_tokens(rendered[section].raw),
+                "budget_tokens": int(budgets.get(section, 0)),
+                "rendered_tokens": estimate_tokens(rendered[section].rendered),
             }
         section_metadata[CURRENT_REQUEST_SECTION] = {
             "raw_chars": len(section_texts[CURRENT_REQUEST_SECTION]),
             "budget_chars": None,
             "rendered_chars": len(rendered[CURRENT_REQUEST_SECTION].rendered),
             "rendered_units": self.measure(rendered[CURRENT_REQUEST_SECTION].rendered),
+            "raw_tokens": estimate_tokens(section_texts[CURRENT_REQUEST_SECTION]),
+            "budget_tokens": None,
+            "rendered_tokens": estimate_tokens(rendered[CURRENT_REQUEST_SECTION].rendered),
         }
         return {
             "prompt_chars": len(prompt),
@@ -1016,6 +1114,9 @@ class ContextManager:
             "prompt_measured": self.measure(prompt),
             "context_health": self._context_health(prompt, rendered, section_metadata, user_message),
             "prompt_budget_chars": self.total_budget,
+            "prompt_budget_tokens": self.total_budget,
+            "derived_budget_tokens": self.derived_total_budget,
+            "task_phase": self.task_phase(),
             "prompt_over_budget": self.measure(prompt) > self.total_budget,
             "over_budget_unrecoverable": bool(over_budget_unrecoverable),
             "section_order": list(SECTION_ORDER),
