@@ -85,7 +85,7 @@
         "kind": "context_reduction",
         "history_count": 12,
         "note_count": 6,
-        "total_budget": 700,
+        "total_budget": 1400,
         "section_budgets": {
           "prefix": 800,
           "memory": 800,

@@ -18,6 +18,7 @@ from .features import memory as memorylib
 from .features.memory_records import SourceRef
 from . import security as securitylib
 from .context_manager import ContextManager
+from .model_request import PromptBundle
 from .checkpoint import CHECKPOINT_NONE_STATUS
 from .prompt_prefix import build_prompt_prefix, skill_signature, tool_signature
 from .run_store import RunStore
@@ -520,9 +521,14 @@ class Moss:
         return bundle.text, bundle.metadata
 
     def _build_prompt_bundle_and_metadata(self, user_message):
+        result = self.build_context_result(user_message)
+        return PromptBundle(request=result.request, text=result.text, metadata=result.metadata)
+
+    def build_context_result(self, user_message):
+        """组这一轮的 prompt，并带上 admission 判定（能不能发）。"""
         refresh = self.refresh_prefix()
         self.resume_state = self.evaluate_resume_state()
-        bundle = self.context_manager.build_bundle(user_message)
+        bundle = self.context_manager.build_result(user_message)
         metadata = dict(bundle.metadata)
         # 这里把“这轮 prompt 是怎么拼出来的”连同缓存相关状态一起记下来，
         # 后面 trace/report 才能解释清楚：为什么这一轮 prefix 变了、缓存有没有命中。

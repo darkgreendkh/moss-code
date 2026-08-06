@@ -117,7 +117,7 @@ class AgentLoop:
             task_state.record_attempt()
             agent.write_task_state(task_state)
             prompt_started_at = time.monotonic()
-            prompt_bundle = agent._build_prompt_bundle_and_metadata(user_message)
+            prompt_bundle = agent.build_context_result(user_message)
             prompt = prompt_bundle.text
             prompt_metadata = prompt_bundle.metadata
             agent.emit_trace(
@@ -128,6 +128,12 @@ class AgentLoop:
                     "duration_ms": int((time.monotonic() - prompt_started_at) * 1000),
                 },
             )
+            if not prompt_bundle.sendable:
+                # admission gate：装不下就别发。发出去的结局是一个 400，
+                # 而那时这一轮的钱和时间已经花掉了，用户还只能看到 provider 的报错。
+                return self._finish_context_overflow(
+                    task_state, user_message, prompt_bundle, run_started_at
+                )
             if prompt_metadata.get("resume_status") == CHECKPOINT_PARTIAL_STALE_STATUS:
                 checkpoint = agent.create_checkpoint(task_state, user_message, trigger="freshness_mismatch")
                 agent.write_task_state(task_state)
@@ -574,6 +580,50 @@ class AgentLoop:
             task_state,
             "checkpoint_created",
             {"checkpoint_id": checkpoint["checkpoint_id"], "trigger": "budget_exceeded"},
+        )
+        agent.emit_trace(
+            task_state,
+            "run_finished",
+            {
+                "status": task_state.status,
+                "stop_reason": task_state.stop_reason,
+                "final_answer": final,
+                "run_duration_ms": int((time.monotonic() - run_started_at) * 1000),
+            },
+        )
+        agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
+        return final
+
+    def _finish_context_overflow(self, task_state, user_message, result, run_started_at):
+        """prompt 装不进可用预算：不调用 provider，直接收尾成一次失败运行。
+
+        为什么算失败而不是"停下"：请求根本没被处理过，one-shot / CI 必须能靠
+        退出码区分它和"跑完了但没成功"。
+        """
+        agent = self.agent
+        reason = result.overflow_reason or "prompt_too_large"
+        detail = str(result.metadata.get("overflow_detail", "")) or reason
+        final = f"Stopped without calling the model: {detail}."
+        agent.emit_progress("error", {"scope": "context", "message": detail})
+        agent.emit_trace(
+            task_state,
+            trace_events.CONTEXT_OVERFLOW,
+            {
+                "reason": reason,
+                "detail": detail,
+                "prompt_measured": result.metadata.get("prompt_measured"),
+                "prompt_budget": result.metadata.get("prompt_budget_chars"),
+            },
+        )
+        task_state.stop_context_overflow(final)
+        agent.record({"role": "assistant", "content": final, "created_at": now()})
+        agent.write_task_state(task_state)
+        checkpoint = agent.create_checkpoint(task_state, user_message, trigger="context_overflow")
+        agent.write_task_state(task_state)
+        agent.emit_trace(
+            task_state,
+            "checkpoint_created",
+            {"checkpoint_id": checkpoint["checkpoint_id"], "trigger": "context_overflow"},
         )
         agent.emit_trace(
             task_state,

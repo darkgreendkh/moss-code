@@ -303,6 +303,13 @@ def make_progress_printer(stream):
             if status != "ok":
                 stream.write(f"      ({status})\n")
                 stream.flush()
+        elif event == "error":
+            # 收敛成"失败但已收尾"的运行时，stdout 上只有一句最终答案；
+            # 具体原因（模型后端报错、prompt 装不下）要在 stderr 上说清楚。
+            clear()
+            scope = str(payload.get("scope", "run"))
+            stream.write(f"  ! {scope}: {payload.get('message', '')}\n")
+            stream.flush()
 
     render.clear = clear
     return render

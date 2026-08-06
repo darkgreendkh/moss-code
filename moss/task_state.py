@@ -24,6 +24,7 @@ STOP_REASON_PERSISTENCE_ERROR = "persistence_error"
 STOP_REASON_RESUME_LOAD_ERROR = "resume_load_error"
 STOP_REASON_INTERRUPTED = "interrupted"
 STOP_REASON_BUDGET_EXCEEDED = "budget_exceeded"
+STOP_REASON_CONTEXT_OVERFLOW = "context_overflow"
 
 
 @dataclass
@@ -118,6 +119,11 @@ class TaskState:
     def stop_budget_exceeded(self, final_answer=""):
         # 预算耗尽是"按计划停下"，不是失败：status 保持 stopped。
         return self.stop(STOP_REASON_BUDGET_EXCEEDED, final_answer=final_answer)
+
+    def stop_context_overflow(self, final_answer=""):
+        # 装不进上下文是"这次请求发不出去"，属于失败：one-shot 要靠非零退出码
+        # 让 CI 看见，绝不能伪装成一次正常收尾。
+        return self.stop(STOP_REASON_CONTEXT_OVERFLOW, status=STATUS_FAILED, final_answer=final_answer)
 
     def stop_interrupted(self, final_answer=""):
         return self.stop(STOP_REASON_INTERRUPTED, status=STATUS_FAILED, final_answer=final_answer)

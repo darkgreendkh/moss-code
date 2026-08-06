@@ -87,6 +87,22 @@ class SectionRender:
         return len(self.rendered)
 
 
+@dataclass(frozen=True)
+class ContextBuildResult:
+    """一轮 prompt 组装的完整结果，含"能不能发"这个判定。
+
+    为什么不只返回 (prompt, metadata)：超预算过去只标一个 flag 然后照发，
+    等于把判断推给 provider——它的反馈是一个 400，而那时候这一轮的钱和时间
+    已经花掉了。admission gate 要在本地就说"不发"，并说清为什么。
+    """
+
+    request: object
+    text: str
+    metadata: dict
+    sendable: bool = True
+    overflow_reason: str | None = None
+
+
 class ContextManager:
     def __init__(
         self,
@@ -238,6 +254,49 @@ class ContextManager:
         )
         self._last_rendered = rendered
         return prompt, metadata
+
+    def build_result(self, user_message):
+        """组 prompt 并给出 admission 判定。
+
+        判定只有两档：`request_too_large`（当前请求自己就装不下，裁剪它违背
+        "当前请求永不裁剪"的原则，所以只能拒发）和 `prompt_too_large`
+        （所有可压 section 都到 floor 了仍然超）。两者都不调用 provider。
+
+        这道闸不受 feature flag 控制：`context_reduction=off` 只是换掉压缩策略，
+        不能把"超预算就别发"这条也一起关掉。
+        """
+        bundle = self.build_bundle(user_message)
+        metadata = dict(bundle.metadata)
+        limit = int(self.total_budget)
+        prompt_units = int(metadata.get("prompt_measured", 0))
+        request_units = int(
+            metadata.get("sections", {}).get(CURRENT_REQUEST_SECTION, {}).get("rendered_units", 0)
+        )
+        unit = "chars" if self.measure is len else "tokens"
+        overflow_reason = None
+        detail = ""
+        if request_units > limit:
+            overflow_reason = "request_too_large"
+            detail = (
+                f"the current request alone is about {request_units} {unit}, "
+                f"over the usable context budget of {limit} {unit}"
+            )
+        elif prompt_units > limit:
+            overflow_reason = "prompt_too_large"
+            detail = (
+                f"the assembled prompt is about {prompt_units} {unit}, "
+                f"over the usable context budget of {limit} {unit}"
+            )
+        metadata["sendable"] = overflow_reason is None
+        metadata["overflow_reason"] = overflow_reason
+        metadata["overflow_detail"] = detail
+        return ContextBuildResult(
+            request=bundle.request,
+            text=bundle.text,
+            metadata=metadata,
+            sendable=overflow_reason is None,
+            overflow_reason=overflow_reason,
+        )
 
     def build_bundle(self, user_message):
         """把预算后的 sections 放进有信任边界的结构化请求。"""
@@ -504,8 +563,23 @@ class ContextManager:
         ]
         raw_lines = lead + [f"- {text}" for text in note_texts]
         raw = "\n".join(raw_lines) if note_texts else "\n".join(lead + ["- none"])
+        if budget <= 0:
+            # 预算 0 的含义是"这一段这轮不要"，而不是"不限量"。旧代码把
+            # `budget <= 0` 当成"跳过预算检查"，结果压得最狠的时候这一段反而全量渲染。
+            return SectionRender(
+                raw=raw,
+                budget=budget,
+                rendered="",
+                details={
+                    "selected_notes": note_texts,
+                    "rendered_notes": [],
+                    "selected_count": len(note_texts),
+                    "rendered_count": 0,
+                    "note_budget": 0,
+                },
+            )
         if not note_texts:
-            rendered = self._clip(raw, budget, keep="head") if budget > 0 else raw
+            rendered = self._clip(raw, budget, keep="head")
             return SectionRender(
                 raw=raw,
                 budget=budget,
@@ -523,7 +597,7 @@ class ContextManager:
         for text in note_texts:
             candidate_notes = [*rendered_notes, text]
             candidate = "\n".join(lead + [f"- {item}" for item in candidate_notes])
-            if budget <= 0 or self.measure(candidate) <= budget:
+            if self.measure(candidate) <= budget:
                 rendered_notes = candidate_notes
         if rendered_notes:
             rendered = "\n".join(lead + [f"- {text}" for text in rendered_notes])
@@ -532,7 +606,7 @@ class ContextManager:
             per_note_budget = max(1, budget - self.measure("\n".join(lead)) - 3)
             rendered_notes = [self._clip(note_texts[0], per_note_budget, keep="head")]
             rendered = "\n".join(lead + [f"- {rendered_notes[0]}"])
-            if self.measure(rendered) > budget and budget > 0:
+            if self.measure(rendered) > budget:
                 rendered = self._clip(raw, budget, keep="head")
                 rendered_notes = [rendered]
 

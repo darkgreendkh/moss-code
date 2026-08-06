@@ -32,7 +32,11 @@ CACHE_CAPABILITY_DETECTED = "cache_capability_detected"
 # 结构化记忆（spec-05 §4.9）
 MEMORY_POISONING_BLOCKED = "memory_poisoning_blocked"
 
+# 上下文压缩与输出管理（spec-06）
+CONTEXT_OVERFLOW = "context_overflow"
+
 __all__ = [
+    "CONTEXT_OVERFLOW",
     "TOOLS_BATCH_STARTED",
     "TOOLS_BATCH_FINISHED",
     "BATCH_TRUNCATED",
