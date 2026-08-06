@@ -35,7 +35,8 @@ cli.py (装配/REPL/进度渲染)
             │    └─ tools.py        工具白名单（显式注册，非动态发现）
             ├─ compaction.py        上下文压缩：结构化交接（可逆/幂等/闭合），默认 off
             ├─ checkpoint.py        每步落 checkpoint（上限 CHECKPOINT_HISTORY_LIMIT=40，自动裁剪）
-            └─ run_store.py         .moss/runs/<run_id>/{task_state.json, trace.jsonl, report.json}
+            ├─ action_ledger.py     risky 动作的 intent/receipt 两阶段 + 崩溃后对账
+            └─ run_store.py         .moss/runs/<run_id>/{task_state.json, trace.jsonl, report.json, lease.json}
 ```
 
 支撑模块：
@@ -47,7 +48,25 @@ cli.py (装配/REPL/进度渲染)
   **安全判定（路径锚定）不依赖它**，只用来少扫/少展示
 - `repo_map.py`：目录骨架 + 符号索引（Python 走 stdlib `ast`，其它语言走行首前缀），
   缓存在 `.moss/cache/repo_map.json`；`rank_relevant_files` 给出每轮的 `Likely relevant files` 起点锚
-- `trace_events.py`：trace 事件名常量（就近文档、repo map、批执行、计划、停滞、预算、中断）
+- `trace_events.py`：trace 事件名常量 + `TRACE_SCHEMA_VERSION` + `ALL_EVENTS`。
+  **禁止在别处写事件名字面量**（`tests/test_trace_events.py` 用 AST 扫 `moss/evaluation/` 和所有
+  `emit_trace`/`append_trace` 调用；trace 里出现的名字也必须在 `ALL_EVENTS` 内）
+- `atomic_io.py`：原子 + 持久落盘。`write_atomic` 的顺序不可换（临时文件 → fsync → replace → fsync 目录）；
+  jsonl 追加是**每条 flush、每 20 条 fsync**（flush 扛进程被杀，fsync 防断电，摊派是刻意的取舍）；
+  目录 fsync 在 Windows 上不可用 → 记降级并进 `report.durability_degradations`，不假装持久。
+  `truncate_partial_tail` 修崩溃留下的半截行——不修的话下一条记录会被粘上去，两条一起读不出来
+- `lease.py`：run 租约（PID + host + boot_id + 心跳 + TTL 90s）。判定链**保守**：跨机只看 TTL、
+  机器重启过判死、同机探 `os.kill(pid,0)`、探到活但心跳超 TTL 判死，其余判活。
+  最坏是"该接管的没接管"，绝不误杀活 run。长模型调用/大 pytest 期间由 `LeaseHeartbeat` 独立线程续租
+- `run_index.py`：`.moss/runs/index.jsonl`（append-only，读时按 run_id 折叠）+ 保留策略。
+  启动只读索引，不再 glob 全部 `task_state.json`。过期 run 打包成 `<run_id>.jsonl.gz`（逐文件 jsonl，仍可 grep）；
+  **永不清理** pinned / 持有有效租约 / 被 `artifacts/*.json` 引用的 run
+- `action_ledger.py`：risky 工具执行前后各落一条 `action_intent` / `action_receipt`。
+  `intended_sha`（这次动作做完文件**应该**是什么）是自动对账的前提；
+  恢复时缺 receipt 的动作：幂等工具比指纹判"已生效/可重放"，**非幂等一律 `pending_unknown` 不自动重放**
+- `rewind.py`：`/rewind [n]` 同时回退文件 + history + memory 快照。
+  用户在 agent 改完之后又动过的文件 → 整个停下等确认，一个字节都不动（`/rewind!` 强制）
+- `otel.py`：`moss runs export --otel`，stdlib 生成 OTLP/JSON，只落文件不推 collector
 - `stall.py`：四类停滞检测（`repeat_exact` / `ab_loop` / `no_progress` / `error_storm`），命中后注入**结构化**干预而不是拒绝执行
 - `budget.py`：`RunBudget` 多维预算（步数 / token / 时间 / 金额），软阈值 80% 提醒收敛、硬阈值不再调模型直接优雅收尾。
   `usd=None` 表示"不知道价格"，**绝不能当成 0**
@@ -85,7 +104,9 @@ cli.py (装配/REPL/进度渲染)
 
 ## 关键约定与不变量
 
-1. **持久化必须原子写**：先写同目录临时文件再 `os.replace`（见 `SessionStore.save` / `RunStore._write_json_atomic`）。session 每次 record 都整份重写，非原子写会在断电/Ctrl-C 时丢整个会话。
+1. **持久化必须原子写**：一律走 `atomic_io.write_atomic`（临时文件 → fsync → `os.replace` → fsync 目录），
+   不要在别处再手写一份 tmp+replace。`os.replace` 只保证"不出现半截文件"，不保证落盘——
+   两个 fsync 才是"断电不丢"的全部内容。
 2. **CLI 输出契约**：最终答案走 stdout（可管道），进度/警告/错误走 stderr。进度通过 `agent.progress_observer` 钩子（`emit_progress`），observer 异常必须被吞掉，绝不影响控制流。
 3. **一轮可以有多个动作**：`parse_model_actions` 按出现位置解析多个 `<tool>` 块，`final` 之后的一律丢弃（记 `batch_truncated`）。
    **顺序不变量**：写回 history/trace 的顺序恒等于 `Action.index`，不是完成顺序——录制回放依赖这条。
@@ -97,7 +118,9 @@ cli.py (装配/REPL/进度渲染)
    审批与写入之间用 `ApprovalReceipt` + `expected_sha` 挡 TOCTOU：审批后文件被换掉就 `precondition_failed`，要求重新审批。
 7. **工具是显式注册的白名单**（`BASE_TOOL_SPECS`），risky 工具走审批（`ask`/`auto`/`never`）；审批提示只展示摘要（`tool_executor.approval_summary`：写文件类展示脱敏 diff、shell 展示风险分级），不 dump 完整 args。
 8. **快照 diff 用 `(mtime_ns, size)`**，不做内容 hash——risky 工具每次调用前后各扫一遍工作区，性能敏感。已知盲区：walk 策略下同尺寸覆盖写 + mtime 还原判不出来（git 策略靠变更集兜底），chmod 也不可见。
-9. **中断也要留全工件**：`AgentLoop.run` 外层 `except BaseException` 只做收尾（`stop_reason=interrupted` + trace + report）然后**必然重新抛出**；收尾函数自己绝不抛异常。
+9. **中断也要留全工件**：`AgentLoop.run` 外层 `except BaseException` 只做收尾（`stop_reason=interrupted` + trace + report + **释放租约**）然后**必然重新抛出**；收尾函数自己绝不抛异常。
+   启动时接管别人的 run 之前必须先按租约判活——"看到 running 就标 interrupted"在并发下是静默数据损坏。
+   接管结论分 `interrupted`（有租约且判死）与 `stale`（没有租约文件），统计里不混算。
 10. **超预算就不许发**（admission gate）：`ContextManager.build_result()` 给出 `sendable` / `overflow_reason`
     （`request_too_large` / `prompt_too_large`）。装不下时的顺序是：先 compaction 重算 → 再把当前请求本身卸载成 artifact + 指针 →
     仍超才**不调用 provider**，收敛成 `stop_reason=context_overflow` 的失败运行（one-shot 退出码非 0）。
@@ -105,7 +128,11 @@ cli.py (装配/REPL/进度渲染)
 11. **截断必须可逆**：超过 `ARTIFACT_THRESHOLD=4000` 字符的工具输出落进 `.moss/runs/<id>/artifacts/`（按内容 sha12 去重、脱敏后写），
     prompt 里只放压缩摘要 + `read_artifact` 指针。`read_artifact` 的 `path_scope="run_dir"`——用 `Moss.path()` 会放行整个仓库，
     那等于多开一条绕过 `read_file` 的读文件通道。report 里的 `truncated_bytes_lost` 应恒为 0。
-12. **注释风格**：中文、解释"为什么存在/在链路里的位置"，新代码保持一致。
+12. **副作用要有账**：risky 工具执行前后各落一条 `action_intent` / `action_receipt`（`action_ledger.py`）。
+    恢复时"有 intent 无 receipt"的动作，非幂等工具（`run_shell`）**一律不自动重放**——宁可多问一次。
+    同一次执行还会把旧内容存进 `.moss/runs/<id>/undo/<action_id>/` 供 `/rewind` 用，
+    回滚前必须比对 `after_sha`：用户自己的未提交改动绝不能被悄悄盖掉。
+13. **注释风格**：中文、解释"为什么存在/在链路里的位置"，新代码保持一致。
 
 ## 配置
 
@@ -130,6 +157,14 @@ cli.py (装配/REPL/进度渲染)
 
 上下文开关：`--compaction=off|rule|model`（默认 off = 今天的纯截断行为，也是消融基线）、`MOSS_CONTEXT_RATIO`（默认 0.5）、`MOSS_CONTEXT_HARD_CAP`（默认 60000）。
 
+恢复开关：`--resume <id>|latest`、`--resume-parts=memory,plan,history,checkpoint`（默认全部）、
+`--explain`（打印恢复会带回什么 + 会不会重放有副作用的动作，然后退出）、`--fork <checkpoint_id>`（从任意
+checkpoint 分叉出新会话，原会话不动；undo 不跟着走）。REPL 里 `/rewind [n]` 回退，`/rewind!` 强制。
+
+run 工件保留：`MOSS_RUN_RETENTION_COUNT`（默认 200）/ `MOSS_RUN_RETENTION_DAYS`（默认 30），
+两个维度是"或"，设 0 关掉那一维。子命令 `moss runs list|show|verify|prune|pin|export [--otel]`；
+`verify` 发现哈希链被改过时返回非零。
+
 CLI 默认：`--max-steps 25`、`--max-new-tokens 4096`、`--approval ask`。ContextManager 预算以**估算 token** 为单位（见 `token_budget.py`，CJK 约 1 char/token、拉丁约 4 chars/token；测试可注入 `measure=len` 走字符级以稳定断言）。
 总预算**按模型窗口推导**：`min(context_window * ratio, hard_cap) - max(max_new_tokens, 1024)`；
 `ModelCapabilities.known` 为假（认不出来的模型）时退回历史值 12000——拿猜出来的窗口去放大预算，撞的是 provider 的 context-length 报错。
@@ -138,12 +173,17 @@ CLI 默认：`--max-steps 25`、`--max-new-tokens 4096`、`--approval ask`。Con
 ## 本地状态目录（全部 gitignored）
 
 ```
-.moss/sessions/    用户会话（--resume latest 按 mtime 取最新）
+.moss/sessions/<id>/  用户会话 v2（--resume latest 按 meta.json 的 mtime 取最新）
+                      meta.json / history.jsonl / checkpoints.jsonl —— 增量写，不再整份重写
+                      旧的单文件 <id>.json 首次 load 时自动迁移，原件留成 <id>.json.v1bak
 .moss/cache/       repo map、token 校准等派生缓存（可随时删，会自动重建）
 .moss/delegates/   delegate 子 agent 的一次性会话（隔离，防污染 latest）
-.moss/runs/<id>/   单次运行审计工件：task_state.json / trace.jsonl / report.json
+.moss/runs/index.jsonl  run 索引（append-only，读时按 run_id 折叠）；启动只读它
+.moss/runs/<id>.jsonl.gz  过期 run 的归档（逐文件 jsonl，解开仍可 grep）
+.moss/runs/<id>/   单次运行审计工件：task_state.json / trace.jsonl / report.json / lease.json
                    artifacts/ 卸载的大工具输出（read_artifact 按行取回）
                    context/   被 compaction 压掉的原始历史 turns-N.jsonl
+                   undo/<action_id>/  risky 动作前的旧内容 + manifest.json（/rewind 用）
 .moss/skills/      技能 markdown
 .env               本地密钥（仓库只保留 .env.example）
 ```
