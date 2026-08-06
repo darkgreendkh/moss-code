@@ -1,8 +1,11 @@
 # Moss Benchmark Core Report
 
+> 历史合成快照，不可在当前 checkout 复现。
+
 这轮 benchmark 只收缩到 Harness regression、context ablation、working memory ablation 和 recovery ablation 四层，不把 provider、run aggregation 或 durable memory 的别的结论揉进来。
 
 ## Harness Regression
+- 口径：scripted 动作序列下的 harness 合同回归，不代表模型能力
 - 固定 regression 任务数：12
 - pass_rate：100.00%
 - within_budget_rate：100.00%

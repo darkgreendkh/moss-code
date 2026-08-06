@@ -1,4 +1,5 @@
 {
+  "historical_snapshot_note": "历史合成快照，不可在当前 checkout 复现",
   "benchmark": {
     "source": "benchmarks/coding_tasks.json",
     "task_count": 12

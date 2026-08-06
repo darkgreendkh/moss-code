@@ -105,6 +105,25 @@ SCRIPTED_MODEL_OUTPUTS = {
 }
 
 
+def _assert_scratch_workspace(root, allow_dirty=False):
+    """拒绝把实验副本写进真实 checkout。
+
+    这条护栏存在是因为评测会覆写 README、测试 fixture 和 `.moss`；历史上把
+    ``workspace_root`` 误指到仓库根目录时，实验真的污染过当前工作区。默认只
+    接受系统临时目录下的路径，必须显式传入 ``allow_dirty=True`` 才能越过。
+    """
+    root = Path(root).resolve()
+    if allow_dirty:
+        return root
+    scratch_root = Path(tempfile.gettempdir()).resolve()
+    if root == scratch_root or scratch_root in root.parents:
+        return root
+    raise ValueError(
+        f"evaluation requires a scratch workspace under {scratch_root}; "
+        "pass allow_dirty_workspace=True only for an intentional checkout write"
+    )
+
+
 def _git_value(args, fallback="", cwd=None):
     try:
         result = subprocess.run(
@@ -245,11 +264,11 @@ def load_benchmark(path=DEFAULT_BENCHMARK_PATH, repo_root=None):
 
 def summarize_rows(rows):
     rows = list(rows)
-    passed = sum(1 for row in rows if row.get("passed") or row.get("status") == "pass")
+    passed = sum(1 for row in rows if row.get("status") == "pass")
     failed = len(rows) - passed
     failure_category_counts = {}
     for row in rows:
-        if row.get("passed") or row.get("status") == "pass":
+        if row.get("status") == "pass":
             continue
         category = str(row.get("failure_category") or "unknown")
         failure_category_counts[category] = failure_category_counts.get(category, 0) + 1
@@ -389,11 +408,14 @@ class BenchmarkEvaluator:
         max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
         timezone_name=DEFAULT_TIMEZONE,
         model_client_factory=None,
+        allow_dirty_workspace=False,
     ):
         self.benchmark_path = Path(benchmark_path)
         self.artifact_path = Path(artifact_path)
-        self.workspace_root = Path(workspace_root) if workspace_root is not None else Path(
-            tempfile.mkdtemp(prefix="moss-benchmark-")
+        requested_workspace = workspace_root or tempfile.mkdtemp(prefix="moss-benchmark-")
+        self.workspace_root = _assert_scratch_workspace(
+            requested_workspace,
+            allow_dirty=allow_dirty_workspace,
         )
         self.model_name = model_name
         self.model_version = model_version
@@ -587,6 +609,7 @@ def run_fixed_benchmark(
     max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
     timezone_name=DEFAULT_TIMEZONE,
     model_client_factory=None,
+    allow_dirty_workspace=False,
 ):
     evaluator = BenchmarkEvaluator(
         benchmark_path=benchmark_path,
@@ -599,6 +622,7 @@ def run_fixed_benchmark(
         max_new_tokens=max_new_tokens,
         timezone_name=timezone_name,
         model_client_factory=model_client_factory,
+        allow_dirty_workspace=allow_dirty_workspace,
     )
     return evaluator.run()
 
@@ -614,6 +638,7 @@ def run_harness_regression_v2(
     max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
     timezone_name=DEFAULT_TIMEZONE,
     model_client_factory=None,
+    allow_dirty_workspace=False,
 ):
     return run_fixed_benchmark(
         benchmark_path=benchmark_path,
@@ -626,4 +651,5 @@ def run_harness_regression_v2(
         max_new_tokens=max_new_tokens,
         timezone_name=timezone_name,
         model_client_factory=model_client_factory,
+        allow_dirty_workspace=allow_dirty_workspace,
     )

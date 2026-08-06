@@ -4,10 +4,14 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from ..clock import now
 from ..config import load_project_env, provider_env
-from .evaluator import run_fixed_benchmark
+from .evaluator import _assert_scratch_workspace, run_fixed_benchmark
+from ..providers.capabilities import PROVIDER_CAPABILITIES
 from ..providers.clients import AnthropicCompatibleModelClient, FakeModelClient, OpenAICompatibleModelClient
+from ..run_store import RunStore
 from ..runtime import Moss, SessionStore
+from ..tools import legal_tool_names
 # 事件名一律走常量：字面量写错不会报错，只会让某个指标悄悄变成 0。
 from .. import trace_events
 from ..workspace import WorkspaceContext
@@ -673,7 +677,7 @@ def run_security_experiment_suite(repetitions=3):
     }
 
 
-def _provider_summary_from_artifact(payload):
+def _provider_summary_from_artifact(payload, artifact_path=""):
     rows = list(payload.get("rows", []))
     cached_tokens = []
     cache_hits = []
@@ -699,7 +703,7 @@ def _provider_summary_from_artifact(payload):
         "cache_metrics_available": bool(cache_hits),
         "cache_hit_rate": _safe_ratio(sum(1 for hit in cache_hits if hit), len(cache_hits)) if cache_hits else None,
         "avg_cached_tokens": _safe_mean(cached_tokens),
-        "artifact_path": payload.get("_artifact_path", ""),
+        "artifact_path": str(artifact_path),
     }
 
 
@@ -768,9 +772,18 @@ def _normalize_text(value):
     return text
 
 
-def run_provider_experiments(benchmark_path, workspace_root, artifact_root, max_new_tokens=64):
+def run_provider_experiments(
+    benchmark_path,
+    workspace_root,
+    artifact_root,
+    max_new_tokens=64,
+    allow_dirty_workspace=False,
+):
     benchmark_path = Path(benchmark_path)
-    workspace_root = Path(workspace_root)
+    workspace_root = _assert_scratch_workspace(
+        workspace_root,
+        allow_dirty=allow_dirty_workspace,
+    )
     artifact_root = Path(artifact_root)
     providers = []
     for provider_name in ("gpt", "claude", "deepseek"):
@@ -808,9 +821,9 @@ def run_provider_experiments(benchmark_path, workspace_root, artifact_root, max_
                 model_version=profile["model"],
                 max_new_tokens=max_new_tokens,
                 model_client_factory=factory,
+                allow_dirty_workspace=allow_dirty_workspace,
             )
-            payload["_artifact_path"] = str(artifact_path)
-            result = _provider_summary_from_artifact(payload)
+            result = _provider_summary_from_artifact(payload, artifact_path=artifact_path)
             result["provider"] = provider_name
             result["model"] = profile["model"]
             providers.append(result)
@@ -1135,11 +1148,7 @@ def collect_resume_metrics(
     return {
         "experiment_mode": experiment_mode,
         "real_provider": real_provider if experiment_mode == "real" else "",
-        "facts": {
-            "model_backend_count": 3,
-            "tool_count": 7,
-            "run_artifact_count": 3,
-        },
+        "facts": _runtime_facts(Path(runs_root).parent),
         "benchmark": benchmark,
         "runs": runs,
         "stress_ablation": stress,
@@ -1584,12 +1593,29 @@ def _recovery_variant_summary(rows):
     }
 
 
+def _runtime_facts(root):
+    providers = {provider for provider, _prefix in PROVIDER_CAPABILITIES}
+    # 路径方法只依赖 ``root``；绕开构造器，避免为了数工件反过来创建评测目录。
+    run_store = object.__new__(RunStore)
+    run_store.root = Path(root) / ".eval-fact-paths"
+    core_artifacts = {
+        run_store.task_state_path("probe").name,
+        run_store.trace_path("probe").name,
+        run_store.report_path("probe").name,
+    }
+    return {
+        "model_backend_count": len(providers),
+        "tool_count": len(legal_tool_names()),
+        "run_artifact_count": len(core_artifacts),
+    }
+
+
 def run_context_ablation_v2(artifact_path=DEFAULT_CONTEXT_ABLATION_V2_PATH, repetitions=5):
     payload = run_context_stress_matrix(repetitions=repetitions)
     artifact = {
         "schema_version": METRICS_SCHEMA_VERSION,
         "artifact_type": "context-ablation-v2",
-        "captured_at": datetime.utcnow().isoformat() + "Z",
+        "captured_at": now(),
         "config_count": payload["config_count"],
         "configs": payload["configs"],
         "summary": payload["summary"],
@@ -1602,7 +1628,7 @@ def run_memory_ablation_v2(artifact_path=DEFAULT_MEMORY_ABLATION_V2_PATH, repeti
     artifact = {
         "schema_version": METRICS_SCHEMA_VERSION,
         "artifact_type": "memory-ablation-v2",
-        "captured_at": datetime.utcnow().isoformat() + "Z",
+        "captured_at": now(),
         "task_count": payload["task_count"],
         "runs_per_variant": payload["runs_per_variant"],
         "category_counts": payload["category_counts"],
@@ -1622,7 +1648,7 @@ def run_recovery_ablation_v2(artifact_path=DEFAULT_RECOVERY_ABLATION_V2_PATH, re
     artifact = {
         "schema_version": METRICS_SCHEMA_VERSION,
         "artifact_type": "recovery-ablation-v2",
-        "captured_at": datetime.utcnow().isoformat() + "Z",
+        "captured_at": now(),
         "task_count": len(RECOVERY_ABLATION_TASKS),
         "variants": {
             variant: {

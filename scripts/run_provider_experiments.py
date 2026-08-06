@@ -18,6 +18,11 @@ def build_arg_parser():
     parser.add_argument("--artifact-root", default="artifacts/provider-artifacts", help="Directory to store provider benchmark artifacts.")
     parser.add_argument("--output-json", required=True, help="Path to output provider experiment JSON.")
     parser.add_argument("--max-new-tokens", type=int, default=64, help="Max output tokens per provider run.")
+    parser.add_argument(
+        "--allow-dirty-workspace",
+        action="store_true",
+        help="Explicitly allow experiment copies outside the system temporary directory.",
+    )
     return parser
 
 
@@ -28,6 +33,7 @@ def main(argv=None):
         workspace_root=args.workspace_root,
         artifact_root=args.artifact_root,
         max_new_tokens=args.max_new_tokens,
+        allow_dirty_workspace=args.allow_dirty_workspace,
     )
     output = Path(args.output_json)
     output.parent.mkdir(parents=True, exist_ok=True)

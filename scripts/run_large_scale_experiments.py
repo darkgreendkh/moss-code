@@ -36,6 +36,11 @@ def build_arg_parser():
     parser.add_argument("--context-output-json", required=True)
     parser.add_argument("--security-output-json", required=True)
     parser.add_argument("--final-report-markdown", required=True)
+    parser.add_argument(
+        "--allow-dirty-workspace",
+        action="store_true",
+        help="Explicitly allow provider workspaces outside the system temporary directory.",
+    )
     return parser
 
 
@@ -46,6 +51,7 @@ def main(argv=None):
         benchmark_path=args.provider_benchmark_path,
         workspace_root=args.provider_workspace_root,
         artifact_root=args.provider_artifact_root,
+        allow_dirty_workspace=args.allow_dirty_workspace,
     )
     provider_output = Path(args.provider_output_json)
     provider_output.parent.mkdir(parents=True, exist_ok=True)

@@ -175,6 +175,7 @@ def test_run_task_anchors_paths_to_fixture_copy_even_inside_repo_workspace():
         benchmark_path=Path("benchmarks/coding_tasks.json"),
         artifact_path=Path("docs/review-pack/benchmark-v1.json"),
         workspace_root=Path("."),
+        allow_dirty_workspace=True,
     )
 
     task = next(item for item in evaluator.load()["tasks"] if item["id"] == "readme_intro_locked")

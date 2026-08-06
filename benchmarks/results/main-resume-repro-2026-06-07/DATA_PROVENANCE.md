@@ -1,6 +1,8 @@
 # Moss 简历数据复现说明
 
-本目录用于复现这段简历描述里的核心数据。复现对象是 main 分支的本地 agent harness 指标，不是线上业务数据。
+> 历史合成快照，不可在当前 checkout 复现。
+
+本目录保留 2026-06-07 当时生成的简历数据快照。复现对象是当时 main 分支的本地 agent harness 指标，不是线上业务数据；当前 checkout 只能读取这组历史口径，不能据此声称当前模型能力。
 
 ## 目录内容
 
@@ -98,7 +100,7 @@ PY
 
 为什么本次复跑和简历数字略有差异：
 
-`run_context_ablation_v2()` 会构造 12 组固定矩阵：3 档 history、2 档 note、2 档 request。prompt 文本由当前代码里的 prompt 模板、工具说明、上下文段落共同决定。main 后续改过 prompt/上下文模板后，字符数会轻微变化，所以本次复跑是 `6994 -> 5576`，而简历原始快照是 `7082 -> 5664`。两者证明的是同一个机制：压缩后 prompt 变短，并且当前请求没有被裁掉。
+`run_context_ablation_v2()` 会构造 12 组固定矩阵：3 档 history、2 档 note、2 档 request。prompt 文本由当前代码里的 prompt 模板、工具说明、上下文段落共同决定。main 后续改过 prompt/上下文模板后，字符数会轻微变化，所以本次复跑是 `6994 -> 5576`，而简历原始快照是 `7082 -> 5664`。两者只记录同一个 L1 合同现象：压缩后 prompt 字符数变短，并且当前请求没有被裁掉。字符压缩率没有与成功率、token 和延迟效用成对测量，因此不能作为能力收益结论。
 
 面试解释：
 
@@ -127,7 +129,7 @@ PY
 
 `run_memory_ablation_v2(repetitions=5)` 内部构造 12 个 memory dependency 任务，分成 `fact_lookup`、`edit_dependency`、`history_reference` 三类。每个任务分别跑 `memory_off`、`memory_irrelevant`、`memory_on` 三种 variant。
 
-判断重复读的方式是看 follow-up 阶段是否仍然需要工具读文件确认事实。`memory_on` 时相关事实已经进入可召回记忆，所以工具步数从 1 降到 0，重复读从 60 降到 0。
+判断重复读的方式是看 follow-up 阶段是否仍然需要工具读文件确认事实。这组 scripted 实验在 L1 合同层验证了记忆命中路径；`60→0` 是构造任务里的路径计数，不代表真实模型收益。L2 真实收益必须查看新的 capability 报告。
 
 ### 4. 任务恢复机制
 
@@ -160,7 +162,7 @@ PY
 
 简历写法：
 
-> 在固定回归任务中保持 100% 通过率、100% 预算内完成率和 100% verifier 通过率。
+> 在 scripted 动作序列下的 harness 合同回归中保持 100% 通过率、100% 预算内完成率和 100% verifier 通过率（不代表模型能力）。
 
 本次复跑结果：
 

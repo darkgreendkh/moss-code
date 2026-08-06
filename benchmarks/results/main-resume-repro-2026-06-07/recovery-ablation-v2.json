@@ -1,4 +1,5 @@
 {
+  "historical_snapshot_note": "历史合成快照，不可在当前 checkout 复现",
   "artifact_type": "recovery-ablation-v2",
   "captured_at": "2026-06-07T09:05:55.937103Z",
   "schema_version": 2,
