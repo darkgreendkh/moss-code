@@ -3,6 +3,7 @@
 import json
 
 from ..levels import LEVELS, classify_artifact
+from ..pricing import render_pareto
 
 
 L2_COST_FIELDS = {
@@ -27,6 +28,8 @@ def _validate_claims(artifact):
         if int(comparison.get("n", 0) or 0) <= 0 or not has_interval:
             raise ValueError("every comparison requires n and 95% CI")
     if artifact["eval_level"] == "L2":
+        if not artifact.get("price_table_date"):
+            raise ValueError("every L2 artifact requires price_table_date")
         for row in artifact.get("rows", ()):
             if not L2_COST_FIELDS <= set(row):
                 raise ValueError("every L2 trial requires token, USD, latency, turn, and tool cost fields")
@@ -44,6 +47,18 @@ def render_layered_report(artifacts):
         if artifact["legacy_metrics"]:
             lines.extend(["> 旧版口径：按 L1 合同证据读取，不进入模型能力结论。", ""])
         summary = artifact.get("summary", {}) or {}
+        cost_lines = []
+        if artifact["eval_level"] == "L2":
+            cost_lines = [
+                f"Price table date: {artifact['price_table_date']}",
+                (
+                    f"Success / USD / wall_s: {float(summary.get('pass_rate', 0.0)):.2%} / "
+                    f"${float(summary.get('avg_usd', 0.0)):.6f} / "
+                    f"{float(summary.get('avg_wall_s', 0.0)):.3f}s"
+                ),
+                render_pareto(artifact.get("rows", ())),
+                "",
+            ]
         zero_event_line = []
         if summary.get("incidents") == 0 and int(summary.get("n", 0) or 0) > 0:
             zero_event_line = [
@@ -57,6 +72,7 @@ def render_layered_report(artifacts):
                 f"本层能证明什么：{level.can_prove}",
                 "",
                 *zero_event_line,
+                *cost_lines,
                 "```json",
                 json.dumps(summary, ensure_ascii=False, sort_keys=True),
                 "```",

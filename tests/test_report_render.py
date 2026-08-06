@@ -2,6 +2,7 @@ import pytest
 
 from moss.evaluation.analysis.report import render_layered_report
 from moss.evaluation.levels import LEVELS
+from moss.evaluation.pricing import PRICE_TABLE_DATE
 
 
 def test_all_evaluation_levels_define_proof_boundaries():
@@ -20,9 +21,10 @@ def test_layered_report_prints_limitation_immediately_after_each_heading():
             },
             {
                 "schema_version": 3,
-                "eval_level": "L2",
-                "suite": "coding-mined",
-                "summary": {"pass_rate": 0.5},
+                    "eval_level": "L2",
+                    "suite": "coding-mined",
+                    "price_table_date": PRICE_TABLE_DATE,
+                    "summary": {"pass_rate": 0.5},
             },
         ]
     )
@@ -65,6 +67,7 @@ def test_layered_report_rejects_l2_trial_without_cost_fields():
         "schema_version": 3,
         "eval_level": "L2",
         "suite": "coding-mined",
+        "price_table_date": PRICE_TABLE_DATE,
         "summary": {},
         "rows": [{"task_id": "one", "passed": True}],
     }
