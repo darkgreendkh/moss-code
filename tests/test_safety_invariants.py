@@ -67,7 +67,7 @@ def test_cli_build_agent_wires_secret_env_names_from_parser(tmp_path):
 
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
     with patch.dict(os.environ, {"GITHUB_PAT": "ghp-1", "GH_PAT": "ghp-2"}, clear=True), patch(
-        "moss.cli.OllamaModelClient",
+        "moss.cli.factory.OllamaModelClient",
         DummyModelClient,
     ):
         args = moss_cli.build_arg_parser().parse_args(
@@ -97,7 +97,7 @@ def test_cli_build_agent_uses_default_configured_secret_names(tmp_path):
 
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
     with patch.dict(os.environ, {"GH_PAT": "ghp-default-1"}, clear=True), patch(
-        "moss.cli.OllamaModelClient",
+        "moss.cli.factory.OllamaModelClient",
         DummyModelClient,
     ):
         args = moss_cli.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--approval", "auto"])
@@ -116,7 +116,7 @@ def test_cli_build_agent_loads_project_env_secrets_before_redaction_setup(tmp_pa
 
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
     (tmp_path / ".env").write_text("MOSS_DEEPSEEK_API_KEY=sk-project-secret\n", encoding="utf-8")
-    with patch.dict(os.environ, {}, clear=True), patch("moss.cli.AnthropicCompatibleModelClient", DummyModelClient):
+    with patch.dict(os.environ, {}, clear=True), patch("moss.cli.factory.AnthropicCompatibleModelClient", DummyModelClient):
         args = moss_cli.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "deepseek"])
         agent = moss_cli.build_agent(args)
         assert agent.secret_env_summary()["secret_env_names"] == ["MOSS_DEEPSEEK_API_KEY"]
@@ -139,7 +139,7 @@ def test_cli_build_agent_reads_secret_names_from_environment_config(tmp_path):
             "MOSS_SECRET_ENV_NAMES": "MOSS_CUSTOM_SECRET",
         },
         clear=True,
-    ), patch("moss.cli.OllamaModelClient", DummyModelClient):
+    ), patch("moss.cli.factory.OllamaModelClient", DummyModelClient):
         args = moss_cli.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--approval", "auto"])
         agent = moss_cli.build_agent(args)
         assert agent.secret_env_summary()["secret_env_names"] == ["MOSS_CUSTOM_SECRET"]
@@ -160,7 +160,7 @@ def test_run_shell_uses_allowlisted_environment_only(tmp_path):
 def test_private_tool_methods_delegate_into_tools_module(tmp_path):
     agent = build_agent(tmp_path, [], approval_policy="auto")
 
-    with patch("moss.execution.registry.run_shell_command", return_value=(0, "toolkit-shell\n", "")) as fake_run:
+    with patch("moss.execution.builtins.shell.run_shell_command", return_value=(0, "toolkit-shell\n", "")) as fake_run:
         shell_result = agent._tool_run_shell({"command": "echo bypass", "timeout": 20})
 
     assert "toolkit-shell" in shell_result

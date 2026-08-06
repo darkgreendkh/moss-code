@@ -15,8 +15,10 @@ import json
 import os
 from dataclasses import dataclass
 
+from . import health as healthlib
+from . import history as historylib
+from . import native_history
 from .model_request import Block, CompactionArtifact, Message, ModelRequest, PromptBundle
-from .repository.retrieval import BM25Index
 from .token_budget import clip_to_budget, estimate_tokens
 
 
@@ -90,30 +92,6 @@ MISSING_TOOL_RESULT = "(no result recorded for this call: the run stopped before
 # 工具输出在历史里被截断时，保留哪一端取决于关键信息的位置：
 # run_shell 是 "exit_code(顶部) / stdout / stderr(底部)"，两端都要留。
 _HISTORY_KEEP = {"run_shell": "middle"}
-# 判断 shell 输出里“说明成败”的信号行时用到的关键词。
-_SHELL_SIGNAL_KEYWORDS = (
-    "exit_code",
-    "error",
-    "err:",
-    "fail",
-    "failed",
-    "failure",
-    "traceback",
-    "exception",
-    "fatal",
-    "no such",
-    "not found",
-    "cannot",
-    "denied",
-    "assert",
-)
-
-
-def _is_shell_signal_line(line):
-    lowered = line.lower()
-    return any(keyword in lowered for keyword in _SHELL_SIGNAL_KEYWORDS)
-
-
 def _env_float(name, default):
     try:
         value = float(os.environ.get(name, ""))
@@ -691,38 +669,14 @@ class ContextManager:
 
     def _native_tool_turn(self, group, entries, result_positions, consumed):
         """一组同轮的原生工具调用 → (assistant 调用消息, tool 结果消息)。"""
-        call_blocks = []
-        result_blocks = []
-        for item in group:
-            call_id = str(item.get("call_id", "") or "")
-            call_blocks.append(
-                Block(
-                    json.dumps(item.get("args", {}), separators=(",", ":"), sort_keys=True),
-                    kind="tool_call",
-                    source=str(item.get("name", "")),
-                    trust="model",
-                    call_id=call_id,
-                )
-            )
-            position = result_positions.get(call_id)
-            if position is None or position in consumed:
-                content = MISSING_TOOL_RESULT
-                source = str(item.get("name", ""))
-            else:
-                consumed.add(position)
-                result = entries[position]
-                content = self._clip(str(result.get("content", "")), 900, keep="head")
-                source = str(result.get("name", "")) or str(item.get("name", ""))
-            result_blocks.append(
-                Block(content, kind="tool_result", source=source, trust="tool", call_id=call_id)
-            )
-        # 单调用的那条路径保持和重组之前逐字节一致：message.call_id 仍然带上，
-        # 免得录制回放的指纹和只读 message.call_id 的旧代码跟着抖。
-        single = str(group[0].get("call_id", "") or "") if len(group) == 1 else None
-        return [
-            Message(role="assistant", blocks=tuple(call_blocks), call_id=single),
-            Message(role="tool", blocks=tuple(result_blocks), call_id=single),
-        ]
+        return native_history.native_tool_turn(
+            group,
+            entries,
+            result_positions,
+            consumed,
+            clip=self._clip,
+            missing_result=MISSING_TOOL_RESULT,
+        )
 
     def _with_purpose(self, section, text):
         purpose = SECTION_PURPOSE.get(section, "")
@@ -1058,14 +1012,7 @@ class ContextManager:
         return self._render_history_item(item, 60)[0]
 
     def _shell_summary(self, content):
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
-        if not lines:
-            return "(empty)"
-        # 优先保留“说明成败”的信号行（exit_code / error / traceback ...）。
-        # 常见失败输出里报错在末尾，纯取前 3 行会恰好丢掉最关键的信息。
-        signal_lines = [line for line in lines if _is_shell_signal_line(line)]
-        chosen = signal_lines[:3] if signal_lines else lines[:3]
-        return " | ".join(chosen)
+        return historylib.shell_summary(content)
 
     def _history_entries(self):
         """取进 prompt 的历史条目，跳过 pending 的那些。
@@ -1129,20 +1076,15 @@ class ContextManager:
         历史陈旧度记成时间序列，才能在事后指着某一轮说"从这里开始跑偏"。
         目前只观测不干预（阈值等实测数据再定，见 spec-06 §10 开放问题 2）。
         """
-        total_units = max(1, self.measure(prompt))
-        window = max(1, self.context_window())
-        shares = {
-            section: round(int(data.get("rendered_units", 0)) / total_units, 4)
-            for section, data in section_metadata.items()
-        }
-        return {
-            # 分母是模型窗口而不是 12000：真正的约束是窗口，12000 只是我们的自限。
-            "context_utilization": round(total_units / window, 4),
-            "context_window": window,
-            "section_share": shares,
-            "distractor_ratio": self._distractor_ratio(rendered, user_message),
-            "history_staleness": self._history_staleness(),
-        }
+        return healthlib.context_health(
+            prompt,
+            rendered,
+            section_metadata,
+            user_message,
+            measure=self.measure,
+            context_window=self.context_window(),
+            history_entries=self._history_entries(),
+        )
 
     def _distractor_ratio(self, rendered, user_message):
         """和当前请求毫无词面关联的内容占了多少 token。
@@ -1150,26 +1092,11 @@ class ContextManager:
         复用 spec-05 的 BM25 索引：一条历史/笔记如果连一个查询词都碰不到，
         它对这一轮就是纯噪声。这是"注意力被稀释了多少"的一个廉价代理指标。
         """
-        chunks = []
-        for section in ("history", "memory", "relevant_memory"):
-            if section not in rendered:
-                continue
-            for index, line in enumerate(str(rendered[section].rendered).splitlines()):
-                if line.strip():
-                    chunks.append((f"{section}:{index}", line))
-        if not chunks:
-            return 0.0
-        index = BM25Index(decay_days=0)
-        for doc_id, line in chunks:
-            index.add(doc_id, {"text": line})
-        relevant = {hit.doc_id for hit in index.search(user_message, limit=len(chunks), min_score=0.0)}
-        total = sum(self.measure(line) for _, line in chunks) or 1
-        distracting = sum(self.measure(line) for doc_id, line in chunks if doc_id not in relevant)
-        return round(distracting / total, 4)
+        return healthlib.distractor_ratio(rendered, user_message, self.measure)
 
     def _history_staleness(self):
         """最老一条进 prompt 的历史距今多少条。堆得越高，越该考虑压缩。"""
-        return len(self._history_entries())
+        return historylib.history_staleness(self._history_entries())
 
     def _metadata(
         self,

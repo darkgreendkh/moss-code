@@ -35,7 +35,6 @@ MIGRATION_TARGETS = {
     "agent_loop.py": "agent/loop.py",
     "budget.py": "agent/budget.py",
     "checkpoint.py": "runs/checkpoint.py",
-    "cli.py": "cli/__init__.py",
     "code_mode.py": "extensions/code_mode.py",
     "compaction.py": "context/compaction.py",
     "context_manager.py": "context/manager.py",
@@ -93,7 +92,7 @@ def test_runtime_modules_follow_the_declared_migration_map():
     assert TARGET_PACKAGES <= packages
 
     root_modules = {path.name for path in root.glob("*.py")}
-    assert root_modules <= ROOT_MODULE_ALLOWLIST | MIGRATION_TARGETS.keys()
+    assert root_modules <= ROOT_MODULE_ALLOWLIST
 
     for source, target in MIGRATION_TARGETS.items():
         assert (root / source).exists() != (root / target).exists(), (

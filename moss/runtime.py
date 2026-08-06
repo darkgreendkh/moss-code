@@ -52,6 +52,7 @@ from .context.repository import repo_map as repo_maplib
 from .agent import budget as budgetlib
 from .execution.safety import policy as policylib
 from .execution.safety import sandbox as sandboxlib
+from .execution.safety import shell as shell_policy
 from .agent import stall as stalllib
 from .agent.verification import is_verification_command
 from .runs.observability import events as trace_events
@@ -1541,9 +1542,9 @@ class Moss:
         """给了网络白名单时，命令里出现的域名必须在名单内。"""
         if name != "run_shell" or not self.allowed_network_hosts:
             return ()
-        hosts = toolkit.shell_policy.extract_hosts((args or {}).get("command", ""))
+        hosts = shell_policy.extract_hosts((args or {}).get("command", ""))
         return tuple(
-            host for host in hosts if not toolkit.shell_policy.host_allowed(host, self.allowed_network_hosts)
+            host for host in hosts if not shell_policy.host_allowed(host, self.allowed_network_hosts)
         )
 
     def approve(self, name, args):

@@ -993,9 +993,9 @@ def test_build_agent_uses_openai_provider_and_model_override(tmp_path):
         clear=False,
     ):
         with patch(
-            "moss.cli.OllamaModelClient",
+            "moss.cli.factory.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
-        ), patch("moss.cli.OpenAICompatibleModelClient") as mock_openai:
+        ), patch("moss.cli.factory.OpenAICompatibleModelClient") as mock_openai:
             fake_client = mock_openai.return_value
             agent = moss_pkg.build_agent(args)
 
@@ -1032,9 +1032,9 @@ def test_build_agent_does_not_fall_back_to_other_providers_key_for_openai(tmp_pa
     # 必定 401；与其把错误藏成"认证失败"，不如让 key 保持为空。
     with patch.dict(os.environ, {"MOSS_ANTHROPIC_API_KEY": "sk-anthropic"}, clear=True):
         with patch(
-            "moss.cli.OllamaModelClient",
+            "moss.cli.factory.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
-        ), patch("moss.cli.OpenAICompatibleModelClient") as mock_openai:
+        ), patch("moss.cli.factory.OpenAICompatibleModelClient") as mock_openai:
             fake_client = mock_openai.return_value
             agent = moss_pkg.build_agent(args)
 
@@ -1090,12 +1090,12 @@ def test_build_agent_uses_project_env_provider_when_cli_omitted(tmp_path):
 
     with patch.dict(os.environ, {}, clear=True):
         with patch(
-            "moss.cli.OllamaModelClient",
+            "moss.cli.factory.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
         ), patch(
-            "moss.cli.AnthropicCompatibleModelClient",
+            "moss.cli.factory.AnthropicCompatibleModelClient",
             side_effect=AssertionError("deepseek client should not be used"),
-        ), patch("moss.cli.OpenAICompatibleModelClient") as mock_openai:
+        ), patch("moss.cli.factory.OpenAICompatibleModelClient") as mock_openai:
             fake_client = mock_openai.return_value
             agent = moss_pkg.build_agent(args)
 
@@ -1126,12 +1126,12 @@ def test_build_agent_prefers_cli_provider_over_project_env_provider(tmp_path):
 
     with patch.dict(os.environ, {}, clear=True):
         with patch(
-            "moss.cli.OllamaModelClient",
+            "moss.cli.factory.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
         ), patch(
-            "moss.cli.OpenAICompatibleModelClient",
+            "moss.cli.factory.OpenAICompatibleModelClient",
             side_effect=AssertionError("openai client should not be used"),
-        ), patch("moss.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+        ), patch("moss.cli.factory.AnthropicCompatibleModelClient") as mock_anthropic:
             fake_client = mock_anthropic.return_value
             agent = moss_pkg.build_agent(args)
 
@@ -1172,12 +1172,12 @@ def test_build_agent_uses_official_anthropic_endpoint_without_cross_provider_key
         clear=True,
     ):
         with patch(
-            "moss.cli.OllamaModelClient",
+            "moss.cli.factory.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
         ), patch(
-            "moss.cli.OpenAICompatibleModelClient",
+            "moss.cli.factory.OpenAICompatibleModelClient",
             side_effect=AssertionError("openai client should not be used"),
-        ), patch("moss.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+        ), patch("moss.cli.factory.AnthropicCompatibleModelClient") as mock_anthropic:
             fake_client = mock_anthropic.return_value
             agent = moss_pkg.build_agent(args)
 
@@ -1197,7 +1197,7 @@ def test_build_agent_uses_anthropic_default_model_when_env_is_missing(tmp_path):
         clear=False,
     ):
         os.environ.pop("ANTHROPIC_MODEL", None)
-        with patch("moss.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+        with patch("moss.cli.factory.AnthropicCompatibleModelClient") as mock_anthropic:
             moss_pkg.build_agent(args)
 
     assert mock_anthropic.call_args.kwargs["model"] == "claude-opus-5"
@@ -1248,12 +1248,12 @@ def test_build_agent_uses_deepseek_provider_and_env_configuration(tmp_path):
         clear=True,
     ):
         with patch(
-            "moss.cli.OllamaModelClient",
+            "moss.cli.factory.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
         ), patch(
-            "moss.cli.OpenAICompatibleModelClient",
+            "moss.cli.factory.OpenAICompatibleModelClient",
             side_effect=AssertionError("openai client should not be used"),
-        ), patch("moss.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+        ), patch("moss.cli.factory.AnthropicCompatibleModelClient") as mock_anthropic:
             fake_client = mock_anthropic.return_value
             agent = moss_pkg.build_agent(args)
 
@@ -1268,7 +1268,7 @@ def test_build_agent_uses_deepseek_default_model_when_env_is_missing(tmp_path):
     args = moss_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "deepseek"])
 
     with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-deepseek"}, clear=True):
-        with patch("moss.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+        with patch("moss.cli.factory.AnthropicCompatibleModelClient") as mock_anthropic:
             moss_pkg.build_agent(args)
 
     assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-pro"
@@ -1287,12 +1287,12 @@ def test_build_agent_uses_deepseek_provider_by_default(tmp_path):
         clear=False,
     ):
         with patch(
-            "moss.cli.OllamaModelClient",
+            "moss.cli.factory.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
         ), patch(
-            "moss.cli.OpenAICompatibleModelClient",
+            "moss.cli.factory.OpenAICompatibleModelClient",
             side_effect=AssertionError("openai client should not be used"),
-        ), patch("moss.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+        ), patch("moss.cli.factory.AnthropicCompatibleModelClient") as mock_anthropic:
             fake_client = mock_anthropic.return_value
             agent = moss_pkg.build_agent(args)
 

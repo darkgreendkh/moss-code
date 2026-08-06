@@ -331,17 +331,17 @@ git commit -m "refactor(packages): complete capability module layout"
 - Produces: `moss.cli.main`, `build_agent`, `build_arg_parser`, `build_welcome`; `moss.execution.registry.build_tools`; pure context rendering helpers.
 - Preserves: console script target `moss.cli:main`, tool names/schemas/order, prompt bytes for existing fixtures.
 
-- [ ] **Step 1: Add characterization assertions for public CLI exports and deterministic tool schema order**
-- [ ] **Step 2: Watch the new tests fail when importing the not-yet-created submodules**
-- [ ] **Step 3: Split CLI by command responsibility and keep re-exports in `moss/cli/__init__.py`**
-- [ ] **Step 3a: Remove `cli.py` from `MIGRATION_TARGETS` and assert the final root allowlist directly**
-- [ ] **Step 4: Split tool specs from built-in implementations; keep explicit registry assembly**
-- [ ] **Step 5: Extract native-history grouping and context-health calculation as pure helpers**
-- [ ] **Step 6: Run CLI, tools and context tests**
+- [x] **Step 1: Add characterization assertions for public CLI exports and deterministic tool schema order**
+- [x] **Step 2: Watch the new tests fail when importing the not-yet-created submodules**
+- [x] **Step 3: Split CLI by command responsibility and keep re-exports in `moss/cli/__init__.py`**
+- [x] **Step 3a: Remove `cli.py` from `MIGRATION_TARGETS` and assert the final root allowlist directly**
+- [x] **Step 4: Split tool specs from built-in implementations; keep explicit registry assembly**
+- [x] **Step 5: Extract native-history grouping and context-health calculation as pure helpers**
+- [x] **Step 6: Run CLI, tools and context tests**
 
-Run: `uv run --with pytest python -m pytest tests/test_cli.py tests/test_tools.py tests/test_context_manager.py tests/test_tool_protocol.py -q`
+Run: `uv run pytest -q tests/test_cli_layout.py tests/test_tools.py tests/test_context_manager.py tests/test_tool_protocol.py tests/test_public_api_contract.py`
 
-- [ ] **Step 7: Run full tests and lint, then commit**
+- [x] **Step 7: Run full tests and lint, then commit**
 
 ```bash
 uv run --with pytest python -m pytest tests/ -q
