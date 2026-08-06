@@ -24,6 +24,7 @@ from .features.memory_store import MemoryStore, project_scope_key
 from . import injection as injectionlib
 from .otel import trace_to_otlp
 from .providers.clients import AnthropicCompatibleModelClient, OllamaModelClient, OpenAICompatibleModelClient
+from . import rewind as rewindlib
 from .run_index import referenced_run_ids
 from .run_store import RunStore
 from .runtime import Moss, SessionStore
@@ -66,6 +67,8 @@ HELP_DETAILS = textwrap.dedent(
     /memory  Show the agent's distilled working memory.
     /session Show the path to the saved session directory.
     /reload  Reload tools and skills from disk.
+    /rewind  Undo the last N file-changing steps (files + history + memory).
+             /rewind 2 undoes two steps; /rewind! forces past your own edits.
     /reset   Clear the current session history and memory.
     /exit    Exit the agent.
 
@@ -960,6 +963,15 @@ def main(argv=None):
             result = agent.reload_registry()
             changed = result["added"] + result["removed"] + result["tools_added"] + result["tools_removed"]
             print("tools and skills reloaded" + (f" ({', '.join(changed)})" if changed else ""))
+            continue
+        if user_input.split(" ")[0] in ("/rewind", "/rewind!"):
+            command, _, argument = user_input.partition(" ")
+            try:
+                steps = int(argument.strip() or "1")
+            except ValueError:
+                print("usage: /rewind [n]", file=sys.stderr)
+                continue
+            print(rewindlib.render_rewind(agent.rewind(steps=steps, force=command.endswith("!"))))
             continue
         if user_input == "/reset":
             agent.reset()

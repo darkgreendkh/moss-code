@@ -85,6 +85,55 @@ class RunStore:
         """被 compaction 压缩掉的原始历史。摘要里附路径，模型可用 read_artifact 取回。"""
         return self.run_dir(run_id) / "context"
 
+    def undo_dir(self, run_id, action_id=""):
+        """`/rewind` 用的旧内容备份。按 action_id 分目录，和动作账本一一对应。"""
+        base = self.run_dir(run_id) / "undo"
+        return base / str(action_id) if action_id else base
+
+    def write_undo(self, run_id, action_id, manifest, files):
+        """在副作用之前存下将被改写文件的旧内容。
+
+        为什么必须在执行之前：执行之后旧内容就没了。快照 diff 能告诉你"哪些文件
+        变了"，但拿不回"变之前是什么"——那正是回滚需要的东西。
+        """
+        directory = self.undo_dir(run_id, action_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        for rel_path, text in (files or {}).items():
+            if text is None:
+                # 文件当时不存在。回滚 = 删掉它，所以只记事实不写内容。
+                continue
+            target = directory / "files" / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            write_atomic(target, text)
+        write_json_atomic(directory / "manifest.json", manifest)
+        return directory
+
+    def update_undo(self, run_id, action_id, **fields):
+        """执行之后补上 after_sha 等字段。找不到记录就静默跳过。"""
+        path = self.undo_dir(run_id, action_id) / "manifest.json"
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        manifest.update(fields)
+        write_json_atomic(path, manifest)
+        return manifest
+
+    def read_undo(self, run_id, action_id):
+        path = self.undo_dir(run_id, action_id) / "manifest.json"
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def undo_file_text(self, run_id, action_id, rel_path):
+        """取回某个文件在那次动作之前的内容。取不到返回 None。"""
+        path = self.undo_dir(run_id, action_id) / "files" / rel_path
+        try:
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+
     def write_context_turns(self, run_id, index, entries):
         """把被 compaction 压掉的原始历史整份存下来，返回 (相对路径, 条数)。
 

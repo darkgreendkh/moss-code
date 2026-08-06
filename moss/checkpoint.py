@@ -1,5 +1,6 @@
 """Checkpoint and resume-state helpers."""
 
+import copy
 import uuid
 
 from . import action_ledger
@@ -239,7 +240,7 @@ def fork_session(session, checkpoint_id, new_session_id):
         "created_at": now(),
         "workspace_root": session.get("workspace_root", ""),
         "history": history[:keep],
-        "memory": dict(session.get("memory", {}) or {}),
+        "memory": copy.deepcopy(dict(session.get("memory", {}) or {})),
         "checkpoints": {
             "current_id": str(checkpoint_id),
             "items": {key: items[key] for key in reversed(ancestry)},
@@ -436,6 +437,10 @@ def create_checkpoint(agent, task_state, user_message, trigger):
         # 这一刻的历史长度。--fork 靠它把历史裁到分叉点，
         # /rewind 靠它把 history 截回第 n 步结束时的样子。
         "history_length": len(agent.session.get("history", []) or []),
+        # 当时的 memory 快照。/rewind 要连 memory 一起回滚，否则文件退回去了，
+        # 记忆里却还留着"我已经改好了 parser.py"这类已经不成立的事实。
+        # 必须深拷贝：浅拷贝会让后续的 memory 写入顺手改掉这份"历史快照"。
+        "memory": copy.deepcopy(agent.memory.to_dict()),
         "runtime_identity": current_runtime_identity(agent),
     }
     state["items"][checkpoint_id] = checkpoint

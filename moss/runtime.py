@@ -24,6 +24,7 @@ from .model_request import PromptBundle
 from .checkpoint import CHECKPOINT_NONE_STATUS
 from .prompt_prefix import build_prompt_prefix, skill_signature, tool_signature
 from .run_store import RunStore
+from . import rewind as rewindlib
 from .session_store import SessionStore
 from . import skills as skilllib
 from .tool_context import ToolContext
@@ -301,6 +302,10 @@ class Moss:
 
     def render_checkpoint_text(self):
         return checkpointlib.render_checkpoint_text(self)
+
+    def rewind(self, steps=1, force=False):
+        """把工作区和会话一起退回第 n 步之前（spec-07 §4.9）。"""
+        return rewindlib.rewind(self, steps=steps, force=force)
 
     @staticmethod
     def remember(bucket, item, limit):

@@ -4,6 +4,7 @@ import difflib
 import hashlib
 import json
 import re
+import subprocess
 import time
 from dataclasses import dataclass
 
@@ -163,6 +164,25 @@ def _build_receipt(agent, name, args):
         diff_digest=hashlib.sha256(preview.encode("utf-8")).hexdigest(),
         approved_at=now(),
     )
+
+
+def _git_stash_object(agent):
+    """`git stash create` 出来的对象 id。不是 git 仓库或失败时返回空串。
+
+    它不改工作区、也不进 stash 栈，只是把当前改动固化成一个可以找回来的对象。
+    run_shell 改了什么要执行完才知道，逐文件备份来不及——这是它唯一的兜底。
+    """
+    try:
+        result = subprocess.run(
+            ["git", "stash", "create"],
+            cwd=str(agent.root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def _stale_preconditions(agent, receipt):
@@ -597,9 +617,57 @@ class ToolExecutor:
                 resolve_path=agent.path,
             )
             agent.emit_trace(task_state, trace_events.ACTION_INTENT, dict(intent))
+            self._capture_undo(task_state, intent)
             return intent
         except Exception:
             return None
+
+    def _capture_undo(self, task_state, intent):
+        """把将被改写文件的旧内容存进 run 目录，供 `/rewind` 回滚。
+
+        只对写类工具存内容：run_shell 改了什么要执行完才知道，那时旧内容已经没了。
+        有 git 时顺手记一个 `git stash create` 对象——回滚不了也至少能告诉用户
+        去哪里找回来，而不是假装这一步可以撤销。
+        """
+        agent = self.agent
+        run_id = task_state.run_id
+        paths = sorted(dict(intent.get("expected_sha", {}) or {}))
+        files = {}
+        restorable = bool(paths)
+        for rel_path in paths:
+            target = agent.root / rel_path
+            try:
+                files[rel_path] = target.read_text(encoding="utf-8") if target.is_file() else None
+            except (OSError, UnicodeDecodeError):
+                # 二进制或读不动：老实说这一步回滚不了，别写一份读错的内容回去。
+                files[rel_path] = None
+                restorable = False
+        manifest = {
+            "action_id": intent["action_id"],
+            "run_id": run_id,
+            "tool": intent["tool"],
+            "created_at": now(),
+            "paths": paths,
+            "existed": {rel_path: files.get(rel_path) is not None for rel_path in paths},
+            "sha_before": dict(intent.get("expected_sha", {}) or {}),
+            "sha_after": {},
+            "restorable": restorable,
+            "git_object": _git_stash_object(agent) if not restorable else "",
+            "checkpoint_id": str((agent.current_checkpoint() or {}).get("checkpoint_id", "")),
+            "history_length": len(agent.session.get("history", []) or []),
+        }
+        agent.run_store.write_undo(run_id, intent["action_id"], manifest, files)
+        agent.session.setdefault("undo", []).append(
+            {
+                "run_id": run_id,
+                "action_id": intent["action_id"],
+                "tool": intent["tool"],
+                "restorable": restorable,
+                "history_length": manifest["history_length"],
+                "checkpoint_id": manifest["checkpoint_id"],
+            }
+        )
+        return manifest
 
     def _emit_receipt(self, intent, metadata, started_at):
         agent = self.agent
@@ -620,6 +688,11 @@ class ToolExecutor:
                 duration_ms=int((time.monotonic() - started_at) * 1000),
             )
             agent.emit_trace(task_state, trace_events.ACTION_RECEIPT, dict(payload))
+            # after_sha 回填进 undo 记录：回滚之前要靠它判断"这个文件在那之后
+            # 有没有被用户自己改过"，改过就必须先问一句。
+            agent.run_store.update_undo(
+                task_state.run_id, payload["action_id"], sha_after=dict(after_sha)
+            )
             agent.last_action_receipt_id = payload["action_id"]
             return payload
         except Exception:
