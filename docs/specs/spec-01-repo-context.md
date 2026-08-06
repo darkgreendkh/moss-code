@@ -3,7 +3,7 @@
 | 项 | 值 |
 | --- | --- |
 | 状态 | Draft |
-| 对应优化章节 | [第 1 章](docs/optimize/2026-agent-upgrade-plan.md)（1.1–1.6） |
+| 对应优化章节 | [第 1 章](../plans/archive/2026-agent-upgrade-plan.md)（1.1–1.6） |
 | 优先级 | 1.3 / 1.6 是 P0；1.1 / 1.2 / 1.4 / 1.5 是 P1 |
 | 依赖 | 无（1.4 的打分复用 [spec-05](spec-05-memory.md) 的 BM25 实现，可先落地简化版） |
 | 被依赖 | [spec-05](spec-05-memory.md)（符号级 file summary）、[spec-06](spec-06-context.md)（`Likely relevant files` 段进预算） |

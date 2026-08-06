@@ -3,7 +3,7 @@
 | 项 | 值 |
 | --- | --- |
 | 状态 | Draft |
-| 对应优化章节 | [第 3 章](docs/optimize/2026-agent-upgrade-plan.md)（3.1–3.7） |
+| 对应优化章节 | [第 3 章](../plans/archive/2026-agent-upgrade-plan.md)（3.1–3.7） |
 | 优先级 | 3.1 / 3.3 / 3.7 是 P0；3.4 / 3.5 是 P1；3.2 / 3.6 是 P2 |
 | 依赖 | 无（3.3 的角色分层与 [spec-04](spec-04-prompt-cache.md) §4.1 是同一次改造） |
 | 被依赖 | [spec-05](spec-05-memory.md)（注入检测用于记忆写入）、[spec-08](spec-08-evaluation.md)（安全评测套件）、[spec-09](spec-09-new-modules.md)（MCP / code mode 的前置） |

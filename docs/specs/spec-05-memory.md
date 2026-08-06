@@ -3,7 +3,7 @@
 | 项 | 值 |
 | --- | --- |
 | 状态 | Draft |
-| 对应优化章节 | [第 5 章](docs/optimize/2026-agent-upgrade-plan.md)（5.1–5.7） |
+| 对应优化章节 | [第 5 章](../plans/archive/2026-agent-upgrade-plan.md)（5.1–5.7） |
 | 优先级 | 全部 P1（5.3 的原子写修复可视为 P0 卫生问题） |
 | 依赖 | [spec-01](spec-01-repo-context.md)（符号索引）、[spec-03](spec-03-tool-safety.md)（注入检测、能力标签） |
 | 被依赖 | [spec-01](spec-01-repo-context.md) §4.4（起点锚复用 BM25）、[spec-06](spec-06-context.md)（memory 段预算）、[spec-08](spec-08-evaluation.md) §4.8（记忆消融） |

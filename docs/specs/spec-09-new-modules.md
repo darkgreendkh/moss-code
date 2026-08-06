@@ -3,7 +3,7 @@
 | 项 | 值 |
 | --- | --- |
 | 状态 | Implemented（8 个模块全部落地；9.3 code mode 默认关闭且以沙箱为硬前置） |
-| 对应优化章节 | [第 9 章](docs/optimize/2026-agent-upgrade-plan.md)（9.1–9.8） |
+| 对应优化章节 | [第 9 章](../plans/archive/2026-agent-upgrade-plan.md)（9.1–9.8） |
 | 优先级 | 9.8 是 P0；9.1 / 9.4 / 9.7 是 P1；9.2 / 9.3 / 9.5 / 9.6 是 P2 |
 | 依赖 | 各子模块不同，见每节 |
 | 被依赖 | [spec-08](spec-08-evaluation.md)（录制回放是 L1 的基础设施）、[spec-06](spec-06-context.md)（aux model 用于 compaction） |

@@ -69,11 +69,11 @@ def test_jsonl_loader_is_dependency_free_and_registry_resolves_adapter(tmp_path)
 def test_documentation_marks_live_evidence_and_manual_gold_as_pending():
     readme = Path("README.md").read_text(encoding="utf-8")
     spec = Path("docs/specs/spec-08-evaluation.md").read_text(encoding="utf-8")
-    guide = Path("docs/evaluation.md").read_text(encoding="utf-8")
+    guide = Path("docs/features/evaluation.md").read_text(encoding="utf-8")
 
     assert "L0–L4" in readme
     assert "Implemented（框架完成）" in spec
     assert "L2/L3 真实模型结果：待运行" in spec
     assert "50 条人工盲标：待标注" in spec
     assert "eval_audit_tasks.py" in guide
-    assert "不代表模型能力" in guide
+    assert "不能声称模型能力" in guide

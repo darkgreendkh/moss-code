@@ -3,7 +3,7 @@
 | 项 | 值 |
 | --- | --- |
 | 状态 | Implemented（框架完成）；L2/L3 真实模型与人工盲标证据待补 |
-| 对应优化章节 | [第 8 章](docs/optimize/2026-agent-upgrade-plan.md)（8.0–8.12） |
+| 对应优化章节 | [第 8 章](../plans/archive/2026-agent-upgrade-plan.md)（8.0–8.12） |
 | 优先级 | 8.1 / 8.2 / 8.3 / 8.4 / 8.5 / 8.8 / 8.12 是 P0；8.6 / 8.7 / 8.9 / 8.10 是 P1；8.11 是 P2 |
 | 依赖 | [spec-02](spec-02-agent-loop.md)（`RunBudget`/`model_turns`）、[spec-07](spec-07-session-artifacts.md)（trace 常量）、[spec-09](spec-09-new-modules.md)（录制回放） |
 | 被依赖 | 所有 spec 的验收标准都在这里被度量 |
@@ -400,7 +400,7 @@ class RunManifest:
 
 ## 11. 实施状态与证据边界（2026-08-06）
 
-13 个阶段均已落地并各自测试、提交。实现入口包括 `levels/`、`stats.py`、`pricing.py`、`verifier.py`、`mining.py`、`audit.py`、`ablations.py`、`failure_taxonomy.py`、`manifest.py`、`runner.py`、`adversarial.py`、`judge.py` 与 `adapters/swe_task.py`；操作说明见 [评测操作指南](../evaluation.md)。
+13 个阶段均已落地并各自测试、提交。实现入口包括 `levels/`、`stats.py`、`pricing.py`、`verifier.py`、`mining.py`、`audit.py`、`ablations.py`、`failure_taxonomy.py`、`manifest.py`、`runner.py`、`adversarial.py`、`judge.py` 与 `adapters/swe_task.py`；操作说明见 [评测文档](../features/evaluation.md)。
 
 - 20 个本仓库历史任务已通过 parent-fail / commit-pass ×3、archive SHA 与 mutation 审计，仍保持 `draft`，未冒充人工审核后的 active 任务。
 - 30 个对抗场景已具备可复现矩阵和指标合同；**L2/L3 真实模型结果：待运行**，因此当前没有声称 ASR <5%、utility retention >95% 或 wall-clock 4×。

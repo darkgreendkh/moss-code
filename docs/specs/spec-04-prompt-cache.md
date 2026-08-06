@@ -3,7 +3,7 @@
 | 项 | 值 |
 | --- | --- |
 | 状态 | Draft |
-| 对应优化章节 | [第 4 章](docs/optimize/2026-agent-upgrade-plan.md)（4.1–4.6） |
+| 对应优化章节 | [第 4 章](../plans/archive/2026-agent-upgrade-plan.md)（4.1–4.6） |
 | 优先级 | 4.1 / 4.2 / 4.3 / 4.5 是 P0；4.4 是 P1；4.6 是 P2 |
 | 依赖 | 无（角色分层与 [spec-03](spec-03-tool-safety.md) §4.4 是同一次改造） |
 | 被依赖 | [spec-02](spec-02-agent-loop.md)（`call_id`）、[spec-06](spec-06-context.md)（结构化 sections）、[spec-08](spec-08-evaluation.md)（缓存与成本指标） |

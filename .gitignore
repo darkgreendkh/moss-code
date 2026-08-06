@@ -43,19 +43,27 @@ release/
 .env.*
 !.env.example
 
-# Local docs not intended for publication
+# 文档默认不发布，按目录显式放行。
+# `docs/*` 会在目录这一层就把整棵子树挡住（git 不会下降进被忽略的目录），
+# 所以每一层都要各写一条 `!`：先放行目录，再放行目录里的文件。
 docs/*
-docs/面试话术/
-!docs/review-pack/
-!docs/review-pack/README.md
-!docs/architecture/
-!docs/architecture/agent-harness-v1-overview.md
-!docs/optimize/
-!docs/optimize/*.md
-!docs/optimize_v2/
-!docs/optimize_v2/*.md
+!docs/README.md
+!docs/architecture.md
+!docs/features/
+!docs/features/*.md
+!docs/reference/
+!docs/reference/*.md
+!docs/decisions/
+!docs/decisions/*.md
+!docs/plans/
+!docs/plans/active/
+!docs/plans/active/*.md
+!docs/plans/archive/
+!docs/plans/archive/*.md
 !docs/specs/
 !docs/specs/*.md
+# 个人材料，永不发布。放在放行规则之后，最后一条匹配的规则生效。
+docs/面试话术/
 
 # OS files
 .DS_Store

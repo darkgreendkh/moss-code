@@ -2,6 +2,31 @@
 
 moss 是一个轻量本地 coding agent：一个包在模型外面的控制循环，负责组 prompt、解析模型输出、校验并执行工具、写 trace/report、维护跨轮记忆。目标是"轻量好用"，刻意保持零第三方运行时依赖（HTTP 用 stdlib `urllib`，`.env`/frontmatter 都是手写解析器，不引入 requests/YAML）。
 
+## 文档在哪 / 改完代码要同步哪份
+
+本文件写的是**改代码时必须守住的不变量**，`docs/` 写的是**这些东西是怎么回事**。
+同一个事实只写一处：本文件出现的约定不要在 docs 里复制一遍反过来也一样。
+
+| 需要 | 去 |
+| --- | --- |
+| 整体架构、模块关系、运行链路 | `docs/architecture.md` |
+| 某块功能的设计与取舍 | `docs/features/{agent-loop,repo-context,tool-safety,prompt-context,memory,sessions-and-runs,evaluation}.md` |
+| 配置项 / CLI / 落盘结构的**准确值** | `docs/reference/{configuration,cli,storage}.md` |
+| 某个设计"为什么是这样" | `docs/decisions/` |
+| 还有什么没做完 | `docs/plans/active/` |
+| 当初的完整设计稿（含验收标准） | `docs/specs/spec-01..09` |
+
+**改动的同步义务**（漏了会让文档变成误导，比没文档糟）：
+
+- 改默认模型 → `cli.py`、`evaluation/metrics.py`、`.env.example`、`README.md`、本文件、
+  `docs/reference/configuration.md` 和相关测试断言（历史上这里出现过四处编造的模型名）。
+- 加/改 CLI 参数或环境变量 → `docs/reference/cli.md` + `docs/reference/configuration.md` + `.env.example`。
+- 改落盘结构或 report 字段 → `docs/reference/storage.md`。
+- 加工具 → `docs/reference/cli.md` 的工具清单 + `docs/features/tool-safety.md`。
+- 改本文件"关键约定与不变量"里的任何一条 → 同步 `docs/architecture.md` 第 5 节的骨架表。
+- `docs/` 默认被 `.gitignore` 挡住（`docs/*`），新增**目录**必须在 `.gitignore` 里加两条放行
+  （目录一条、`目录/*.md` 一条），否则新文档 git 根本看不见。
+
 ## 常用命令
 
 ```bash
@@ -27,9 +52,12 @@ cli.py (装配/REPL/进度渲染)
   └─ runtime.py::Moss (facade：所有状态和护栏都挂在这里)
        └─ agent_loop.py::AgentLoop.run (感知→决策→行动→记录 主循环)
             ├─ context_manager.py   每轮按预算组 prompt（prefix/history/memory/relevant/constraints/request 六段）+ admission gate
+            │                       历史**先试完整保真**，装不下才压（metadata.history.history_fidelity=full|compressed）
             ├─ providers/clients.py 统一 complete() 接口（Ollama / OpenAI /responses / Anthropic /messages）
             ├─ output_parser.py     模型输出 → ("tool"|"final"|"retry", payload)（纯函数）
-            ├─ tool_executor.py     执行护栏：allowlist→存在性→校验→重复检测→审批→快照 diff→大输出卸载
+            ├─ tool_executor.py     执行护栏（顺序不可换）：allowlist→存在性→参数校验→能力/路径策略
+            │                       →shell 分级→重复检测→pre_tool→审批→expected_sha 前置条件
+            │                       →intent+undo→执行→快照 diff→注入扫描→大输出卸载→receipt+post_tool
             │    └─ tools.py        工具白名单（显式注册，非动态发现）
             ├─ compaction.py        上下文压缩：结构化交接（可逆/幂等/闭合），默认 off
             ├─ model_router.py      脏活（compaction/反思/judge）走 aux model，主线走主模型
@@ -91,7 +119,11 @@ cli.py (装配/REPL/进度渲染)
 - `clock.py`：统一 UTC 时间戳 `now()`
 - `output_parser.py`：模型输出 → `("tool"|"final"|"retry", payload)` 的纯函数解析层
 - `prompt_prefix.py`：稳定前缀构建。**prompt cache key 用 `stable_hash`（只覆盖身份/规则/Tools/Skills 段），不用整段 hash**——否则 agent 自己写文件会导致 workspace 段变化、缓存键每轮抖动
-- `model_request.py`：结构化 `system blocks + messages` 请求；仓库/工具内容永不进入 system。provider 支持 native tool 时直接保留全部 `call_id`
+- `model_request.py`：结构化 `system blocks + messages` 请求；仓库/工具内容永不进入 system。provider 支持 native tool 时直接保留全部 `call_id`（挂在 `Block.call_id` 上）。
+  **原生协议下一轮的多个 `tool_use` 必须打成一条 assistant 消息、结果打成紧随其后的一条 user 消息**——
+  history 里它们是"先记 N 条调用再记 N 条结果"的平铺顺序，逐条翻译出去 Anthropic `/messages` 会 400。
+  重组在 `context_manager._native_history_messages`：缺结果的调用补一条"没有结果"的 tool_result（不伪造输出），
+  孤儿结果降级成普通文本（没有 tool_use 的 tool_result 同样会被拒收）
 - `providers/capabilities.py`：按 provider/model prefix 显式声明 cache/native/context 能力；未知模型保守关闭缓存，不再按 URL 猜测
 - `features/memory.py`：分层记忆（working / episodic notes / durable topics），文件摘要带 freshness 失效；也承载记忆写入/durable 提炼策略（`update_memory_after_tool`/`extract_durable_promotions` 等，Moss 只薄委托）
 - `session_store.py`：会话持久化到 `.moss/sessions/`；delegate 子 agent 的会话隔离在 `.moss/delegates/`（不能污染 `--resume latest`）
@@ -158,9 +190,14 @@ cli.py (装配/REPL/进度渲染)
     （`request_too_large` / `prompt_too_large`）。装不下时的顺序是：先 compaction 重算 → 再把当前请求本身卸载成 artifact + 指针 →
     仍超才**不调用 provider**，收敛成 `stop_reason=context_overflow` 的失败运行（one-shot 退出码非 0）。
     **feature flag 只能换策略，不能关掉这道闸**：`context_reduction=off` 时依然生效。
-11. **截断必须可逆**：超过 `ARTIFACT_THRESHOLD=4000` 字符的工具输出落进 `.moss/runs/<id>/artifacts/`（按内容 sha12 去重、脱敏后写），
-    prompt 里只放压缩摘要 + `read_artifact` 指针。`read_artifact` 的 `path_scope="run_dir"`——用 `Moss.path()` 会放行整个仓库，
+11. **截断必须可逆**：超过 `ARTIFACT_THRESHOLD`（= `MAX_TOOL_OUTPUT` = 16000 字符，即硬截断上限）的工具输出
+    落进 `.moss/runs/<id>/artifacts/`（按内容 sha12 去重、脱敏后写），prompt 里只放压缩摘要 + `read_artifact` 指针。
+    **阈值不能低于硬截断上限**：装得下的输出被换成指针后，模型要再花一步 `read_artifact` 才能看到自己刚读的东西，
+    一次 read 变两步且仍然只拿回一部分（历史上定成 4000，一次提问能空转满 25 步）。
+    `read_artifact` 的 `path_scope="run_dir"`——用 `Moss.path()` 会放行整个仓库，
     那等于多开一条绕过 `read_file` 的读文件通道。report 里的 `truncated_bytes_lost` 应恒为 0。
+    按行区间读（`read_file` / `read_artifact`）时 `start` 落在文件末尾之后一律报错，不返回空字符串——
+    静默的空结果模型没法解释，只会换个区间再来一次。
 12. **副作用要有账**：risky 工具执行前后各落一条 `action_intent` / `action_receipt`（`action_ledger.py`）。
     恢复时"有 intent 无 receipt"的动作，非幂等工具（`run_shell`）**一律不自动重放**——宁可多问一次。
     同一次执行还会把旧内容存进 `.moss/runs/<id>/undo/<action_id>/` 供 `/rewind` 用，
@@ -236,5 +273,10 @@ CLI 默认：`--max-steps 25`、`--max-new-tokens 4096`、`--approval ask`。Con
 .moss/skills/      技能 markdown（frontmatter: name/description/allowed-tools/scope/resources/source）
 .moss/hooks/       用户钩子 pre_tool/post_tool/pre_final/post_run（需可执行位；agent 写不进来）
 .moss/cache/skill_trust.json  第三方 skill 的内容指纹台账（改动后首次使用要确认）
+.moss/memory/      项目级 durable 记忆：records.jsonl（事实源，append-only）+ 派生视图
+.moss/prompts/system.md  覆盖内置 p1 system head（版本记为 file:<sha256前12位>）
+.moss/config.json  结构化配置（mcp / repo_context）
 .env               本地密钥（仓库只保留 .env.example）
 ```
+
+每个文件的字段、格式与生命周期见 `docs/reference/storage.md`。

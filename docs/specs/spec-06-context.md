@@ -3,7 +3,7 @@
 | 项 | 值 |
 | --- | --- |
 | 状态 | Draft |
-| 对应优化章节 | [第 6 章](docs/optimize/2026-agent-upgrade-plan.md)（6.1–6.8） |
+| 对应优化章节 | [第 6 章](../plans/archive/2026-agent-upgrade-plan.md)（6.1–6.8） |
 | 优先级 | 6.8 是 P0；其余 P1 |
 | 依赖 | [spec-04](spec-04-prompt-cache.md)（append-only 布局、usage 真值）、[spec-07](spec-07-session-artifacts.md)（run 目录、trace 事件） |
 | 被依赖 | [spec-02](spec-02-agent-loop.md)（软预算触发 compaction）、[spec-08](spec-08-evaluation.md) §4.8（上下文消融） |

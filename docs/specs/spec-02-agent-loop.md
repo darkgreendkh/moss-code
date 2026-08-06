@@ -3,7 +3,7 @@
 | 项 | 值 |
 | --- | --- |
 | 状态 | Draft |
-| 对应优化章节 | [第 2 章](docs/optimize/2026-agent-upgrade-plan.md)（2.1–2.6） |
+| 对应优化章节 | [第 2 章](../plans/archive/2026-agent-upgrade-plan.md)（2.1–2.6） |
 | 优先级 | 2.6 是 P0；其余 P1 |
 | 依赖 | [spec-04](spec-04-prompt-cache.md)（原生协议保留 `call_id`）、[spec-03](spec-03-tool-safety.md)（批内审批）、[spec-07](spec-07-session-artifacts.md)（trace 事件常量、中断工件） |
 | 被依赖 | [spec-08](spec-08-evaluation.md)（`model_turns`/`RunBudget` 是成本受控评测的数据源） |

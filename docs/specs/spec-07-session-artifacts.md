@@ -3,7 +3,7 @@
 | 项 | 值 |
 | --- | --- |
 | 状态 | Draft |
-| 对应优化章节 | [第 7 章](docs/optimize/2026-agent-upgrade-plan.md)（7.1–7.8） |
+| 对应优化章节 | [第 7 章](../plans/archive/2026-agent-upgrade-plan.md)（7.1–7.8） |
 | 优先级 | 7.1 / 7.2 / 7.8 是 P0；7.4 / 7.6 / 7.7 是 P1；7.3 / 7.5 是 P2 |
 | 依赖 | 无（7.7 的崩溃矩阵需要 [spec-09](spec-09-new-modules.md) 的录制回放做确定性 oracle） |
 | 被依赖 | 所有 spec（`moss/trace_events.py` 常量在这里定义） |
