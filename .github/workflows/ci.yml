@@ -24,5 +24,7 @@ jobs:
           pip install pytest ruff
       - name: Lint
         run: ruff check moss tests scripts
-      - name: Test
+      - name: L0 and L1 tests
         run: python -m pytest tests/ -q
+      - name: Evaluation task schema
+        run: python scripts/eval_lint_tasks.py benchmarks/tasks/mined
