@@ -26,6 +26,8 @@ from dataclasses import dataclass, field, replace
 
 from .clock import now
 from .token_budget import clip, clip_to_budget, estimate_tokens
+# 直接导常量而不是导模块：本文件里有同名的 trace_events 形参（一段 trace 事件列表）。
+from .trace_events import STALL_DETECTED, TOOL_EXECUTED
 
 COMPACTION_SCHEMA_VERSION = 1
 # 最近这么多个执行步骤原样保留：刚发生的错误如果被摘要掉，
@@ -189,7 +191,7 @@ def _covered_events(trace_events, covered_tool_count):
     这是主循环的不变量），所以按数量切就够，不需要再对一次 args。
     """
     events = list(trace_events or [])
-    tool_events = [event for event in events if event.get("event") == "tool_executed"]
+    tool_events = [event for event in events if event.get("event") == TOOL_EXECUTED]
     covered_tools = tool_events[:covered_tool_count]
     if not covered_tools:
         return [], 0, 0
@@ -215,12 +217,12 @@ def extract_rule(covered_entries, covered_events):
         if name == "plan_updated":
             extraction.plan = [dict(step) for step in event.get("steps", []) or []]
             continue
-        if name == "stall_detected":
+        if name == STALL_DETECTED:
             question = f"stalled ({event.get('kind', 'unknown')}): {event.get('detail', '')}".strip()
             if question not in extraction.open_questions:
                 extraction.open_questions.append(clip(question, 200))
             continue
-        if name != "tool_executed":
+        if name != TOOL_EXECUTED:
             continue
 
         status = str(event.get("tool_status", ""))

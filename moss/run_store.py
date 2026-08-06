@@ -16,6 +16,7 @@ from .atomic_io import (
     write_json_atomic,
 )
 from .lease import RunLease
+from .trace_events import TRACE_SCHEMA_VERSION
 from .task_state import STATUS_RUNNING, TaskState
 
 # 哈希链的起点。第一条事件的 prev_hash 用它，链条才有明确的头。
@@ -278,6 +279,9 @@ class RunStore:
         payload = dict(event or {})
         run_id = _run_id(task_state)
         sequence = self._next_trace_sequence(run_id)
+        # 每条事件自带 schema 版本：读取方（评测、排查脚本）能据此按旧字段名
+        # 兼容解析，而不是撞上一个字段不存在的 KeyError 或静默取到 None。
+        payload.setdefault("schema_version", TRACE_SCHEMA_VERSION)
         payload["sequence"] = sequence
         payload["event_id"] = f"{run_id}:{sequence:06d}"
         # 每条事件带上一条的摘要：改掉中间任何一条，后面全部对不上。

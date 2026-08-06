@@ -17,6 +17,8 @@ from .. import security as securitylib
 from .. import injection as injectionlib
 from ..security import REDACTED_VALUE
 from ..token_budget import clip, estimate_tokens
+# 直接导常量而不是导模块：本文件里有同名的 trace_events 形参。
+from ..trace_events import MEMORY_POISONING_BLOCKED, TOOL_EXECUTED
 from ..retrieval import BM25Index
 from .memory_store import MemoryStore, project_scope_key
 from .memory_records import SourceRef, make_record
@@ -1080,7 +1082,7 @@ class LayeredMemory:
     def _emit_poisoning_blocked(self, finding):
         if self.event_callback is not None:
             self.event_callback(
-                "memory_poisoning_blocked",
+                MEMORY_POISONING_BLOCKED,
                 {"reason": "injection_suspected", "pattern": finding.pattern},
             )
 
@@ -1310,7 +1312,7 @@ def distill_run(trace_events, *, mode="rule", workspace_root=None, model_summari
         return []
     if mode not in {"rule", "model"}:
         raise ValueError("reflect mode must be off, rule, or model")
-    tool_events = [event for event in trace_events if event.get("event") == "tool_executed"]
+    tool_events = [event for event in trace_events if event.get("event") == TOOL_EXECUTED]
     records = []
     for event in tool_events:
         error_code = str(event.get("tool_error_code", ""))
@@ -1436,7 +1438,7 @@ def safe_memory_text(agent, text):
         agent.flag_injection_suspected(finding)
         if hasattr(agent, "record_memory_event"):
             agent.record_memory_event(
-                "memory_poisoning_blocked",
+                MEMORY_POISONING_BLOCKED,
                 {"reason": "injection_suspected", "pattern": finding.pattern},
             )
         return ""

@@ -126,7 +126,7 @@ class AgentLoop:
         self._start_heartbeat(task_state)
         agent.emit_trace(
             task_state,
-            "run_started",
+            trace_events.RUN_STARTED,
             {
                 "task_id": task_state.task_id,
                 "user_request": clip(user_message, 300),
@@ -195,7 +195,7 @@ class AgentLoop:
                 agent.write_task_state(task_state)
                 agent.emit_trace(
                     task_state,
-                    "checkpoint_created",
+                    trace_events.CHECKPOINT_CREATED,
                     {
                         "checkpoint_id": checkpoint["checkpoint_id"],
                         "trigger": "freshness_mismatch",
@@ -204,7 +204,7 @@ class AgentLoop:
             elif prompt_metadata.get("resume_status") == CHECKPOINT_WORKSPACE_MISMATCH_STATUS:
                 agent.emit_trace(
                     task_state,
-                    "runtime_identity_mismatch",
+                    trace_events.RUNTIME_IDENTITY_MISMATCH,
                     {
                         "fields": list(prompt_metadata.get("runtime_identity_mismatch_fields", [])),
                     },
@@ -213,7 +213,7 @@ class AgentLoop:
                 agent.write_task_state(task_state)
                 agent.emit_trace(
                     task_state,
-                    "checkpoint_created",
+                    trace_events.CHECKPOINT_CREATED,
                     {
                         "checkpoint_id": checkpoint["checkpoint_id"],
                         "trigger": "workspace_mismatch",
@@ -224,7 +224,7 @@ class AgentLoop:
                 agent.write_task_state(task_state)
                 agent.emit_trace(
                     task_state,
-                    "checkpoint_created",
+                    trace_events.CHECKPOINT_CREATED,
                     {
                         "checkpoint_id": checkpoint["checkpoint_id"],
                         "trigger": "context_reduction",
@@ -232,7 +232,7 @@ class AgentLoop:
                 )
             agent.emit_trace(
                 task_state,
-                "model_requested",
+                trace_events.MODEL_REQUESTED,
                 {
                     "attempts": task_state.attempts,
                     "tool_steps": task_state.tool_steps,
@@ -319,7 +319,7 @@ class AgentLoop:
             kind = actions[0].kind if actions else "retry"
             agent.emit_trace(
                 task_state,
-                "model_parsed",
+                trace_events.MODEL_PARSED,
                 {
                     "kind": kind,
                     "completion_metadata": completion_metadata,
@@ -388,7 +388,7 @@ class AgentLoop:
             agent.write_task_state(task_state)
             agent.emit_trace(
                 task_state,
-                "checkpoint_created",
+                trace_events.CHECKPOINT_CREATED,
                 {
                     "checkpoint_id": checkpoint["checkpoint_id"],
                     "trigger": "run_finished",
@@ -396,7 +396,7 @@ class AgentLoop:
             )
             agent.emit_trace(
                 task_state,
-                "run_finished",
+                trace_events.RUN_FINISHED,
                 {
                     "status": task_state.status,
                     "stop_reason": task_state.stop_reason,
@@ -420,7 +420,7 @@ class AgentLoop:
         checkpoint = agent.create_checkpoint(task_state, user_message, trigger=task_state.stop_reason or "run_stopped")
         agent.emit_trace(
             task_state,
-            "checkpoint_created",
+            trace_events.CHECKPOINT_CREATED,
             {
                 "checkpoint_id": checkpoint["checkpoint_id"],
                 "trigger": task_state.stop_reason or "run_stopped",
@@ -428,7 +428,7 @@ class AgentLoop:
         )
         agent.emit_trace(
             task_state,
-            "run_finished",
+            trace_events.RUN_FINISHED,
             {
                 "status": task_state.status,
                 "stop_reason": task_state.stop_reason,
@@ -455,7 +455,7 @@ class AgentLoop:
         )
         agent.emit_trace(
             task_state,
-            "prompt_built",
+            trace_events.PROMPT_BUILT,
             {
                 "prompt_metadata": bundle.metadata,
                 "duration_ms": int((time.monotonic() - started_at) * 1000),
@@ -562,7 +562,7 @@ class AgentLoop:
             agent.write_task_state(task_state)
             agent.emit_trace(
                 task_state,
-                "tool_executed",
+                trace_events.TOOL_EXECUTED,
                 {
                     "name": action.name,
                     "args": action.args,
@@ -575,7 +575,7 @@ class AgentLoop:
             agent.write_task_state(task_state)
             agent.emit_trace(
                 task_state,
-                "checkpoint_created",
+                trace_events.CHECKPOINT_CREATED,
                 {"checkpoint_id": checkpoint["checkpoint_id"], "trigger": "tool_executed"},
             )
 
@@ -685,12 +685,12 @@ class AgentLoop:
         checkpoint = agent.create_checkpoint(task_state, user_message, trigger="budget_exceeded")
         agent.emit_trace(
             task_state,
-            "checkpoint_created",
+            trace_events.CHECKPOINT_CREATED,
             {"checkpoint_id": checkpoint["checkpoint_id"], "trigger": "budget_exceeded"},
         )
         agent.emit_trace(
             task_state,
-            "run_finished",
+            trace_events.RUN_FINISHED,
             {
                 "status": task_state.status,
                 "stop_reason": task_state.stop_reason,
@@ -730,12 +730,12 @@ class AgentLoop:
         agent.write_task_state(task_state)
         agent.emit_trace(
             task_state,
-            "checkpoint_created",
+            trace_events.CHECKPOINT_CREATED,
             {"checkpoint_id": checkpoint["checkpoint_id"], "trigger": "context_overflow"},
         )
         agent.emit_trace(
             task_state,
-            "run_finished",
+            trace_events.RUN_FINISHED,
             {
                 "status": task_state.status,
                 "stop_reason": task_state.stop_reason,
@@ -777,12 +777,12 @@ class AgentLoop:
             checkpoint = agent.create_checkpoint(task_state, user_message, trigger="interrupted")
             agent.emit_trace(
                 task_state,
-                "checkpoint_created",
+                trace_events.CHECKPOINT_CREATED,
                 {"checkpoint_id": checkpoint["checkpoint_id"], "trigger": "interrupted"},
             )
             agent.emit_trace(
                 task_state,
-                "run_finished",
+                trace_events.RUN_FINISHED,
                 {
                     "status": task_state.status,
                     "stop_reason": task_state.stop_reason,
@@ -811,7 +811,7 @@ class AgentLoop:
         agent.emit_progress("error", {"scope": "model", "message": safe_message})
         agent.emit_trace(
             task_state,
-            "model_error",
+            trace_events.MODEL_ERROR,
             {
                 "error": safe_message,
                 "error_type": exc.__class__.__name__,
@@ -824,7 +824,7 @@ class AgentLoop:
         checkpoint = agent.create_checkpoint(task_state, user_message, trigger="model_error")
         agent.emit_trace(
             task_state,
-            "checkpoint_created",
+            trace_events.CHECKPOINT_CREATED,
             {
                 "checkpoint_id": checkpoint["checkpoint_id"],
                 "trigger": "model_error",
@@ -832,7 +832,7 @@ class AgentLoop:
         )
         agent.emit_trace(
             task_state,
-            "run_finished",
+            trace_events.RUN_FINISHED,
             {
                 "status": task_state.status,
                 "stop_reason": task_state.stop_reason,

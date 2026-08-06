@@ -9,6 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from ..features import memory as memorylib
+from ..task_state import STOP_REASON_BUDGET_EXCEEDED
 from ..providers.clients import FakeModelClient
 from ..runtime import Moss, SessionStore
 from ..run_store import RunStore
@@ -559,7 +560,7 @@ class BenchmarkEvaluator:
         if not expected_artifact_exists:
             return "missing_artifact"
         if not within_budget:
-            return "budget_exceeded"
+            return STOP_REASON_BUDGET_EXCEEDED
         if not verifier_passed:
             return "verifier_failed"
         if not non_failure_stop_reason:

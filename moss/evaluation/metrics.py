@@ -8,6 +8,8 @@ from ..config import load_project_env, provider_env
 from .evaluator import run_fixed_benchmark
 from ..providers.clients import AnthropicCompatibleModelClient, FakeModelClient, OpenAICompatibleModelClient
 from ..runtime import Moss, SessionStore
+# 事件名一律走常量：字面量写错不会报错，只会让某个指标悄悄变成 0。
+from .. import trace_events
 from ..workspace import WorkspaceContext
 
 METRICS_SCHEMA_VERSION = 2
@@ -79,10 +81,10 @@ def aggregate_benchmark_artifact(path):
 
 
 def _infer_run_duration_ms(events):
-    finished = next((event for event in reversed(events) if event.get("event") == "run_finished"), None)
+    finished = next((event for event in reversed(events) if event.get("event") == trace_events.RUN_FINISHED), None)
     if finished and finished.get("run_duration_ms") is not None:
         return float(finished["run_duration_ms"])
-    started = next((event for event in events if event.get("event") == "run_started"), None)
+    started = next((event for event in events if event.get("event") == trace_events.RUN_STARTED), None)
     if not started or not finished:
         return 0.0
     start_dt = _parse_iso8601(started.get("created_at"))
@@ -114,9 +116,9 @@ def aggregate_run_artifacts(runs_root):
             events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         run_durations.append(_infer_run_duration_ms(events))
         for event in events:
-            if event.get("event") == "prompt_built" and event.get("duration_ms") is not None:
+            if event.get("event") == trace_events.PROMPT_BUILT and event.get("duration_ms") is not None:
                 prompt_durations.append(float(event["duration_ms"]))
-            if event.get("event") != "tool_executed":
+            if event.get("event") != trace_events.TOOL_EXECUTED:
                 continue
             tool_name = str(event.get("name", "")).strip()
             if tool_name:
@@ -827,7 +829,7 @@ def run_provider_experiments(benchmark_path, workspace_root, artifact_root, max_
 def _followup_trace_metrics(agent):
     trace_path = agent.run_store.trace_path(agent.current_task_state)
     events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    repeated_reads = sum(1 for event in events if event.get("event") == "tool_executed" and event.get("name") == "read_file")
+    repeated_reads = sum(1 for event in events if event.get("event") == trace_events.TOOL_EXECUTED and event.get("name") == "read_file")
     return repeated_reads
 
 
@@ -1551,10 +1553,10 @@ def _run_recovery_task_variant(task, variant):
         ]
         resume_status = str(report.get("prompt_metadata", {}).get("resume_status", ""))
         stale_reanchored = any(
-            event.get("event") == "checkpoint_created" and event.get("trigger") == "freshness_mismatch"
+            event.get("event") == trace_events.CHECKPOINT_CREATED and event.get("trigger") == "freshness_mismatch"
             for event in trace
         )
-        workspace_drift_detected = any(event.get("event") == "runtime_identity_mismatch" for event in trace)
+        workspace_drift_detected = any(event.get("event") == trace_events.RUNTIME_IDENTITY_MISMATCH for event in trace)
         invalid_resume = task["category"] in {"partial_stale", "workspace_mismatch", "schema_mismatch"}
         return {
             "task_id": task["id"],
