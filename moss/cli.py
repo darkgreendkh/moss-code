@@ -534,6 +534,7 @@ def build_agent(args):
             reflect_mode=getattr(args, "reflect", "rule"),
             compaction_mode=getattr(args, "compaction", "off"),
             aux_model_client=aux_model,
+            code_mode=bool(getattr(args, "enable_code_mode", False)),
         )
     return Moss(
         model_client=model,
@@ -556,6 +557,7 @@ def build_agent(args):
         reflect_mode=getattr(args, "reflect", "rule"),
         compaction_mode=getattr(args, "compaction", "off"),
         aux_model_client=aux_model,
+        code_mode=bool(getattr(args, "enable_code_mode", False)),
     )
 
 
@@ -687,6 +689,13 @@ def build_arg_parser():
         choices=("off", "rule", "model"),
         default="rule",
         help="Distill procedural memory at run completion; model uses an aux summarizer when available.",
+    )
+    # code mode：模型写一段受限 Python 批量编排工具调用。**沙箱是硬前置**，
+    # 没有沙箱即使开了这个开关也不会暴露 run_orchestration。
+    parser.add_argument(
+        "--enable-code-mode",
+        action="store_true",
+        help="Expose run_orchestration. Requires a working sandbox; off by default.",
     )
     # 多模型路由：compaction 摘要、失败分类、记忆提炼这些脏活不需要主力模型，
     # 但调用次数可能比主线还多。两个都不给 = 全部回落主模型，行为不变。

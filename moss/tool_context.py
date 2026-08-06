@@ -39,6 +39,11 @@ class ToolContext:
     catalog_threshold: int = 16
     # describe_tool 要看整张注册表，但它只读——所以给的是取回调而不是引用。
     tool_registry_provider: Callable[[], dict] = None
+    # code mode 是否可用（`--enable-code-mode` 且沙箱不是 none）。
+    code_mode_enabled: bool = False
+    # 受护栏的工具入口。编排脚本里的每次调用都得从这里走，
+    # 直连 toolkit 就等于让脚本绕过审批和 trace。
+    guarded_tool_runner: Callable[[str, dict], str] = None
 
     def path(self, raw_path):
         return self.path_resolver(str(raw_path))
@@ -68,6 +73,11 @@ class ToolContext:
         if self.tool_registry_provider is None:
             return {}
         return dict(self.tool_registry_provider() or {})
+
+    def run_guarded_tool(self, name, args):
+        if self.guarded_tool_runner is None:
+            raise RuntimeError("no guarded tool entry point is available")
+        return self.guarded_tool_runner(str(name), dict(args or {}))
 
     def set_plan(self, plan):
         if self.plan_writer is None:

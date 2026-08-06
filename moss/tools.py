@@ -202,6 +202,19 @@ DELEGATE_TOOL_SPEC = ToolSpec(
     description="Ask bounded read-only child agents to investigate; returns findings with evidence anchors.",
 )
 
+RUN_ORCHESTRATION_TOOL_SPEC = ToolSpec(
+    name="run_orchestration",
+    fields={"script": ToolField("str")},
+    # risky 是刻意的：脚本会代替模型发起一串工具调用，而审批摘要里
+    # 只看得到脚本本身。它值得被问一次。
+    risky=True,
+    capabilities=frozenset({"fs_read", "exec"}),
+    description=(
+        "Run a restricted Python script that batches several read-only tool calls "
+        "(fs.read/search/ls/emit). Requires --enable-code-mode and a working sandbox."
+    ),
+)
+
 DESCRIBE_TOOL_SPEC = ToolSpec(
     name="describe_tool",
     fields={"name": ToolField("str")},
@@ -220,7 +233,7 @@ USE_SKILL_TOOL_SPEC = ToolSpec(
 
 
 def legal_tool_names():
-    return set(BASE_TOOL_SPECS) | {"delegate", "use_skill", "describe_tool"}
+    return set(BASE_TOOL_SPECS) | {"delegate", "use_skill", "describe_tool", "run_orchestration"}
 
 TOOL_EXAMPLES = {
     "list_files": '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
@@ -232,6 +245,12 @@ TOOL_EXAMPLES = {
     "delegate": '<tool>{"name":"delegate","args":{"task":"where is retry handled?","focus":["moss/agent_loop.py"],"max_steps":3}}</tool>',
     "use_skill": '<tool>{"name":"use_skill","args":{"name":"some-skill"}}</tool>',
     "describe_tool": '<tool>{"name":"describe_tool","args":{"name":"search_text"}}</tool>',
+    "run_orchestration": (
+        '<tool name="run_orchestration"><script>for path in ["a.py", "b.py"]:\n'
+        '    text = fs.read(path)\n'
+        '    if "TODO" in text:\n'
+        '        emit(path)\n</script></tool>'
+    ),
     "update_plan": '<tool>{"name":"update_plan","args":{"steps":[{"id":"1","title":"read the parser","status":"in_progress"},{"id":"2","title":"add a test","status":"pending"}]}}</tool>',
     "memory_write": '<tool>{"name":"memory_write","args":{"scope":"project","topic":"key-decisions","text":"Use SQLite","tags":["database"]}}</tool>',
     "memory_update": '<tool>{"name":"memory_update","args":{"id":"mem_123456789abc","text":"Use SQLite WAL"}}</tool>',
@@ -347,6 +366,12 @@ def build_tool_registry(context):
     # 只有真的存在 skill 时才暴露 use_skill，避免给模型一个无处可用的工具。
     if _context_skills(context):
         tools["use_skill"] = _registry_entry(USE_SKILL_TOOL_SPEC, context, tool_use_skill)
+    # code mode 双前置：显式开关 + 沙箱可用。策略层挡不住 __builtins__ 逃逸，
+    # 只有 OS 隔离能兜底——所以没有沙箱就根本不给这个工具。
+    if getattr(context, "code_mode_enabled", False):
+        tools["run_orchestration"] = _registry_entry(
+            RUN_ORCHESTRATION_TOOL_SPEC, context, tool_run_orchestration
+        )
     # 外部 MCP 工具在**启动期**并进来，和内置工具走同一套护栏。
     # 运行期不做动态发现：模型看到的动作集合在 run 内必须是冻结的。
     tools.update(_context_mcp_tools(context))
@@ -374,6 +399,8 @@ def _tool_spec(name):
         return USE_SKILL_TOOL_SPEC
     if name == "describe_tool":
         return DESCRIBE_TOOL_SPEC
+    if name == "run_orchestration":
+        return RUN_ORCHESTRATION_TOOL_SPEC
     return None
 
 
@@ -552,6 +579,14 @@ def validate_tool(context, name, args):
     if name == "describe_tool":
         if not str(args.get("name", "")).strip():
             raise ValueError("name must not be empty")
+        return
+
+    if name == "run_orchestration":
+        from . import code_mode
+
+        # 校验期就跑 AST 白名单：一段逃逸脚本该在审批摘要出现之前就被拒掉，
+        # 不该让用户对着它按一次 y。
+        code_mode.validate_script(args.get("script", ""))
         return
 
 
@@ -829,6 +864,14 @@ def tool_use_skill(context, args):
     # 点亮 skill 是有状态的（能力临时覆盖 + 供应链确认），所以走 runtime 那条路，
     # 这里不自己拼正文——两处各拼一份迟早会漂移。
     return context.activate_skill(skill_name)
+
+
+def tool_run_orchestration(context, args):
+    """跑一段受限编排脚本。每次工具 API 调用仍然逐条走 ToolExecutor。"""
+    from . import code_mode
+
+    emitted, calls = code_mode.run_script(args.get("script", ""), context.run_guarded_tool)
+    return code_mode.render_result(emitted, calls)
 
 
 def tool_describe_tool(context, args):

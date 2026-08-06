@@ -19,6 +19,7 @@ from . import atomic_io
 from . import checkpoint as checkpointlib
 from . import compaction as compactionlib
 from . import delegation as delegationlib
+from . import code_mode as code_modelib
 from . import hooks as hookslib
 from .mcp import registry as mcplib
 from . import model_router as model_routerlib
@@ -115,6 +116,7 @@ class Moss:
         reflect_mode="rule",
         compaction_mode="off",
         aux_model_client=None,
+        code_mode=False,
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -224,6 +226,13 @@ class Moss:
         self.mcp_tools, self.mcp_clients, self.tool_catalog_threshold = mcplib.build_mcp_tools(
             self.root, on_error=lambda message: print(f"warning: {message}", file=sys.stderr)
         )
+        # code mode（spec-09 §9.3）。默认关闭，且沙箱不可用时即使开了也不给——
+        # AST 白名单是第一道，OS 隔离是第二道，只有第一道的话一个没想到的
+        # 逃逸路径就是完整的任意代码执行。
+        self.code_mode = bool(code_mode)
+        # 只判一次并缓存：这个判定会打 stderr 警告，而 tool_context() 是
+        # 每次工具调用都要建的——每调一次工具喊一遍等于把警告变成噪声。
+        self._code_mode_enabled = self._resolve_code_mode()
         # 本 run 跑过的钩子。进 report，因为 pre_tool 的拒绝会改变控制流。
         self.hook_outcomes = []
         # 当前点亮的 skill（use_skill 写入）。它的 allowed-tools 是**临时**覆盖：
@@ -1298,6 +1307,8 @@ class Moss:
             skills_provider=lambda: self.skills,
             skill_activator=self.activate_skill,
             mcp_tools_provider=lambda: self.mcp_tools,
+            code_mode_enabled=self.code_mode_enabled(),
+            guarded_tool_runner=self.run_tool,
             catalog_threshold=self.tool_catalog_threshold,
             tool_registry_provider=lambda: self.tools,
             cancel_token=self.cancel_token,
@@ -1316,6 +1327,26 @@ class Moss:
         # 的临时委派会话，而不是用户自己的工作会话。把它们隔离到独立目录，既避免
         # 污染 latest()，又保留可审计的委派轨迹。
         return SessionStore(str(self.root / ".moss" / "delegates"))
+
+    def code_mode_enabled(self):
+        return bool(getattr(self, "_code_mode_enabled", False))
+
+    def _resolve_code_mode(self):
+        """code mode 到底能不能用：显式开关 **且** 沙箱可用。
+
+        开了但沙箱不可用时打一次 stderr——静默不给工具的话，用户会以为
+        自己开了却一直没见模型用过，然后去查 prompt。
+        """
+        if not getattr(self, "code_mode", False):
+            return False
+        if code_modelib.sandbox_ready(self.sandbox_plan):
+            return True
+        print(
+            "warning: --enable-code-mode was requested but no sandbox is available; "
+            "run_orchestration stays disabled",
+            file=sys.stderr,
+        )
+        return False
 
     def capability_set(self):
         """本 agent 当前真正握有的能力集合（工具声明的并集，按策略过滤）。
