@@ -1,4 +1,5 @@
 import json
+import os
 
 from moss.run_store import TRACE_CHAIN_GENESIS, RunStore, event_digest
 from moss.task_state import (
@@ -90,6 +91,11 @@ def test_run_store_marks_running_runs_interrupted_with_audit_report(tmp_path):
     store.start_run(running)
     store.start_run(completed)
     store.append_trace(running, {"event": "tool_executed"})
+    # 租约判死才允许接管（spec-07 §4.4）：这里模拟持有者是另一个已经没了的进程。
+    lease = json.loads(store.lease.path(running.run_id).read_text(encoding="utf-8"))
+    lease["owner_pid"] = os.getpid() + 100000
+    store.lease.path(running.run_id).write_text(json.dumps(lease), encoding="utf-8")
+    store.lease._probe = lambda pid: False
 
     interrupted = store.mark_interrupted_runs()
 

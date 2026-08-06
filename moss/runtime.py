@@ -543,7 +543,15 @@ class Moss:
         run_dir = self.run_store.run_dir(task_state)
         run_dir.mkdir(parents=True, exist_ok=True)
         self.write_task_state(task_state)
+        # 租约紧跟 task_state：目录一旦是 running，别的进程就可能来接管它。
+        self.run_store.lease.acquire(task_state.run_id)
         return run_dir
+
+    def heartbeat_run(self, task_state):
+        return self.run_store.heartbeat(task_state)
+
+    def release_run(self, task_state):
+        return self.run_store.release_run(task_state)
 
     def write_task_state(self, task_state):
         # task_state 同样是落盘审计工件，不能绕过 runtime 的 secret 策略。

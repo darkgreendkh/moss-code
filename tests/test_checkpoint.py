@@ -87,6 +87,9 @@ def test_checkpoint_text_mentions_interrupted_run_and_last_complete_event(tmp_pa
     state = TaskState.create(run_id="run_interrupted", task_id="task_interrupted", user_request="Crash.")
     store.start_run(state)
     store.append_trace(state, {"event": "tool_executed"})
+    # 模拟"崩在写租约之前"的 run：没有租约文件，新进程才允许接管它
+    # （spec-07 §4.4；持有有效租约的 run 不会被接管）。
+    store.lease.release(state.run_id)
 
     agent = build_agent(tmp_path)
 

@@ -7,6 +7,7 @@ from dataclasses import replace
 from .checkpoint import CHECKPOINT_NONE_STATUS, CHECKPOINT_PARTIAL_STALE_STATUS, CHECKPOINT_WORKSPACE_MISMATCH_STATUS
 from .budget import RunBudget, graceful_final, usage_from_metadata  # noqa: F401
 from .clock import now
+from .lease import LeaseHeartbeat
 from .output_parser import parse_model_actions, truncate_after_final
 from .providers.capabilities import probe
 from . import trace_events
@@ -59,6 +60,7 @@ def _record_instruction_notices(agent, task_state):
 class AgentLoop:
     def __init__(self, agent):
         self.agent = agent
+        self._heartbeat = None
 
     def run(self, user_message):
         run_started_at = time.monotonic()
@@ -75,9 +77,39 @@ class AgentLoop:
             # 本轮结束，用户消息不再是"当前请求"，该以普通历史的身份进入后续轮次。
             # 放在 finally 里：中断退出的会话被 resume 时，历史同样不能缺这一条。
             try:
+                self._stop_heartbeat()
                 self.agent.clear_pending_history()
             finally:
                 self.agent.end_run()
+
+    def _start_heartbeat(self, task_state):
+        """开一条后台续租线程，覆盖长模型调用/长工具期间的步间空档。"""
+        agent = self.agent
+        run_store = getattr(agent, "run_store", None)
+        lease = getattr(run_store, "lease", None)
+        if lease is None:
+            return
+        self._heartbeat = LeaseHeartbeat(
+            lambda: run_store.heartbeat(task_state.run_id), ttl_s=lease.ttl_s
+        ).start()
+
+    def _stop_heartbeat(self):
+        heartbeat = getattr(self, "_heartbeat", None)
+        if heartbeat is None:
+            return
+        self._heartbeat = None
+        try:
+            heartbeat.stop()
+        except Exception:
+            pass
+
+    def _release_lease(self, task_state):
+        """收尾时释放租约。绝不抛异常——它跑在所有收尾路径（含中断）上。"""
+        self._stop_heartbeat()
+        try:
+            self.agent.release_run(task_state)
+        except Exception:
+            pass
 
     def _run(self, user_message, run_started_at):
         agent = self.agent
@@ -91,6 +123,7 @@ class AgentLoop:
         task_state.resume_status = agent.resume_state.get("status", CHECKPOINT_NONE_STATUS)
         agent.current_task_state = task_state
         agent.current_run_dir = agent.start_run(task_state)
+        self._start_heartbeat(task_state)
         agent.emit_trace(
             task_state,
             "run_started",
@@ -115,6 +148,9 @@ class AgentLoop:
         # 4. 记录：把结果写回 history / task_state / trace / memory
         # 然后进入下一轮，直到停机条件满足
         while tool_steps < agent.max_steps and attempts < max_attempts:
+            # 步边界续租。后台心跳线程覆盖步内的长动作，这一次是同步兜底：
+            # 心跳线程起不来（比如受限环境）时，至少每步还有一次刷新。
+            agent.heartbeat_run(task_state)
             budget.consume(elapsed_s=time.monotonic() - run_started_at)
             exceeded = budget.hard_exceeded()
             if exceeded:
@@ -369,6 +405,7 @@ class AgentLoop:
                 },
             )
             agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
+            self._release_lease(task_state)
             return final
 
         if attempts >= max_attempts and tool_steps < agent.max_steps:
@@ -400,6 +437,7 @@ class AgentLoop:
             },
         )
         agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
+        self._release_lease(task_state)
         return final
 
     def _build_prompt(self, task_state, user_message):
@@ -661,6 +699,7 @@ class AgentLoop:
             },
         )
         agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
+        self._release_lease(task_state)
         return final
 
     def _finish_context_overflow(self, task_state, user_message, result, run_started_at):
@@ -705,6 +744,7 @@ class AgentLoop:
             },
         )
         agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
+        self._release_lease(task_state)
         return final
 
     def _finish_interrupted(self, user_message, exc, run_started_at):
@@ -751,6 +791,7 @@ class AgentLoop:
                 },
             )
             agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
+            self._release_lease(task_state)
         except Exception:
             # 收尾本身失败也不能盖掉原始异常。工件不全总好过丢掉中断原因。
             pass
@@ -800,4 +841,5 @@ class AgentLoop:
             },
         )
         agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
+        self._release_lease(task_state)
         return final

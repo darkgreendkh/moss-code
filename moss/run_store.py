@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 from .atomic_io import write_atomic, write_json_atomic
+from .lease import RunLease
 from .task_state import STATUS_RUNNING, TaskState
 
 # 哈希链的起点。第一条事件的 prev_hash 用它，链条才有明确的头。
@@ -33,9 +34,12 @@ def _run_id(value):
 
 
 class RunStore:
-    def __init__(self, root):
+    def __init__(self, root, lease=None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        # 租约：谁在跑这个 run。没有它，启动时的"把所有 running 标成 interrupted"
+        # 会在并发下杀掉另一个终端正在进行的任务（spec-07 §1 的 bug #2）。
+        self.lease = lease if lease is not None else RunLease(self.run_dir)
 
     def run_dir(self, run_id):
         return self.root / _run_id(run_id)
@@ -102,7 +106,18 @@ class RunStore:
         run_dir = self.run_dir(task_state)
         run_dir.mkdir(parents=True, exist_ok=True)
         self.write_task_state(task_state)
+        # 租约先于任何执行：run 目录一旦是 running，别的进程就可能来接管它，
+        # 这段窗口里必须已经能证明"我还活着"。
+        self.lease.acquire(_run_id(task_state))
         return run_dir
+
+    def heartbeat(self, run_id):
+        """刷新租约心跳。主循环每步调用，长工具期间由心跳线程调用。"""
+        return self.lease.heartbeat(_run_id(run_id))
+
+    def release_run(self, run_id):
+        """释放租约。收尾路径（含中断）必须调用，绝不抛异常。"""
+        return self.lease.release(_run_id(run_id))
 
     def write_task_state(self, task_state):
         return self.write_task_state_payload(task_state, task_state.to_dict())
@@ -176,8 +191,23 @@ class RunStore:
         return running
 
     def mark_interrupted_runs(self):
+        """接管别的进程留下的、已经判死的 run。
+
+        为什么不再"看到 running 就标 interrupted"：那在并发下是静默数据损坏——
+        另一个终端的 REPL 正跑着，这边一启动就把它的 task_state 覆写成 failed，
+        用户看到任务无缘无故失败，而 trace 里根本没有对应的失败原因。
+        现在先按租约判活，判不出来一律当活着（保守方向：最坏是该接管的没接管）。
+
+        两种接管结论分开记，不混算：
+        - `interrupted`：有租约且判死，确认是"跑到一半没了"；
+        - `stale`：连租约文件都没有（旧版本留下的，或写租约之前就崩了），
+          我们并不知道它是怎么没的，不该计进"中断率"这类指标。
+        """
         interrupted = []
         for task_state in self.find_running_runs():
+            can_take_over, takeover = self.lease.classify(task_state.run_id)
+            if not can_take_over:
+                continue
             events = self.read_trace(task_state.run_id)
             last_event = events[-1] if events else {}
             task_state.stop_interrupted("Run interrupted before completion.")
@@ -192,16 +222,27 @@ class RunStore:
                     "final_answer": task_state.final_answer,
                     "task_state": task_state.to_dict(),
                     "last_complete_event": last_event,
+                    "takeover": takeover,
                 },
             )
+            self.lease.release(task_state.run_id)
             interrupted.append(
                 {
                     "run_id": task_state.run_id,
                     "task_id": task_state.task_id,
                     "last_complete_event": last_event,
+                    "takeover": takeover,
                 }
             )
         return interrupted
+
+    def active_runs(self):
+        """持有有效租约的 run。保留策略永不清理它们。"""
+        active = []
+        for task_state in self.find_running_runs():
+            if self.lease.is_alive(self.lease.read(task_state.run_id)):
+                active.append(task_state.run_id)
+        return active
 
     def write_report(self, task_state, report):
         path = self.report_path(task_state)
