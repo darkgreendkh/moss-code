@@ -29,6 +29,7 @@ jobs:
         run: |
           ruff check moss tests scripts
           python scripts/eval_lint_tasks.py benchmarks/tasks/mined
-          python -m pytest tests/test_ablations.py tests/test_memory_ablation_guard.py tests/test_verifier.py -q
+          python scripts/eval_lint_adversarial.py
+          python -m pytest tests/test_ablations.py tests/test_memory_ablation_guard.py tests/test_verifier.py tests/test_adversarial_suite.py -q
       - name: Record requested tier
         run: echo "requested_level=${{ inputs.level || 'L2+L3 weekly' }}" >> "$GITHUB_STEP_SUMMARY"
