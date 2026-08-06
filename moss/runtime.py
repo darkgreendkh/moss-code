@@ -183,7 +183,14 @@ class Moss:
         if feature_flags:
             self.feature_flags.update({str(key): bool(value) for key, value in feature_flags.items()})
         self.allowed_tools = self._normalize_allowed_tools(allowed_tools)
-        self.run_store = run_store or RunStore(Path(workspace.repo_root) / ".moss" / "runs")
+        self.run_store = run_store or RunStore(
+            Path(workspace.repo_root) / ".moss" / "runs",
+            # 崩溃后对账要看当前磁盘上的文件，所以把路径锚定函数交给它。
+            workspace_path=self.path,
+        )
+        # 上一条动作回执的 id。intent 的 idempotency_key 由它和参数摘要算出，
+        # 同一个动作重放时算出同一把钥匙，于是不会产生两条 receipt。
+        self.last_action_receipt_id = ""
         self.interrupted_runs = self.recover_interrupted_runs()
         self.session = session or {
             "id": datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],

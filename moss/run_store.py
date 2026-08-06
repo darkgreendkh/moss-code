@@ -19,8 +19,9 @@ from .atomic_io import (
     write_json_atomic,
 )
 from .lease import RunLease
+from . import action_ledger
+from . import trace_events
 from .run_index import RunIndex, archive_run_dir, expired_run_ids, retention_limits
-from .trace_events import TRACE_SCHEMA_VERSION
 from .task_state import STATUS_RUNNING, TaskState
 
 # 哈希链的起点。第一条事件的 prev_hash 用它，链条才有明确的头。
@@ -45,7 +46,10 @@ def _run_id(value):
 
 
 class RunStore:
-    def __init__(self, root, lease=None):
+    def __init__(self, root, lease=None, workspace_path=None):
+        # workspace_path: 相对路径 -> 工作区绝对路径。崩溃后对账要看**当前磁盘**
+        # 上的文件长什么样，而 RunStore 自己只认识 .moss/runs 这一棵树。
+        self._workspace_path = workspace_path
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         # 租约：谁在跑这个 run。没有它，启动时的"把所有 running 标成 interrupted"
@@ -299,6 +303,13 @@ class RunStore:
                 continue
             events = self.read_trace(task_state.run_id)
             last_event = events[-1] if events else {}
+            # 崩溃窗口里"有意图没回执"的动作在这里对账。没有这一步，恢复时
+            # 既不敢重放（可能写两次）也不敢跳过（可能一次都没写）。
+            pending_actions = (
+                action_ledger.reconcile(events, self._workspace_path)
+                if self._workspace_path is not None
+                else []
+            )
             task_state.stop_interrupted("Run interrupted before completion.")
             self.write_task_state(task_state)
             self.write_report(
@@ -312,8 +323,12 @@ class RunStore:
                     "task_state": task_state.to_dict(),
                     "last_complete_event": last_event,
                     "takeover": takeover,
+                    "pending_actions": pending_actions,
                 },
             )
+            for outcome in pending_actions:
+                # 对账结论本身也是审计事实：事后要能回答"当时判它是重放过还是没跑"。
+                self.append_trace(task_state.run_id, {"event": trace_events.ACTION_RECONCILED, **outcome})
             self.lease.release(task_state.run_id)
             interrupted.append(
                 {
@@ -321,6 +336,7 @@ class RunStore:
                     "task_id": task_state.task_id,
                     "last_complete_event": last_event,
                     "takeover": takeover,
+                    "pending_actions": pending_actions,
                 }
             )
         return interrupted
@@ -355,7 +371,7 @@ class RunStore:
         sequence = self._next_trace_sequence(run_id)
         # 每条事件自带 schema 版本：读取方（评测、排查脚本）能据此按旧字段名
         # 兼容解析，而不是撞上一个字段不存在的 KeyError 或静默取到 None。
-        payload.setdefault("schema_version", TRACE_SCHEMA_VERSION)
+        payload.setdefault("schema_version", trace_events.TRACE_SCHEMA_VERSION)
         payload["sequence"] = sequence
         payload["event_id"] = f"{run_id}:{sequence:06d}"
         # 每条事件带上一条的摘要：改掉中间任何一条，后面全部对不上。

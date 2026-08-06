@@ -4,13 +4,16 @@ import difflib
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass
 
+from . import action_ledger
 from . import output_compressors
 from .clock import now
 from .injection import scan as scan_for_injection
 from .token_budget import MAX_TOOL_OUTPUT, clip
 from .tools import ToolRunOutput, classify_shell_command
+from . import trace_events
 from .workspace import invalidate_git_facts_cache
 
 
@@ -475,6 +478,10 @@ class ToolExecutor:
 
         before_snapshot = agent.capture_workspace_snapshot() if tool["risky"] else {}
         after_snapshot = before_snapshot
+        # 意图先于副作用落盘：崩在"文件写完但记录没写"的窗口里时，这条 intent
+        # 就是唯一能说明"当时准备做什么"的证据（spec-07 §4.6）。
+        intent = self._emit_intent(name, args, tool, receipt) if tool["risky"] else None
+        started_at = time.monotonic()
         try:
             output = _normalize_tool_output(tool["run"](args))
             content, output_metadata = prepare_tool_output(agent, name, args, output.content)
@@ -543,6 +550,7 @@ class ToolExecutor:
             )
             if not defer_side_effects:
                 agent.record_process_note_for_tool(name, metadata)
+            self._emit_receipt(intent, metadata, started_at)
             return ToolExecutionResult(content=content, metadata=metadata)
         except Exception as exc:
             after_snapshot = agent.capture_workspace_snapshot() if tool["risky"] else before_snapshot
@@ -566,4 +574,53 @@ class ToolExecutor:
                 extra=_extra_metadata_for(name, args),
             )
             agent.record_process_note_for_tool(name, metadata)
+            # 失败也要有回执：没有它，"跑了但报错"和"根本没跑"在恢复时长得一样。
+            self._emit_receipt(intent, metadata, started_at)
             return ToolExecutionResult(content=f"error: tool {name} failed: {exc}", metadata=metadata)
+
+    def _emit_intent(self, name, args, tool, receipt):
+        """执行前落一条 action_intent。任何异常都吞掉——记账绝不能挡住执行。"""
+        agent = self.agent
+        task_state = getattr(agent, "current_task_state", None)
+        if task_state is None:
+            return None
+        try:
+            spec = tool.get("spec")
+            intent = action_ledger.build_intent(
+                name=name,
+                args=args,
+                capabilities=getattr(spec, "capabilities", ()) or (),
+                risk=_risk_level_for(tool, name, args),
+                expected_sha=dict((receipt.expected_sha256 or {}) if receipt else {}),
+                approval_receipt_id=receipt.diff_digest if receipt else "",
+                previous_receipt_id=getattr(agent, "last_action_receipt_id", ""),
+                resolve_path=agent.path,
+            )
+            agent.emit_trace(task_state, trace_events.ACTION_INTENT, dict(intent))
+            return intent
+        except Exception:
+            return None
+
+    def _emit_receipt(self, intent, metadata, started_at):
+        agent = self.agent
+        task_state = getattr(agent, "current_task_state", None)
+        if intent is None or task_state is None:
+            return None
+        try:
+            affected = list(metadata.get("affected_paths", []) or [])
+            after_sha = {}
+            for rel_path in affected + list(intent.get("expected_sha", {}) or {}):
+                after_sha[rel_path] = action_ledger.file_sha(agent.root / rel_path)
+            payload = action_ledger.build_receipt(
+                intent,
+                status=str(metadata.get("tool_status", "")),
+                exit_code=metadata.get("exit_code"),
+                affected_paths=affected,
+                after_sha=after_sha,
+                duration_ms=int((time.monotonic() - started_at) * 1000),
+            )
+            agent.emit_trace(task_state, trace_events.ACTION_RECEIPT, dict(payload))
+            agent.last_action_receipt_id = payload["action_id"]
+            return payload
+        except Exception:
+            return None

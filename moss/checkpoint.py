@@ -2,6 +2,7 @@
 
 import uuid
 
+from . import action_ledger
 from .clock import now
 from .features import memory as memorylib
 from .token_budget import clip
@@ -138,7 +139,20 @@ def _interrupted_run_lines(interrupted_runs):
     for item in interrupted_runs:
         last_event = dict(item.get("last_complete_event", {}) or {})
         event_name = str(last_event.get("event", "")).strip() or "-"
-        lines.append(f"{item.get('run_id', '-')}: last complete event {event_name}")
+        line = f"{item.get('run_id', '-')}: last complete event {event_name}"
+        # 崩溃窗口里"不知道做没做"的动作必须说出来。模型看不到它，
+        # 就会照着"没做过"继续推进，而磁盘上可能已经改了。
+        unknown = [
+            outcome
+            for outcome in item.get("pending_actions", []) or []
+            if outcome.get("status") == action_ledger.STATUS_PENDING_UNKNOWN
+        ]
+        if unknown:
+            detail = ", ".join(
+                f"{outcome['tool']}({outcome.get('reason', '')})" for outcome in unknown
+            )
+            line += f"; unverified actions: {detail}"
+        lines.append(line)
     return lines
 
 
