@@ -55,6 +55,9 @@ CONTEXT_OVERFLOW = "context_overflow"
 CONTEXT_COMPACTED = "context_compacted"
 REQUEST_OFFLOADED = "request_offloaded"
 
+# 多模型路由（spec-09 §9.7）。哪一类脏活被送去了哪个后端、为什么。
+MODEL_ROUTED = "model_routed"
+
 # 子 agent（spec-09 §9.1）。父 run 要能回答"这次委派花了多少、拿回了什么"。
 DELEGATE_SPAWNED = "delegate_spawned"
 DELEGATE_FINISHED = "delegate_finished"
@@ -106,6 +109,7 @@ __all__ = [
     "REPLAY_MISS",
     "DELEGATE_SPAWNED",
     "DELEGATE_FINISHED",
+    "MODEL_ROUTED",
     "ALL_EVENTS",
 ]
 

@@ -19,6 +19,7 @@ from . import atomic_io
 from . import checkpoint as checkpointlib
 from . import compaction as compactionlib
 from . import delegation as delegationlib
+from . import model_router as model_routerlib
 from .features import memory as memorylib
 from .features.memory_records import SourceRef
 from . import security as securitylib
@@ -151,9 +152,12 @@ class Moss:
         # 默认 off = 今天的纯截断行为，也是消融基线（spec-06 §5）。
         # 等评测证明收益之后再翻默认值。
         self.compaction_mode = compaction_mode
-        # compaction 模型模式用的辅助后端。None 表示复用主后端；
-        # 独立的小模型接进来的口子留给 spec-09。
+        # 多模型路由（spec-09 §9.7）：脏活走 aux，主线走主模型。
+        # aux_model_client=None 时全部回落主模型，行为与加路由前逐字节一致。
         self._aux_model_client = aux_model_client
+        self.model_router = model_routerlib.ModelRouter(
+            model_client, aux_model_client, observer=self._note_model_route
+        )
         # 历史段连续几轮触发了收缩。连续两轮说明不是偶发的大输出，
         # 而是历史本身已经装不下了 —— 那是该压缩而不是继续削的信号。
         self.history_reduction_streak = 0
@@ -999,6 +1003,29 @@ class Moss:
         self.last_procedural_distilled = self.distill_current_run()
         return promoted, rejections, superseded
 
+    def _reflection_summarizer(self):
+        """反思提炼的模型侧改写。走 aux 路由；出错就返回空串退回规则结果。
+
+        为什么吞异常：提炼是收尾阶段的锦上添花，让它把一次成功的 run
+        变成失败的 run 完全不划算。
+        """
+        if self._aux_model_client is None:
+            # 没配 aux 就别为了改写措辞再打一次主模型——这是纯成本。
+            return None
+        client = self.aux_model_client("reflection")
+
+        def summarize(text, max_tokens=200):
+            try:
+                return client.complete(
+                    "Rewrite this lesson as one short reusable sentence. "
+                    "Keep it factual, no preamble.\n\n" + str(text),
+                    int(max_tokens),
+                )
+            except Exception:
+                return ""
+
+        return summarize
+
     def distill_current_run(self):
         if self.reflect_mode == "off" or self.current_task_state is None:
             return []
@@ -1006,6 +1033,7 @@ class Moss:
             self.run_store.read_trace(self.current_task_state.run_id),
             mode=self.reflect_mode,
             workspace_root=self.root,
+            model_summarizer=self._reflection_summarizer() if self.reflect_mode == "model" else None,
         )
         stored = [self.memory.durable_store.store.append_procedural(record) for record in records]
         self.session["memory"] = self.memory.to_dict()
@@ -1202,6 +1230,8 @@ class Moss:
             "redacted_env": self.detected_secret_env_summary(),
             # 回放跑出来的 run 必须能一眼看出来，否则它会被当成一次真实运行去下结论。
             "replay": self.replay_summary(),
+            # aux 路由用了几次、降级过没有。评测按它切片，不并进主 run 的成败。
+            "model_routing": self.model_router.summary(),
         }
 
     def replay_summary(self):
@@ -1624,9 +1654,19 @@ class Moss:
         self.history_reduction_streak = 0
         return artifact
 
-    def aux_model_client(self):
-        """给 compaction 模型模式用的辅助后端。默认就用主后端。"""
-        return getattr(self, "_aux_model_client", None) or self.model_client
+    def aux_model_client(self, task_kind="compaction"):
+        """给某一类脏活挑后端。没配 aux 就是主后端（行为不变）。
+
+        返回的是绑定了 task_kind 的门面：调用时才决定后端，aux 失败自动回落。
+        """
+        return self.model_router.bind(task_kind)
+
+    def _note_model_route(self, record):
+        """把一次路由决定写进 trace。没有活跃 run 时静默丢弃。"""
+        task_state = getattr(self, "current_task_state", None)
+        if task_state is None:
+            return None
+        return self.emit_trace(task_state, trace_events.MODEL_ROUTED, dict(record))
 
     def offload_request(self, user_message):
         """当前请求本身就装不下时，把它落盘并换成摘要 + 指针。

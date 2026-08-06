@@ -199,6 +199,29 @@ def _build_model_client(args):
     )
 
 
+def _build_aux_model_client(args):
+    """按 `--aux-provider` / `--aux-model` 装配脏活后端。
+
+    两个都不给就返回 None，路由器把所有脏活回落主模型——那是消融基线，
+    行为与加路由前逐字节一致。
+    """
+    aux_model = getattr(args, "aux_model", None)
+    aux_provider = getattr(args, "aux_provider", None)
+    if not aux_model and not aux_provider:
+        return None
+    # 复用主 client 的装配路径：provider 选择、base URL、key 回落的规则只有一份。
+    aux_args = argparse.Namespace(**vars(args))
+    aux_args.provider = aux_provider or _effective_provider(args)
+    aux_args.model = aux_model
+    # aux 的 base_url 不该继承主 provider 的：换了 provider 还指着老 endpoint 必定 404。
+    if aux_provider and aux_provider != _effective_provider(args):
+        aux_args.base_url = None
+    # 录制回放只包主线。脏活的输出不进主线 history，录进磁带只会污染指纹。
+    aux_args.record = None
+    aux_args.replay = None
+    return _build_model_client(aux_args)
+
+
 def _wrap_cassette_client(model, args, workspace, secret_env_names):
     """按 `--record` / `--replay` 把真实 client 包成录制或回放 client。
 
@@ -466,6 +489,7 @@ def build_agent(args):
     configured_secret_names = _configured_secret_names(args)
     store = SessionStore(workspace.repo_root + "/.moss/sessions")
     model = _wrap_cassette_client(_build_model_client(args), args, workspace, configured_secret_names)
+    aux_model = _build_aux_model_client(args)
     session_id = args.resume
     if session_id == "latest":
         session_id = store.latest()
@@ -502,6 +526,7 @@ def build_agent(args):
             context_mode=context_mode,
             reflect_mode=getattr(args, "reflect", "rule"),
             compaction_mode=getattr(args, "compaction", "off"),
+            aux_model_client=aux_model,
         )
     return Moss(
         model_client=model,
@@ -523,6 +548,7 @@ def build_agent(args):
         context_mode=context_mode,
         reflect_mode=getattr(args, "reflect", "rule"),
         compaction_mode=getattr(args, "compaction", "off"),
+        aux_model_client=aux_model,
     )
 
 
@@ -654,6 +680,19 @@ def build_arg_parser():
         choices=("off", "rule", "model"),
         default="rule",
         help="Distill procedural memory at run completion; model uses an aux summarizer when available.",
+    )
+    # 多模型路由：compaction 摘要、失败分类、记忆提炼这些脏活不需要主力模型，
+    # 但调用次数可能比主线还多。两个都不给 = 全部回落主模型，行为不变。
+    parser.add_argument(
+        "--aux-model",
+        default=None,
+        help="Cheap model for aux tasks (compaction, reflection, judging). Falls back to the main model.",
+    )
+    parser.add_argument(
+        "--aux-provider",
+        choices=PROVIDER_CHOICES,
+        default=None,
+        help="Provider for the aux model; defaults to the main provider.",
     )
     # 确定性录制回放。录一次真实轨迹，之后离线、零成本、逐字节可复现地重跑。
     parser.add_argument(
