@@ -1,0 +1,57 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "multi_file",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "minutes",
+  "prompt": "feat(eval): add statistical claim gates",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:54:08.509158+00:00",
+    "mined_from_commit": "ee99bf9bb33d44d0526f1fa13e3864e1ecce3c88"
+  },
+  "raw_prompt": "feat(eval): add statistical claim gates",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-ee99bf9-feat-eval-add-statistical-claim-gates",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_report_render.py",
+      "tests/test_stats.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_report_render.py",
+    "tests/test_stats.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:b3362947cdc5f639148f27f978d833f19c52a8a0bbc609576f1966123e89f1c5",
+    "base_commit": "bc67eaa39d4f6ffe4d4d55ed046a0baf763e22e6",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_report_render.py",
+      "tests/test_stats.py"
+    ]
+  }
+}

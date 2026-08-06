@@ -1,0 +1,54 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "multi_file",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "minutes",
+  "prompt": "feat(context): token 估算按 provider 在线自校准",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:57:00.245996+00:00",
+    "mined_from_commit": "318422c6998e7ffa977388c660fb63a225381604"
+  },
+  "raw_prompt": "feat(context): token 估算按 provider 在线自校准",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-318422c-feat-context-token-provider",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_token_calibration.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_token_calibration.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:987fcf7cca353cbee4ab4060c0e418d1187399742e85bf0eeb5f6ef5b10c7be6",
+    "base_commit": "f15ab6871d26a3d339f45342a485ad6ee89e4dbd",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_token_calibration.py"
+    ]
+  }
+}

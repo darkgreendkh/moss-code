@@ -1,0 +1,54 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "needs_iteration",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "hours",
+  "prompt": "feat(runs): 动作意图/回执 + 崩溃后对账",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:55:13.494481+00:00",
+    "mined_from_commit": "5d64992f7ccc3fc190b0a55c621a039ba4ae8be8"
+  },
+  "raw_prompt": "feat(runs): 动作意图/回执 + 崩溃后对账",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-5d64992-feat-runs",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_action_receipt.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_action_receipt.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:accd8930d81fc683ddeab0fee897a08750883d2b226f0c12bc82f570ef8596ca",
+    "base_commit": "312674a1124828f56915b400cd7199281bf10a38",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_action_receipt.py"
+    ]
+  }
+}

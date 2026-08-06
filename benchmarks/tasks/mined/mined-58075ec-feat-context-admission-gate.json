@@ -1,0 +1,54 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "needs_iteration",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "hours",
+  "prompt": "feat(context): 超预算就不许发 —— admission gate",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:57:20.043179+00:00",
+    "mined_from_commit": "58075ec15b3836b713934a059975e44e24f87b90"
+  },
+  "raw_prompt": "feat(context): 超预算就不许发 —— admission gate",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-58075ec-feat-context-admission-gate",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_admission_gate.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_admission_gate.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:36c39570a4b28690bf270d77bdb94ee3bc3bbf172431ff98836e1a9fa25abffb",
+    "base_commit": "b8e451ea18bdb0f6fae236a29bd7e68f3dbaec91",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_admission_gate.py"
+    ]
+  }
+}

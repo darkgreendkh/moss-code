@@ -1,0 +1,4 @@
+{"commit": "ea8387a17b35e2cb2e8ad7b243ca998330cbf101", "details": "1", "reason": "commit_failed"}
+{"commit": "0c1afb63e88a29bbb3d3e06e3402171a18bcafa4", "details": "", "reason": "missing_source_or_test"}
+{"commit": "c1efce1c35a58de0b3de91e290e9b94175bac1e1", "details": "", "reason": "parent_passed"}
+{"commit": "c256798485ed30e45918abd3fd1ad319cee7cf35", "details": "", "reason": "missing_source_or_test"}

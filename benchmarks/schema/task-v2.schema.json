@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://moss.local/schema/task-v2.schema.json",
+  "title": "Moss evaluation task v2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "task_id",
+    "suite",
+    "eval_level",
+    "prompt",
+    "workspace",
+    "visible_tests",
+    "hidden_tests",
+    "verifier",
+    "allowed_tools",
+    "budgets",
+    "difficulty",
+    "human_time_bucket",
+    "provenance",
+    "rubric"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "task_id": {"type": "string", "minLength": 1},
+    "suite": {
+      "enum": ["contract-smoke", "coding-mined", "memory", "context", "recovery", "adversarial"]
+    },
+    "eval_level": {"enum": ["L1", "L2", "L3"]},
+    "prompt": {"type": "string", "minLength": 1},
+    "raw_prompt": {"type": "string"},
+    "workspace": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["fixture", "git_archive"]},
+        "path": {"type": "string"},
+        "base_commit": {"type": "string"},
+        "overlay_paths": {"type": "array", "items": {"type": "string"}},
+        "archive_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "visible_tests": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "hidden_tests": {"type": "array", "items": {"type": "string"}},
+    "verifier": {
+      "type": "object",
+      "required": ["argv", "cwd", "clean_env", "timeout_s", "network"],
+      "properties": {
+        "argv": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "cwd": {"type": "string"},
+        "clean_env": {"type": "boolean"},
+        "timeout_s": {"type": "number", "exclusiveMinimum": 0},
+        "network": {"enum": ["deny", "allow"]}
+      }
+    },
+    "allowed_tools": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "budgets": {
+      "type": "object",
+      "required": ["step_budget"],
+      "properties": {
+        "step_budget": {"type": "integer", "minimum": 1},
+        "max_usd": {"type": ["number", "null"]},
+        "max_seconds": {"type": ["number", "null"]},
+        "max_tokens": {"type": ["integer", "null"]}
+      }
+    },
+    "difficulty": {"enum": ["single_file", "multi_file", "needs_iteration"]},
+    "human_time_bucket": {"enum": ["minutes", "hours"]},
+    "provenance": {
+      "type": "object",
+      "required": ["mined_from_commit", "mined_at", "min_model_cutoff", "contamination_status"],
+      "properties": {
+        "mined_from_commit": {"type": "string"},
+        "mined_at": {"type": "string"},
+        "min_model_cutoff": {"type": "string"},
+        "contamination_status": {"type": "string"}
+      }
+    },
+    "rubric": {"type": ["object", "array", "null"]},
+    "status": {"enum": ["draft", "active", "quarantine"]}
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "multi_file",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "minutes",
+  "prompt": "feat(eval): account for cost and latency",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:54:04.605361+00:00",
+    "mined_from_commit": "d3c8dd4918e205b06d6bc21520827ac074449e65"
+  },
+  "raw_prompt": "feat(eval): account for cost and latency",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-d3c8dd4-feat-eval-account-for-cost-and-latency",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_pricing.py",
+      "tests/test_report_render.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_pricing.py",
+    "tests/test_report_render.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:0410edb253ed134d10cce5c8b736539839ec779b45c94fa4a9aecb1d4a6f956f",
+    "base_commit": "23eef923d8e32155abbbfc32ff1ba6d2bd89627f",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_pricing.py",
+      "tests/test_report_render.py"
+    ]
+  }
+}

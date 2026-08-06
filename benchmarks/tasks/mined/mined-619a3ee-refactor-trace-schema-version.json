@@ -1,0 +1,54 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "needs_iteration",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "hours",
+  "prompt": "refactor(trace): 事件名全部常量化 + 每条事件带 schema_version",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:55:27.869343+00:00",
+    "mined_from_commit": "619a3ee5777370606662a091e33630f28a155b9b"
+  },
+  "raw_prompt": "refactor(trace): 事件名全部常量化 + 每条事件带 schema_version",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-619a3ee-refactor-trace-schema-version",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_trace_events.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_trace_events.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:a4f3940fccdd09d99a352db4e69008a0ca5eb827e72b09f78189a35660b7be5f",
+    "base_commit": "976f8a25d4186ca544dafa08fafd24e983d87dae",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_trace_events.py"
+    ]
+  }
+}

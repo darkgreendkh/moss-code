@@ -1,0 +1,54 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "multi_file",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "minutes",
+  "prompt": "feat(context): 预算按模型窗口推导，不再写死 12000",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:56:52.825726+00:00",
+    "mined_from_commit": "9607aee71f87a1cf2c9e846cb5834bba8ae606b9"
+  },
+  "raw_prompt": "feat(context): 预算按模型窗口推导，不再写死 12000",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-9607aee-feat-context-12000",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_moss.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_moss.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:5938a93eb77e04b2d92dea9b2bce5346b07b33074b8adc885f887c20f097be28",
+    "base_commit": "d7a1516a5049d33d5dca591c52e911022bf4435c",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_moss.py"
+    ]
+  }
+}

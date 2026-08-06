@@ -1,0 +1,60 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "multi_file",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "minutes",
+  "prompt": "feat(runs): run 租约，不再把别人正在跑的 run 判死",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:55:59.239582+00:00",
+    "mined_from_commit": "05d77399dd8a7487034f664f075bb36fa8488a54"
+  },
+  "raw_prompt": "feat(runs): run 租约，不再把别人正在跑的 run 判死",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-05d7739-feat-runs-run-run",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_checkpoint.py",
+      "tests/test_lease.py",
+      "tests/test_run_store.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_checkpoint.py",
+    "tests/test_lease.py",
+    "tests/test_run_store.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:935a9a3e23148a09f0e7316a37fe1cf2bdc34ae5b61d0c927c27df61426be18e",
+    "base_commit": "c1efce1c35a58de0b3de91e290e9b94175bac1e1",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_checkpoint.py",
+      "tests/test_lease.py",
+      "tests/test_run_store.py"
+    ]
+  }
+}

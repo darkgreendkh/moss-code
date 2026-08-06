@@ -1,0 +1,54 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "multi_file",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "minutes",
+  "prompt": "feat(context): 按工具类型压缩输出，保住失败原因",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:57:02.206865+00:00",
+    "mined_from_commit": "f15ab6871d26a3d339f45342a485ad6ee89e4dbd"
+  },
+  "raw_prompt": "feat(context): 按工具类型压缩输出，保住失败原因",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-f15ab68-feat-context",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_output_compressors.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_output_compressors.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:bc8edadbbf3f8a5f860390c04dd53b9fa0a354c0f080d1e9049057f768cb53a9",
+    "base_commit": "bbb8ce7cb1cb7e57bd02853cd87640de5336558c",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_output_compressors.py"
+    ]
+  }
+}

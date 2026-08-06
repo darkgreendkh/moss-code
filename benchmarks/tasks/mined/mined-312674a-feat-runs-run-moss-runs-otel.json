@@ -1,0 +1,57 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "needs_iteration",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "hours",
+  "prompt": "feat(runs): run 索引 + 保留策略 + moss runs 子命令（含 OTel 导出）",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:55:24.695889+00:00",
+    "mined_from_commit": "312674a1124828f56915b400cd7199281bf10a38"
+  },
+  "raw_prompt": "feat(runs): run 索引 + 保留策略 + moss runs 子命令（含 OTel 导出）",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-312674a-feat-runs-run-moss-runs-otel",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_run_index.py",
+      "tests/test_runs_cli.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_run_index.py",
+    "tests/test_runs_cli.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:18dbaeb46737f00a7bb3286beac269b628b6f42ce6378638f7e4aa5092735a2c",
+    "base_commit": "619a3ee5777370606662a091e33630f28a155b9b",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_run_index.py",
+      "tests/test_runs_cli.py"
+    ]
+  }
+}

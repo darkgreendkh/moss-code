@@ -1,0 +1,54 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "multi_file",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "minutes",
+  "prompt": "feat(resume): --explain / --resume-parts / --fork",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:55:08.247669+00:00",
+    "mined_from_commit": "1abc13acd868e2c4364bf5734faf1c8407e207c7"
+  },
+  "raw_prompt": "feat(resume): --explain / --resume-parts / --fork",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-1abc13a-feat-resume-explain-resume-parts-fork",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_resume_explain.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_resume_explain.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:8d141ca0dffbfbf79c2b3f0210ea434cf91e3c8392aefcd1983cbd4b337159b5",
+    "base_commit": "5d64992f7ccc3fc190b0a55c621a039ba4ae8be8",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_resume_explain.py"
+    ]
+  }
+}

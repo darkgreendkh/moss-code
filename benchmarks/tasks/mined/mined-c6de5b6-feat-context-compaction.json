@@ -1,0 +1,54 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "multi_file",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "minutes",
+  "prompt": "feat(context): compaction 模型模式，且不许它编造",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:56:11.229570+00:00",
+    "mined_from_commit": "c6de5b670618f702a7c6ba86d4d8f1aaedd76fd1"
+  },
+  "raw_prompt": "feat(context): compaction 模型模式，且不许它编造",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-c6de5b6-feat-context-compaction",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_compaction.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_compaction.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:1badeca475a464fc60436b5cd951a75515d4a778099d8e77e6aaf77fc763a282",
+    "base_commit": "79fc8e893c8262c45fbff0208efaac87402e39de",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_compaction.py"
+    ]
+  }
+}

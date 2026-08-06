@@ -1,0 +1,57 @@
+{
+  "allowed_tools": [
+    "list_files",
+    "read_file",
+    "edit_file",
+    "run_shell"
+  ],
+  "budgets": {
+    "max_seconds": 300,
+    "max_usd": 0.3,
+    "step_budget": 12
+  },
+  "difficulty": "multi_file",
+  "eval_level": "L2",
+  "hidden_tests": [],
+  "human_time_bucket": "minutes",
+  "prompt": "perf(runs): trace 序号与哈希链 O(1)",
+  "provenance": {
+    "contamination_status": "private",
+    "min_model_cutoff": "2026-05",
+    "mined_at": "2026-08-06T05:55:55.266474+00:00",
+    "mined_from_commit": "b37ad19c7dedebbaa3d79d4f7c63c1cc8aca4700"
+  },
+  "raw_prompt": "perf(runs): trace 序号与哈希链 O(1)",
+  "rubric": null,
+  "schema_version": 2,
+  "status": "draft",
+  "suite": "coding-mined",
+  "task_id": "mined-b37ad19-perf-runs-trace-o-1",
+  "verifier": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_atomic_io.py",
+      "tests/test_trace_sequence.py"
+    ],
+    "clean_env": true,
+    "cwd": ".",
+    "network": "deny",
+    "timeout_s": 120.0
+  },
+  "visible_tests": [
+    "tests/test_atomic_io.py",
+    "tests/test_trace_sequence.py"
+  ],
+  "workspace": {
+    "archive_sha256": "sha256:9f786d482645cd36c1da7efa2b19040738d06dbd773823a0a445e7c8344b9ed3",
+    "base_commit": "05d77399dd8a7487034f664f075bb36fa8488a54",
+    "kind": "git_archive",
+    "overlay_paths": [
+      "tests/test_atomic_io.py",
+      "tests/test_trace_sequence.py"
+    ]
+  }
+}
