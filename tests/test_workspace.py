@@ -1,6 +1,6 @@
 import subprocess
 
-from moss.workspace import (
+from moss.context.repository.workspace import (
     WORKSPACE_FINGERPRINT_VERSION,
     WorkspaceContext,
     capture_snapshot,

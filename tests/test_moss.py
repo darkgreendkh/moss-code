@@ -16,9 +16,9 @@ from moss import (
     WorkspaceContext,
     build_welcome,
 )
-from moss.model_request import Block, Message, ModelRequest
+from moss.context.model_request import Block, Message, ModelRequest
 from moss.tool_executor import approval_summary
-from moss.workspace import WORKSPACE_FINGERPRINT_VERSION
+from moss.context.repository.workspace import WORKSPACE_FINGERPRINT_VERSION
 
 
 def build_workspace(tmp_path):
@@ -2164,7 +2164,7 @@ def test_recent_transcript_entries_stay_richer_than_older_ones(tmp_path):
     （见 test_context_manager_keeps_history_verbatim_while_the_budget_has_room），
     所以这里显式勒紧 history 段。
     """
-    from moss.context_manager import ContextManager
+    from moss.context.manager import ContextManager
 
     agent = build_agent(tmp_path, ["<final>Done.</final>"])
     agent.context_manager = ContextManager(

@@ -6,8 +6,8 @@ import textwrap
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 
-from .clock import now
-from .skills import _one_line, render_skill_lines
+from ..clock import now
+from ..skills import _one_line, render_skill_lines
 from .token_budget import estimate_tokens
 
 PROMPT_VERSION = "p1"

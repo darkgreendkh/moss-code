@@ -5,8 +5,8 @@ import subprocess
 
 import pytest
 
-from moss.ignore import IgnoreRules
-from moss.workspace import capture_snapshot, diff_snapshots
+from moss.context.repository.ignore import IgnoreRules
+from moss.context.repository.workspace import capture_snapshot, diff_snapshots
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
 

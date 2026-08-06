@@ -2,7 +2,7 @@ from pathlib import Path
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
 from moss.skills import build_skill_registry, parse_skill_file
-from moss.prompt_prefix import skill_signature
+from moss.context.prefix import skill_signature
 
 
 def _write_skill(root, name, description, body):
@@ -149,7 +149,7 @@ def test_frontmatter_parses_list_fields(tmp_path):
 
 def test_twenty_skills_cost_under_four_hundred_prefix_tokens(tmp_path):
     """spec-09 §9.4 验收：稳定前缀不能随 skill 数量线性膨胀。"""
-    from moss.token_budget import estimate_tokens
+    from moss.context.token_budget import estimate_tokens
 
     for index in range(20):
         _write_rich_skill(

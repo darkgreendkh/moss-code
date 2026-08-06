@@ -4,7 +4,7 @@ from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
 
 
 def test_flatten_joins_system_and_message_blocks_in_stable_order():
-    model_request = importlib.import_module("moss.model_request")
+    model_request = importlib.import_module("moss.context.model_request")
     request = model_request.ModelRequest(
         system=(
             model_request.Block("IDENTITY", kind="identity"),

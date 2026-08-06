@@ -24,7 +24,7 @@ DEFAULT_EXPORTED_TOOLS = ("list_files", "read_file", "search_text")
 
 
 def _json_schema(tool):
-    from ..prompt_prefix import _schema_payload
+    from ..context.prefix import _schema_payload
 
     properties, required = {}, []
     type_map = {"str": "string", "int": "integer", "list": "array"}

@@ -14,7 +14,7 @@ from moss.delegation import (
     Finding,
     parse_delegate_output,
 )
-from moss.token_budget import estimate_tokens
+from moss.context.token_budget import estimate_tokens
 
 
 def _agent(tmp_path, outputs, **kwargs):

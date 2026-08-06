@@ -15,7 +15,7 @@ from ..runtime import Moss, SessionStore
 from ..tools import legal_tool_names
 # 事件名一律走常量：字面量写错不会报错，只会让某个指标悄悄变成 0。
 from ..runs.observability import events as trace_events
-from ..workspace import WorkspaceContext
+from ..context.repository.workspace import WorkspaceContext
 
 METRICS_SCHEMA_VERSION = 2
 DEFAULT_HARNESS_REGRESSION_V2_PATH = Path("artifacts/harness-regression-v2.json")

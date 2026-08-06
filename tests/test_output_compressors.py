@@ -4,8 +4,9 @@
 哪几行是下一步决策真正依赖的？测试守的就是那几行不能被切掉。
 """
 
-from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext, output_compressors
-from moss.output_compressors import compress, detect_kind, register, registered_kinds
+from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
+from moss.context import compressors as output_compressors
+from moss.context.compressors import compress, detect_kind, register, registered_kinds
 from moss.task_state import TaskState
 from moss.tool_executor import prepare_tool_output
 

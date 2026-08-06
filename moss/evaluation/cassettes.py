@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..prompt_prefix import PROMPT_VERSION
+from ..context.prefix import PROMPT_VERSION
 from ..providers.recording import Cassette, ReplayModelClient
 
 CASSETTE_SUBDIR = Path("benchmarks") / "cassettes"

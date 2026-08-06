@@ -230,18 +230,18 @@ git commit -m "refactor(packages): group memory and run persistence"
 - Produces: `moss.context.manager.ContextManager`, `moss.context.model_request.ModelRequest`, `moss.context.prefix.PromptPrefix`, and `moss.context.repository.workspace.WorkspaceContext`.
 - Preserves: prompt block order, native tool-call grouping, cache keys, token budgets, workspace fingerprints and repo-map cache schema.
 
-- [ ] **Step 1: Move repository-context leaf modules and update imports**
-- [ ] **Step 2: Run workspace/repo-map/retrieval tests**
+- [x] **Step 1: Move repository-context leaf modules and update imports**
+- [x] **Step 2: Run workspace/repo-map/retrieval tests**
 
 Run: `uv run --with pytest python -m pytest tests/ -q -k "workspace or repo_map or ignore or retrieval"`
 
-- [ ] **Step 3: Move prompt/context modules and update imports**
-- [ ] **Step 4: Run prompt, cache, native protocol and compaction tests**
+- [x] **Step 3: Move prompt/context modules and update imports**
+- [x] **Step 4: Run prompt, cache, native protocol and compaction tests**
 
-Run: `uv run --with pytest python -m pytest tests/test_context_manager.py tests/test_prompt_prefix.py tests/test_prompt_cache_runtime.py tests/test_tool_protocol.py tests/test_compaction.py -q`
+Run: `uv run --with pytest python -m pytest tests/test_context_manager.py tests/test_prompt_prefix.py tests/test_cache_stability.py tests/test_tool_protocol.py tests/test_compaction.py -q`
 
-- [ ] **Step 5: Update `moss/__init__.py` so `WorkspaceContext` still imports from `moss`**
-- [ ] **Step 6: Run full tests and lint, then commit**
+- [x] **Step 5: Update `moss/__init__.py` so `WorkspaceContext` still imports from `moss`**
+- [x] **Step 6: Run full tests and lint, then commit**
 
 ```bash
 uv run --with pytest python -m pytest tests/ -q

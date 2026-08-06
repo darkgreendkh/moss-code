@@ -6,8 +6,8 @@ import uuid
 from . import ledger as action_ledger
 from ..clock import now
 from ..memory import service as memorylib
-from ..token_budget import clip
-from ..workspace import WORKSPACE_FINGERPRINT_VERSION
+from ..context.token_budget import clip
+from ..context.repository.workspace import WORKSPACE_FINGERPRINT_VERSION
 
 # 每执行一步工具就会生成一个 checkpoint，且它们全都存在 session JSON 里、
 # 每次保存都整份重写。不设上限的话，一个长期的 REPL 会话里 checkpoint 会无限

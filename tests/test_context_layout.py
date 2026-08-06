@@ -5,7 +5,7 @@
 """
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.context_manager import (
+from moss.context.manager import (
     CONSTRAINTS_SECTION,
     DEFAULT_REDUCTION_ORDER,
     SECTION_ORDER,

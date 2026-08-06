@@ -5,7 +5,7 @@
 """
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.token_budget import (
+from moss.context.token_budget import (
     CALIBRATION_MIN_SAMPLES,
     CALIBRATION_SAMPLE_LIMIT,
     Calibration,

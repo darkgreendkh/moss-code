@@ -17,7 +17,7 @@ from functools import partial
 from . import atomic_io
 from . import sandbox
 from . import shell_policy
-from .workspace import IGNORED_PATH_NAMES
+from .context.repository.workspace import IGNORED_PATH_NAMES
 
 
 @dataclass(frozen=True)
@@ -281,7 +281,7 @@ def _context_mcp_tools(context):
 
 
 def _context_catalog_threshold(context):
-    from .prompt_prefix import TOOL_CATALOG_THRESHOLD
+    from .context.prefix import TOOL_CATALOG_THRESHOLD
 
     return int(getattr(context, "catalog_threshold", TOOL_CATALOG_THRESHOLD) or TOOL_CATALOG_THRESHOLD)
 
@@ -889,7 +889,7 @@ def tool_describe_tool(context, args):
     tool = (getattr(context, "tool_registry", lambda: {})() or {}).get(name)
     if tool is None:
         raise ValueError(f"unknown tool: {name}")
-    from .prompt_prefix import render_tool_schema
+    from .context.prefix import render_tool_schema
 
     risk = "approval required" if tool["risky"] else "safe"
     return "\n".join(

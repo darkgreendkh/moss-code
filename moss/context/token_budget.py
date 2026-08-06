@@ -21,7 +21,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .clock import now
+from ..clock import now
 
 # CJK 及全角区段：这些字符在主流分词里通常 1 字符 >= 1 token。
 _CJK_RANGES = (

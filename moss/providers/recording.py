@@ -245,7 +245,7 @@ class RecordingModelClient(_ClientFacade):
     def complete(self, prompt, max_new_tokens, **kwargs):
         # 兼容仍在走裸 complete() 的调用点。这条路径拿不到结构化请求，
         # 所以指纹退化成对整段 prompt 取值——录出来的磁带仍然可回放。
-        from ..model_request import Block, Message, ModelRequest
+        from ..context.model_request import Block, Message, ModelRequest
 
         request = ModelRequest(
             messages=(Message(role="user", blocks=(Block(text=str(prompt), kind="request"),)),),
@@ -359,7 +359,7 @@ class ReplayModelClient(_ClientFacade):
         return entry.get("response")
 
     def complete(self, prompt, max_new_tokens, **kwargs):
-        from ..model_request import Block, Message, ModelRequest
+        from ..context.model_request import Block, Message, ModelRequest
 
         request = ModelRequest(
             messages=(Message(role="user", blocks=(Block(text=str(prompt), kind="request"),)),),

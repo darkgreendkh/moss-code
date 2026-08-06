@@ -20,8 +20,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .clock import now
-from .token_budget import estimate_tokens
+from ...clock import now
+from ..token_budget import estimate_tokens
 
 # 缓存里的 schema 版本。改了抽取口径或渲染格式就必须改它，
 # 否则老缓存会被当成有效结果直接返回。

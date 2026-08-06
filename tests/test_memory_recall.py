@@ -1,7 +1,7 @@
 import math
 
 from moss.memory.service import LayeredMemory, _tokenize
-from moss.retrieval import BM25Index
+from moss.context.repository.retrieval import BM25Index
 
 
 def _dcg(ranked_ids, relevant_id, limit=3):

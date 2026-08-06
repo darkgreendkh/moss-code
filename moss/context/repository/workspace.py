@@ -12,8 +12,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import project_config_section
-from .token_budget import clip
+from ...config import project_config_section
+from ..token_budget import clip
 
 # 这些文件最可能直接影响 agent 的行动方式。
 # 我们不会预加载整个仓库，只会先给模型一小份“导航包”。

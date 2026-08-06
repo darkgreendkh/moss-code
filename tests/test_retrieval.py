@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from moss.memory.service import _tokenize
-from moss.retrieval import BM25Index
+from moss.context.repository.retrieval import BM25Index
 
 
 def test_bm25_prefers_concise_match_over_long_keyword_stuffing():

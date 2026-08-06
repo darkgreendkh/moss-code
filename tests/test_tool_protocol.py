@@ -2,7 +2,7 @@ import json
 from unittest.mock import patch
 
 from moss import Moss, SessionStore, WorkspaceContext
-from moss.model_request import Block, Message, ModelRequest
+from moss.context.model_request import Block, Message, ModelRequest
 from moss.output_parser import parse_model_actions
 from moss.providers.clients import (
     AnthropicCompatibleModelClient,

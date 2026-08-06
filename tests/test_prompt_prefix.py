@@ -1,9 +1,9 @@
 import hashlib
 
-import moss.prompt_prefix as prompt_module
-from moss.prompt_prefix import build_prompt_prefix, tool_signature
+import moss.context.prefix as prompt_module
+from moss.context.prefix import build_prompt_prefix, tool_signature
 from moss.tools import ToolField, build_tool_registry
-from moss.workspace import WorkspaceContext
+from moss.context.repository.workspace import WorkspaceContext
 
 
 def _workspace(status, **overrides):

@@ -1,5 +1,5 @@
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.context_manager import ContextManager
+from moss.context.manager import ContextManager
 
 
 def transcript_of(prompt):

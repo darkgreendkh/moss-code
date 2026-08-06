@@ -1,8 +1,8 @@
 """仓库地图（spec-01 §4.1）的行为测试。"""
 
-from moss import repo_map as repo_maplib
-from moss.ignore import IgnoreRules
-from moss.repo_map import (
+from moss.context.repository import repo_map as repo_maplib
+from moss.context.repository.ignore import IgnoreRules
+from moss.context.repository.repo_map import (
     build_repo_map,
     compute_cache_key,
     extract_symbols,
@@ -11,7 +11,7 @@ from moss.repo_map import (
     render_repo_map,
     tokenize,
 )
-from moss.token_budget import estimate_tokens
+from moss.context.token_budget import estimate_tokens
 
 
 def _sample_repo(tmp_path):

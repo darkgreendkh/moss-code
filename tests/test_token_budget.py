@@ -1,4 +1,4 @@
-from moss.token_budget import MAX_TOOL_OUTPUT, clip, clip_to_budget, estimate_tokens, middle
+from moss.context.token_budget import MAX_TOOL_OUTPUT, clip, clip_to_budget, estimate_tokens, middle
 
 
 def test_estimate_tokens_counts_cjk_denser_than_latin():

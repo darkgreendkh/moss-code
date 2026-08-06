@@ -13,7 +13,7 @@ from .providers.capabilities import probe
 from . import hooks as hookslib
 from .runs.observability import events as trace_events
 from .task_state import STATUS_RUNNING, TaskState
-from .token_budget import clip, estimate_tokens
+from .context.token_budget import clip, estimate_tokens
 
 # 并发只读工具的上限。固定 4：再多也受限于磁盘和后端延迟，
 # 而线程数越多，出问题时越难复现。

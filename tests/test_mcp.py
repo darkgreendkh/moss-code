@@ -19,8 +19,8 @@ from moss.mcp.registry import (
     mcp_tool_name,
 )
 from moss.mcp.server import MossMcpServer
-from moss.prompt_prefix import build_prompt_prefix, render_tool_lines
-from moss.token_budget import estimate_tokens
+from moss.context.prefix import build_prompt_prefix, render_tool_lines
+from moss.context.token_budget import estimate_tokens
 
 
 class _FakeTransport:

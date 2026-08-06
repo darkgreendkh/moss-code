@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from moss.ignore import IgnoreRules, matches_any_glob, parse_exclude_globs
+from moss.context.repository.ignore import IgnoreRules, matches_any_glob, parse_exclude_globs
 
 
 def _rules(*patterns):

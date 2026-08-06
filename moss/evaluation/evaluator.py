@@ -16,7 +16,7 @@ from ..runtime import Moss, SessionStore
 from ..runs.store import RunStore
 from ..task_state import STOP_REASON_FINAL_ANSWER_RETURNED
 from ..tools import legal_tool_names
-from ..workspace import WORKSPACE_FINGERPRINT_VERSION, WorkspaceContext
+from ..context.repository.workspace import WORKSPACE_FINGERPRINT_VERSION, WorkspaceContext
 from . import cassettes
 from .verifier import run_verification
 

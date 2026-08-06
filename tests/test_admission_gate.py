@@ -8,7 +8,7 @@
 import io
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.context_manager import ContextManager
+from moss.context.manager import ContextManager
 from moss.task_state import STATUS_FAILED, STOP_REASON_CONTEXT_OVERFLOW
 
 

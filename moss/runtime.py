@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import atomic_io
 from .runs import checkpoint as checkpointlib
-from . import compaction as compactionlib
+from .context import compaction as compactionlib
 from . import delegation as delegationlib
 from . import code_mode as code_modelib
 from . import hooks as hookslib
@@ -26,10 +26,10 @@ from . import model_router as model_routerlib
 from .memory import service as memorylib
 from .memory.records import SourceRef
 from . import security as securitylib
-from .context_manager import ContextManager
-from .model_request import PromptBundle
+from .context.manager import ContextManager
+from .context.model_request import PromptBundle
 from .runs.checkpoint import CHECKPOINT_NONE_STATUS
-from .prompt_prefix import build_prompt_prefix, skill_signature, tool_signature
+from .context.prefix import build_prompt_prefix, skill_signature, tool_signature
 from .runs.store import RunStore
 from .runs import rewind as rewindlib
 from .runs.session import SessionStore
@@ -39,7 +39,7 @@ from .tool_context import ToolContext
 from .tool_executor import ToolExecutor, approval_summary
 from . import tools as toolkit
 from .clock import now
-from .token_budget import (
+from .context.token_budget import (
     MAX_HISTORY,
     TokenCalibrationStore,
     calibrated_measure,
@@ -47,15 +47,15 @@ from .token_budget import (
     estimate_tokens,
     exact_token_counter,
 )
-from . import ignore as ignorelib
-from . import repo_map as repo_maplib
+from .context.repository import ignore as ignorelib
+from .context.repository import repo_map as repo_maplib
 from . import budget as budgetlib
 from . import policy as policylib
 from . import sandbox as sandboxlib
 from . import stall as stalllib
 from .verification import is_verification_command
 from .runs.observability import events as trace_events
-from .workspace import (
+from .context.repository.workspace import (
     SnapshotResult,
     WorkspaceContext,
     capture_snapshot,

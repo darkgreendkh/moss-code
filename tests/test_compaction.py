@@ -8,7 +8,7 @@
 import json
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.compaction import (
+from moss.context.compaction import (
     COMPACTION_SCHEMA_VERSION,
     KEEP_RECENT_STEPS,
     compact,

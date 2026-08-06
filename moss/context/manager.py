@@ -16,7 +16,7 @@ import os
 from dataclasses import dataclass
 
 from .model_request import Block, CompactionArtifact, Message, ModelRequest, PromptBundle
-from .retrieval import BM25Index
+from .repository.retrieval import BM25Index
 from .token_budget import clip_to_budget, estimate_tokens
 
 

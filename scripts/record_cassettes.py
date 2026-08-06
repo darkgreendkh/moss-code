@@ -37,7 +37,7 @@ from moss.evaluation.evaluator import (  # noqa: E402
     BenchmarkEvaluator,
     _scripted_outputs_for_task,
 )
-from moss.prompt_prefix import PROMPT_VERSION  # noqa: E402
+from moss.context.prefix import PROMPT_VERSION  # noqa: E402
 from moss.providers.clients import FakeModelClient  # noqa: E402
 from moss.providers.recording import Cassette, RecordingModelClient  # noqa: E402
 
