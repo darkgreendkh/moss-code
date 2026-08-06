@@ -370,19 +370,19 @@ git commit -m "refactor(core): split cli tools and context rendering"
 - `ExtensionManager(agent)` owns skill activation, hooks, delegation, model routing, MCP and code mode.
 - `Moss` constructs these four objects and preserves existing public method signatures by one-line delegation.
 
-- [ ] **Step 1: Add characterization tests for each public facade cluster**
+- [x] **Step 1: Add characterization tests for each public facade cluster**
 
 Tests call `Moss` public methods, then assert the existing observable result: context metadata, tool receipt, run report, skill activation or delegate contract. They must not assert the private component object itself.
 
-- [ ] **Step 2: Extract `RunCoordinator` and make its characterization tests pass**
-- [ ] **Step 3: Extract `ContextService` and make its characterization tests pass**
-- [ ] **Step 4: Extract `ExecutionService` and make its characterization tests pass**
-- [ ] **Step 5: Extract `ExtensionManager` and make its characterization tests pass**
-- [ ] **Step 6: Assert `runtime.py` no longer owns implementation methods from the four clusters**
+- [x] **Step 2: Extract `RunCoordinator` and make its characterization tests pass**
+- [x] **Step 3: Extract `ContextService` and make its characterization tests pass**
+- [x] **Step 4: Extract `ExecutionService` and make its characterization tests pass**
+- [x] **Step 5: Extract `ExtensionManager` and make its characterization tests pass**
+- [x] **Step 6: Assert `runtime.py` no longer owns implementation methods from the four clusters**
 
 Use an AST test to cap `Moss` at the explicitly documented public facade methods; do not use a raw line-count assertion.
 
-- [ ] **Step 7: Run full tests and lint, then commit**
+- [x] **Step 7: Run full tests and lint, then commit**
 
 ```bash
 uv run --with pytest python -m pytest tests/ -q
