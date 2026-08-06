@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 
 from . import action_ledger
+from . import hooks as hookslib
 from . import output_compressors
 from .clock import now
 from .injection import scan as scan_for_injection
@@ -468,6 +469,22 @@ class ToolExecutor:
                 ),
             )
 
+        # pre_tool 是唯一能影响控制流的钩子。放在审批之前：被钩子拒掉的调用
+        # 不该先去打扰用户按一次 y。
+        hook = agent.fire_hook(hookslib.PRE_TOOL, {"tool": name, "args": args, "risky": tool["risky"]})
+        if hook.denied:
+            return ToolExecutionResult(
+                content=f"error: {name} was denied by the pre_tool hook: {hook.to_dict()['reason'] or 'exit code 2'}",
+                metadata=_metadata(
+                    "rejected",
+                    tool_error_code="hook_denied",
+                    security_event_type="hook_denied",
+                    risk_level=_risk_level_for(tool, name, args),
+                    read_only=_read_only_for(tool, name, args),
+                    extra=_extra_metadata_for(name, args),
+                ),
+            )
+
         receipt = _build_receipt(agent, name, args) if tool["risky"] else None
         if tool["risky"] and not agent.approve(name, args):
             return ToolExecutionResult(
@@ -573,6 +590,17 @@ class ToolExecutor:
             if not defer_side_effects:
                 agent.record_process_note_for_tool(name, metadata)
             self._emit_receipt(intent, metadata, started_at)
+            # post_tool 纯观察：它的退出码不改变任何东西（"写完必跑 ruff"这类
+            # 用法要的是副作用，不是否决权）。
+            agent.fire_hook(
+                hookslib.POST_TOOL,
+                {
+                    "tool": name,
+                    "args": args,
+                    "status": tool_status,
+                    "affected_paths": affected_paths,
+                },
+            )
             return ToolExecutionResult(content=content, metadata=metadata)
         except Exception as exc:
             after_snapshot = agent.capture_workspace_snapshot() if tool["risky"] else before_snapshot

@@ -19,6 +19,7 @@ from . import atomic_io
 from . import checkpoint as checkpointlib
 from . import compaction as compactionlib
 from . import delegation as delegationlib
+from . import hooks as hookslib
 from .mcp import registry as mcplib
 from . import model_router as model_routerlib
 from .features import memory as memorylib
@@ -223,6 +224,8 @@ class Moss:
         self.mcp_tools, self.mcp_clients, self.tool_catalog_threshold = mcplib.build_mcp_tools(
             self.root, on_error=lambda message: print(f"warning: {message}", file=sys.stderr)
         )
+        # 本 run 跑过的钩子。进 report，因为 pre_tool 的拒绝会改变控制流。
+        self.hook_outcomes = []
         # 当前点亮的 skill（use_skill 写入）。它的 allowed-tools 是**临时**覆盖：
         # 换 skill 或 run 结束即失效。落盘的"永久放开"会变成一个没人记得的后门。
         self.active_skill = None
@@ -773,6 +776,26 @@ class Moss:
         )
         return payload
 
+    def fire_hook(self, point, payload):
+        """跑一个用户钩子并落 trace。返回 HookOutcome，绝不抛异常。
+
+        payload 在这里过一次脱敏：钩子是用户的脚本，不是可信执行环境，
+        把原始 secret 递给它等于把脱敏边界往外挪了一格。
+        """
+        outcome = hookslib.run_hook(
+            self.root, point, self.redact_artifact(dict(payload or {})), env=self.shell_env()
+        )
+        if not outcome.ran:
+            return outcome
+        task_state = getattr(self, "current_task_state", None)
+        if task_state is not None:
+            event = trace_events.HOOK_DENIED if outcome.denied else trace_events.HOOK_RAN
+            self.emit_trace(task_state, event, outcome.to_dict())
+        if outcome.error:
+            print(f"warning: {point} hook: {outcome.error}", file=sys.stderr)
+        self.hook_outcomes.append(outcome.to_dict())
+        return outcome
+
     def note_replay_miss(self, record):
         """回放未命中：stderr 告警一次 + trace 记一条 `replay_miss`。
 
@@ -1241,6 +1264,8 @@ class Moss:
             "replay": self.replay_summary(),
             # aux 路由用了几次、降级过没有。评测按它切片，不并进主 run 的成败。
             "model_routing": self.model_router.summary(),
+            # 钩子跑过没有、拒过没有。pre_tool 的拒绝会改变控制流，必须留痕。
+            "hooks": list(self.hook_outcomes),
         }
 
     def replay_summary(self):

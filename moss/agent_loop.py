@@ -10,6 +10,7 @@ from .clock import now
 from .lease import LeaseHeartbeat
 from .output_parser import parse_model_actions, truncate_after_final
 from .providers.capabilities import probe
+from . import hooks as hookslib
 from . import trace_events
 from .task_state import STATUS_RUNNING, TaskState
 from .token_budget import clip, estimate_tokens
@@ -79,8 +80,24 @@ class AgentLoop:
             try:
                 self._stop_heartbeat()
                 self.agent.clear_pending_history()
+                self._fire_post_run()
             finally:
                 self.agent.end_run()
+
+    def _fire_post_run(self):
+        """post_run 挂在 finally 上：中断退出的 run 同样该触发它。"""
+        task_state = getattr(self.agent, "current_task_state", None)
+        if task_state is None:
+            return
+        self.agent.fire_hook(
+            hookslib.POST_RUN,
+            {
+                "run_id": task_state.run_id,
+                "status": task_state.status,
+                "stop_reason": task_state.stop_reason,
+                "tool_steps": task_state.tool_steps,
+            },
+        )
 
     def _start_heartbeat(self, task_state):
         """开一条后台续租线程，覆盖长模型调用/长工具期间的步间空档。"""
@@ -381,6 +398,9 @@ class AgentLoop:
                 continue
 
             final = (final_action.text or (raw if isinstance(raw, str) else "")).strip()
+            # pre_final 纯观察（"提交前跑一遍测试"这类用法要的是副作用）。
+            # 它不能否决收尾：唯一有否决权的钩子是 pre_tool。
+            agent.fire_hook(hookslib.PRE_FINAL, {"final_answer": final, "tool_steps": task_state.tool_steps})
             agent.record({"role": "assistant", "content": final, "created_at": now()})
             task_state.finish_success(final)
             agent.promote_durable_memory(user_message, final)

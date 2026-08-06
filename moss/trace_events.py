@@ -55,6 +55,11 @@ CONTEXT_OVERFLOW = "context_overflow"
 CONTEXT_COMPACTED = "context_compacted"
 REQUEST_OFFLOADED = "request_offloaded"
 
+# 用户钩子（spec-09 §9.5）。hook_denied 是唯一能改变控制流的钩子结果，
+# 所以它必须留痕：一次被悄悄拒掉的工具调用，表现是模型莫名其妙地绕圈。
+HOOK_RAN = "hook_ran"
+HOOK_DENIED = "hook_denied"
+
 # 多模型路由（spec-09 §9.7）。哪一类脏活被送去了哪个后端、为什么。
 MODEL_ROUTED = "model_routed"
 
@@ -110,6 +115,8 @@ __all__ = [
     "DELEGATE_SPAWNED",
     "DELEGATE_FINISHED",
     "MODEL_ROUTED",
+    "HOOK_RAN",
+    "HOOK_DENIED",
     "ALL_EVENTS",
 ]
 
