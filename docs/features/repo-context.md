@@ -1,6 +1,6 @@
 # 仓库上下文（repo context）
 
-> 代码：`moss/workspace.py` · `moss/repo_map.py` · `moss/ignore.py`
+> 代码：`moss/context/repository/workspace.py` · `moss/context/repository/repo_map.py` · `moss/context/repository/ignore.py`
 > 设计稿：[spec-01](../specs/spec-01-repo-context.md)
 
 模型看不见你的仓库。它只能看见 moss 每轮塞进 prompt 前缀的那几百个 token。
@@ -46,7 +46,7 @@ status 条目上限 20 条（`STATUS_ENTRY_LIMIT`）。超了只报计数，不�
 
 `find_nearest_instruction_docs` 只找 `AGENTS.md` / `CLAUDE.md`。
 它**不在 prefix 里一次性全塞进去**，而是在模型第一次碰到某个子目录时
-（由 `tool_executor` 触发）才注入那个目录的就近文档，记 `instruction_loaded`。
+（由 `ToolExecutor` 触发）才注入那个目录的就近文档，记 `instruction_loaded`。
 
 原因很直白：一个 monorepo 里可能有几十份 `AGENTS.md`。
 一次性全注入既装不下，也让模型分不清哪份跟当前的工作有关。
@@ -65,7 +65,7 @@ status 条目上限 20 条（`STATUS_ENTRY_LIMIT`）。超了只报计数，不�
 
 ## 3. repo map
 
-`repo_map.py` 生成"目录骨架 + 符号索引"，缓存在 `.moss/cache/repo_map.json`。
+`context/repository/repo_map.py` 生成"目录骨架 + 符号索引"，缓存在 `.moss/cache/repo_map.json`。
 
 | 维度 | 做法 |
 | --- | --- |
@@ -128,7 +128,7 @@ stdlib `ast` 覆盖了本项目最需要的 Python，其它语言用行首前缀
 
 ## 5. ignore 的边界（安全相关）
 
-`ignore.py` 是手写的 `.gitignore` 匹配器。快照与 repo map 共用同一套忽略口径。
+`context/repository/ignore.py` 是手写的 `.gitignore` 匹配器。快照与 repo map 共用同一套忽略口径。
 
 **安全判定绝不依赖它。** 路径是否越界由 `Moss.path()` 的 resolve + 前缀判定回答
 （见 [tool-safety.md](tool-safety.md#2-路径锚定)）。
@@ -151,11 +151,11 @@ docs: README.md, CLAUDE.md (preview…)
 
 ## Repo map
 moss/
-  agent_loop.py   AgentLoop.run, AgentLoop._execute_tool_batch, …
+  agent/loop.py   AgentLoop.run, AgentLoop._execute_tool_batch, …
   ...
 
 ## Likely relevant files
-moss/context_manager.py, moss/token_budget.py, …
+moss/context/manager.py, moss/context/token_budget.py, …
 ```
 
 这一整段属于 prefix，占总预算 35%（与稳定头共享）。

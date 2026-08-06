@@ -1,7 +1,7 @@
 # 主循环（agent loop）
 
-> 代码：`moss/agent_loop.py` · `moss/task_state.py` · `moss/output_parser.py` ·
-> `moss/stall.py` · `moss/budget.py` · `moss/verification.py`
+> 代码：`moss/agent/loop.py` · `moss/agent/state.py` · `moss/agent/output_parser.py` ·
+> `moss/agent/stall.py` · `moss/agent/budget.py` · `moss/agent/verification.py`
 > 设计稿：[spec-02](../specs/spec-02-agent-loop.md)
 
 主循环是 moss 的心脏。它每一轮做四件事——**感知、决策、行动、记录**——
@@ -30,7 +30,7 @@ while True:
     record(...)                       # 记录
 ```
 
-`agent_loop.py:161` 附近的注释把这四拍写在代码里，因为它是理解全文件的钥匙。
+`agent/loop.py:161` 附近的注释把这四拍写在代码里，因为它是理解全文件的钥匙。
 
 ### 感知
 
@@ -117,7 +117,7 @@ provider 调用统一走 `providers/clients.py::complete()`。
 `--verify-before-final`（默认 on）：模型改了文件却一次验证都没跑过时，
 在收尾前拦一次，注入一条"去跑一次验证"的约束。
 
-"算不算跑过验证"由 `verification.py` 统一判定——收尾自检和评测的
+"算不算跑过验证"由 `agent/verification.py` 统一判定——收尾自检和评测的
 `unverified_edit_rate` **必须共用它**，否则两边口径会悄悄分叉。
 
 两个边界条件：
@@ -130,7 +130,7 @@ provider 调用统一走 `providers/clients.py::complete()`。
 
 ## 6. 停滞检测
 
-`stall.py` 在一个滑动窗口（默认 8 步）里找四种模式：
+`agent/stall.py` 在一个滑动窗口（默认 8 步）里找四种模式：
 
 | 类型 | 判据 |
 | --- | --- |
@@ -148,7 +148,7 @@ provider 调用统一走 `providers/clients.py::complete()`。
 
 ## 7. 多维预算
 
-`budget.py::RunBudget` 同时盯四个维度：步数、token、时间、金额。
+`agent/budget.py::RunBudget` 同时盯四个维度：步数、token、时间、金额。
 默认全部为 `None`——**不设就完全是老行为，只有 `--max-steps` 生效**。
 
 - 软阈值 **80%**：往 constraints 段注入"该收敛了"。

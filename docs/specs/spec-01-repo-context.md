@@ -34,26 +34,26 @@
 
 | 事实 | 位置 |
 | --- | --- |
-| `DOC_NAMES` 固定 4 个，只扫 repo_root 与 cwd，每份 `clip(..., 1200)` | [moss/workspace.py:17](moss/workspace.py#L17)、[moss/workspace.py:119](moss/workspace.py#L119) |
-| `build()` 每次跑 4 个 git 子进程（rev-parse / branch / symbolic-ref / status / log），各 5s timeout | [moss/workspace.py:89](moss/workspace.py#L89) |
-| `status` 硬 `clip(..., 1500)` | [moss/workspace.py:128](moss/workspace.py#L128) |
-| `fingerprint()` 对已裁剪的 `project_docs`/`status` 算 sha256 | [moss/workspace.py:153](moss/workspace.py#L153) |
+| `DOC_NAMES` 固定 4 个，只扫 repo_root 与 cwd，每份 `clip(..., 1200)` | [moss/context/repository/workspace.py:17](moss/context/repository/workspace.py#L17)、[moss/context/repository/workspace.py:119](moss/context/repository/workspace.py#L119) |
+| `build()` 每次跑 4 个 git 子进程（rev-parse / branch / symbolic-ref / status / log），各 5s timeout | [moss/context/repository/workspace.py:89](moss/context/repository/workspace.py#L89) |
+| `status` 硬 `clip(..., 1500)` | [moss/context/repository/workspace.py:128](moss/context/repository/workspace.py#L128) |
+| `fingerprint()` 对已裁剪的 `project_docs`/`status` 算 sha256 | [moss/context/repository/workspace.py:153](moss/context/repository/workspace.py#L153) |
 | `refresh_prefix` 传 `self.root`（repo_root），丢掉 invocation cwd | [moss/runtime.py:236](moss/runtime.py#L236) |
-| `capture_snapshot` 全量 walk，`IGNORED_PATH_NAMES` 固定，跳过 symlink 而非 lstat | [moss/workspace.py:21](moss/workspace.py#L21) |
-| risky 工具前后各扫一次全仓 | [moss/tool_executor.py:228](moss/tool_executor.py#L228) |
-| 现成的行首签名正则可复用 | [moss/features/memory.py:571](moss/features/memory.py#L571) |
+| `capture_snapshot` 全量 walk，`IGNORED_PATH_NAMES` 固定，跳过 symlink 而非 lstat | [moss/context/repository/workspace.py:21](moss/context/repository/workspace.py#L21) |
+| risky 工具前后各扫一次全仓 | [moss/execution/executor.py:228](moss/execution/executor.py#L228) |
+| 现成的行首签名正则可复用 | [moss/memory/service.py:571](moss/memory/service.py#L571) |
 
 ## 4. 设计
 
 ### 4.1 新增模块与数据结构
 
 ```
-moss/ignore.py       # 手写 .gitignore 匹配器（fnmatch 级，零依赖）
-moss/repo_map.py     # 目录骨架 + 符号索引 + 缓存
+moss/context/repository/ignore.py       # 手写 .gitignore 匹配器（fnmatch 级，零依赖）
+moss/context/repository/repo_map.py     # 目录骨架 + 符号索引 + 缓存
 ```
 
 ```python
-# moss/ignore.py
+# moss/context/repository/ignore.py
 class IgnoreRules:
     """按 .gitignore 语义决定路径是否被忽略。
 
@@ -68,7 +68,7 @@ class IgnoreRules:
 ```
 
 ```python
-# moss/repo_map.py
+# moss/context/repository/repo_map.py
 @dataclass(frozen=True)
 class Symbol:
     name: str
@@ -96,16 +96,16 @@ def build_repo_map(root, *, max_depth=3, per_dir_limit=20,
 def render_repo_map(repo_map: RepoMap, budget_tokens: int) -> str: ...
 ```
 
-**符号抽取**：`.py` 用 `ast.parse`（失败则跳过该文件，不抛），取模块 docstring 首行 + 顶层 `ClassDef`/`FunctionDef`/`AsyncFunctionDef` + 类内一层方法；`end_lineno` 在 3.8+ 可用，直接取。其它扩展名用 [moss/features/memory.py:571](moss/features/memory.py#L571) 的行首前缀表匹配。二进制判定：前 1KB 含 `\x00` 即跳过；单文件 >1MB 跳过符号抽取但仍进目录树。
+**符号抽取**：`.py` 用 `ast.parse`（失败则跳过该文件，不抛），取模块 docstring 首行 + 顶层 `ClassDef`/`FunctionDef`/`AsyncFunctionDef` + 类内一层方法；`end_lineno` 在 3.8+ 可用，直接取。其它扩展名用 [moss/memory/service.py:571](moss/memory/service.py#L571) 的行首前缀表匹配。二进制判定：前 1KB 含 `\x00` 即跳过；单文件 >1MB 跳过符号抽取但仍进目录树。
 
 **排序**（决定预算不够时先保留谁）：
-1. 入口文件（`__main__.py`、`cli.py`、`main.*`、`index.*`）；
+1. 入口文件（`__main__.py`、`cli/`、`main.*`、`index.*`）；
 2. `size * recency_weight`，`recency_weight = exp(-Δdays / 30)`；
 3. 路径字典序（保证确定性）。
 
 **缓存**：`.moss/cache/repo_map.json`，`cache_key = sha256(HEAD mtime_ns, .git/index mtime_ns, 各顶层目录 mtime_ns, ignore 文件内容 hash, REPO_MAP_SCHEMA_VERSION)`。key 不变直接反序列化返回。
 
-### 4.2 `workspace.py` 的改动
+### 4.2 `context/repository/workspace.py` 的改动
 
 ```python
 @dataclass(frozen=True)
@@ -177,14 +177,14 @@ def capture_snapshot(root, *, ignore=None, strategy="auto", git_changed=None) ->
 
 | 文件 | 改动 |
 | --- | --- |
-| `moss/ignore.py` | 新增 |
-| `moss/repo_map.py` | 新增 |
-| [moss/workspace.py](moss/workspace.py) | `DocRef`/`GitFacts`/`discover_docs`/`collect_git_facts`；`build` 签名扩展；`fingerprint` 改用全文 digest；`capture_snapshot` 增量化 + lstat |
+| `moss/context/repository/ignore.py` | 新增 |
+| `moss/context/repository/repo_map.py` | 新增 |
+| [moss/context/repository/workspace.py](moss/context/repository/workspace.py) | `DocRef`/`GitFacts`/`discover_docs`/`collect_git_facts`；`build` 签名扩展；`fingerprint` 改用全文 digest；`capture_snapshot` 增量化 + lstat |
 | [moss/runtime.py:236](moss/runtime.py#L236) | 保存 `invocation_cwd`，refresh 用它；把 repo map 挂进 workspace 段 |
-| [moss/context_manager.py](moss/context_manager.py) | `relevant_memory` 段渲染加 `Likely relevant files` 分组 |
-| [moss/tool_executor.py](moss/tool_executor.py) | 文件类工具成功后触发就近文档注入；快照调用传 `ignore` |
-| [moss/prompt_prefix.py](moss/prompt_prefix.py) | 无需改（repo map 在 workspace 段，`stable_hash` 天然不覆盖） |
-| `moss/trace_events.py` | 新事件常量：`instruction_loaded`、`instruction_conflict`、`repo_map_built`、`anchor_miss` |
+| [moss/context/manager.py](moss/context/manager.py) | `relevant_memory` 段渲染加 `Likely relevant files` 分组 |
+| [moss/execution/executor.py](moss/execution/executor.py) | 文件类工具成功后触发就近文档注入；快照调用传 `ignore` |
+| [moss/context/prefix.py](moss/context/prefix.py) | 无需改（repo map 在 workspace 段，`stable_hash` 天然不覆盖） |
+| `moss/runs/observability/events.py` | 新事件常量：`instruction_loaded`、`instruction_conflict`、`repo_map_built`、`anchor_miss` |
 
 ## 5. 兼容与迁移
 
@@ -219,8 +219,8 @@ def capture_snapshot(root, *, ignore=None, strategy="auto", git_changed=None) ->
 
 1. **PR-1（P0，S）**：`fingerprint` 用全文 digest + `invocation_cwd` 修正 + 指纹版本前缀。含迁移分支与测试。
 2. **PR-2（P0，S）**：`collect_git_facts` 合并采集 + TTL 缓存 + status 结构化摘要。
-3. **PR-3（P1，S）**：`moss/ignore.py` + 快照增量化 + lstat。
-4. **PR-4（P1，M）**：`moss/repo_map.py` + 缓存 + 注入 workspace 段。
+3. **PR-3（P1，S）**：`moss/context/repository/ignore.py` + 快照增量化 + lstat。
+4. **PR-4（P1，M）**：`moss/context/repository/repo_map.py` + 缓存 + 注入 workspace 段。
 5. **PR-5（P1，S）**：文档分层发现 + 结构摘要 + 就近注入。
 6. **PR-6（P1，M）**：`Likely relevant files` 起点锚（依赖 [spec-05](spec-05-memory.md) 的 BM25，可先用词频版并标 TODO）。
 

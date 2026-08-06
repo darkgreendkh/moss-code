@@ -407,14 +407,14 @@ git commit -m "refactor(runtime): make Moss a composition facade"
 **Interfaces:**
 - Produces: one current package map, updated code anchors and an archived completed plan.
 
-- [ ] **Step 1: Update the architecture tree and module map to the final paths**
-- [ ] **Step 2: Update every old `moss/<flat_module>.py` reference**
+- [x] **Step 1: Update the architecture tree and module map to the final paths**
+- [x] **Step 2: Update every old `moss/<flat_module>.py` reference**
 
 Run an explicit `rg` scan for every source name in `Locked File Map`; remaining hits are allowed only inside this archived migration plan and Git history discussion.
 
-- [ ] **Step 3: Update `CLAUDE.md` invariants only where paths changed**
-- [ ] **Step 4: Move the completed plan to archive and add it to the archive index**
-- [ ] **Step 5: Run final verification**
+- [x] **Step 3: Update `CLAUDE.md` invariants only where paths changed**
+- [x] **Step 4: Move the completed plan to archive and add it to the archive index**
+- [x] **Step 5: Run final verification**
 
 ```bash
 uv run --with pytest python -m pytest tests/ -q
@@ -426,7 +426,10 @@ git status --short
 
 Expected: zero test failures, zero ruff errors, compileall success, no whitespace errors, and only intended files changed.
 
-- [ ] **Step 6: Commit documentation**
+Observed in a clean detached worktree at `cb1f3f5`: `1199 passed, 6 warnings`；ruff、compileall 与
+`git diff --check` 均通过。主工作区同期出现的未提交 `read_file` 行为改动不属于本计划，未纳入架构提交。
+
+- [x] **Step 6: Commit documentation**
 
 ```bash
 git add CLAUDE.md docs

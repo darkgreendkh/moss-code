@@ -56,7 +56,7 @@ fail-closed 让这个疏忽在**测试里立刻炸掉**。
 
 有一类情况不适用这条决策：**误报率高、且后果可控**的检测。
 
-`injection.py` 命中时**不拒绝执行**，只是把本 run 剩余的 risky 工具改成强制审批。
+`execution/safety/injection.py` 命中时**不拒绝执行**，只是把本 run 剩余的 risky 工具改成强制审批。
 
 原因：正常代码里就有 `"ignore previous instructions"` 这样的字符串，
 误报是必然的。把误报变成"任务直接失败"比漏报还难受。

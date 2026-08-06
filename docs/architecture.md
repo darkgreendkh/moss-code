@@ -14,36 +14,36 @@ moss 负责其余全部：把仓库状态整理成 prompt、解析模型的输�
 
 ```
 ┌─ 装配层 ────────────────────────────────────────────────┐
-│ cli.py            解析参数、加载 .env、构建 provider client、    │
+│ cli/            解析参数、加载 .env、构建 provider client、    │
 │                   拼出 Moss 实例、跑 REPL 或 one-shot、渲染进度  │
 └──────────────────────────┬─────────────────────────────┘
                            │
-┌─ 状态层 ──────────────────▼─────────────────────────────┐
-│ runtime.py::Moss   facade。所有跨轮状态与全部护栏挂在这里：       │
-│                    工具注册表 / 策略 / 记忆 / 会话 / run_store / │
-│                    沙箱计划 / 路由 / 钩子 / 预算                │
-│                    对外唯一执行入口：run_tool / execute()       │
+┌─ 组合层 ──────────────────▼─────────────────────────────┐
+│ runtime.py::Moss   facade。持有跨轮状态并提供稳定公共入口：       │
+│   context/service.py        prompt 与上下文能力              │
+│   execution/service.py      工具执行与安全能力                │
+│   runs/coordinator.py       run/session 持久化与恢复           │
+│   extensions/manager.py     skills/hooks/MCP 等扩展能力        │
+│   对外唯一执行入口：run_tool / execute()                      │
 └──────────────────────────┬─────────────────────────────┘
                            │
 ┌─ 控制层 ──────────────────▼─────────────────────────────┐
-│ agent_loop.py::AgentLoop.run                            │
+│ agent/loop.py::AgentLoop.run                            │
 │   感知 → 决策 → 行动 → 记录，直到停机                        │
 └──────────────────────────┬─────────────────────────────┘
                            │
 ┌─ 能力层 ──────────────────▼─────────────────────────────┐
-│ context_manager  prompt_prefix  providers/  output_parser│
-│ tool_executor    tools          policy      sandbox      │
-│ features/memory  compaction     run_store   checkpoint   │
+│ agent/       context/      execution/      providers/   │
+│ memory/      runs/         extensions/     evaluation/  │
 └──────────────────────────┬─────────────────────────────┘
                            │
 ┌─ 基础设施 ─────────────────▼─────────────────────────────┐
-│ atomic_io  security  clock  token_budget  trace_events   │
-│ ignore     lease     run_index                           │
+│ atomic_io.py       clock.py       config.py              │
 └─────────────────────────────────────────────────────────┘
 ```
 
-装配层与状态层的分工是刻意的：`cli.py` 决定"这次运行用什么配置"，
-`Moss` 决定"运行期能做什么"。所有开关在构建 `Moss` 的那一刻就冻结——
+装配层与组合层的分工是刻意的：`cli/` 决定"这次运行用什么配置"，
+`Moss` 组合四个能力服务并决定"运行期能做什么"。所有开关在构建 `Moss` 的那一刻就冻结——
 一次 run 内工具集、策略、prompt 前缀都不再变化，否则 prompt cache 每轮都会失效
 （见 [features/prompt-context.md](features/prompt-context.md)）。
 
@@ -52,20 +52,20 @@ moss 负责其余全部：把仓库状态整理成 prompt、解析模型的输�
 ## 2. 一次 `ask()` 的数据流
 
 ```
-cli.py (装配 / REPL / 进度渲染)
+cli/ (装配 / REPL / 进度渲染)
   └─ runtime.py::Moss
-       └─ agent_loop.py::AgentLoop.run
-            ├─ context_manager.py   每轮按预算组 prompt（六段）+ admission gate
+       └─ agent/loop.py::AgentLoop.run
+            ├─ context/manager.py   每轮按预算组 prompt（六段）+ admission gate
             ├─ providers/clients.py 统一 complete()（Ollama / OpenAI / Anthropic）
-            ├─ output_parser.py     模型输出 → ("tool"|"final"|"retry", payload)
-            ├─ tool_executor.py     执行护栏（下节展开）
-            │    └─ tools.py        工具白名单（显式注册，非动态发现）
-            ├─ compaction.py        上下文压缩：结构化交接
-            ├─ model_router.py      脏活走 aux model，主线走主模型
-            ├─ hooks.py             pre_tool / post_tool / pre_final / post_run
-            ├─ checkpoint.py        每步落 checkpoint
-            ├─ action_ledger.py     risky 动作的 intent/receipt 两阶段
-            └─ run_store.py         .moss/runs/<id>/{task_state,trace,report,lease}
+            ├─ agent/output_parser.py     模型输出 → ("tool"|"final"|"retry", payload)
+            ├─ execution/executor.py     执行护栏（下节展开）
+            │    └─ execution/registry.py        工具白名单（显式注册，非动态发现）
+            ├─ context/compaction.py        上下文压缩：结构化交接
+            ├─ extensions/router.py      脏活走 aux model，主线走主模型
+            ├─ extensions/hooks.py             pre_tool / post_tool / pre_final / post_run
+            ├─ runs/checkpoint.py        每步落 checkpoint
+            ├─ runs/ledger.py     risky 动作的 intent/receipt 两阶段
+            └─ runs/store.py         .moss/runs/<id>/{task_state,trace,report,lease}
 ```
 
 每一轮（"步"）都是完整的四拍：
@@ -93,8 +93,8 @@ cli.py (装配 / REPL / 进度渲染)
 allowlist（run 级白名单 + skill 的 allowed-tools 临时覆盖）
   → 存在性
   → 参数校验（ToolSpec.fields）
-  → 能力/路径策略（policy.py，risky 但未声明能力 = 拒绝）
-  → shell 分级（shell_policy.py，denied 连审批都不给）
+  → 能力/路径策略（execution/safety/policy.py，risky 但未声明能力 = 拒绝）
+  → shell 分级（execution/safety/shell.py，denied 连审批都不给）
   → 重复检测
   → pre_tool 钩子（唯一能改控制流的钩子，退出码 2 = 拒绝）
   → 审批（ask/auto/never，只展示摘要不 dump 完整参数）
@@ -123,83 +123,89 @@ allowlist（run 级白名单 + skill 的 allowed-tools 临时覆盖）
 
 | 模块 | 角色 |
 | --- | --- |
-| `cli.py` | 装配、REPL、one-shot、进度渲染、`moss runs|memory|mcp` 子命令 |
-| `runtime.py` | `Moss` facade。跨轮状态 + 全部护栏的持有者 |
-| `agent_loop.py` | 主循环与全部停机路径 |
-| `context_manager.py` | 每轮 prompt 组装、分段预算、admission gate |
-| `prompt_prefix.py` | 稳定前缀构建、工具目录模式、缓存键 |
-| `model_request.py` | 结构化 `system blocks + messages`；仓库内容永不进 system |
+| `cli/` | 装配、REPL、one-shot、进度渲染、`moss runs|memory|mcp` 子命令 |
+| `runtime.py` | `Moss` 组合 facade。持有跨轮状态，委托四个能力服务 |
+| `context/service.py` | prompt、上下文与压缩相关的 facade 委托目标 |
+| `execution/service.py` | 工具注册、执行与安全相关的 facade 委托目标 |
+| `runs/coordinator.py` | run/session 持久化、恢复与回退的 facade 委托目标 |
+| `extensions/manager.py` | skills、hooks、MCP 与 delegation 的 facade 委托目标 |
+| `agent/loop.py` | 主循环与全部停机路径 |
+| `context/manager.py` | 每轮 prompt 组装、分段预算、admission gate |
+| `context/prefix.py` | 稳定前缀构建、工具目录模式、缓存键 |
+| `context/model_request.py` | 结构化 `system blocks + messages`；仓库内容永不进 system |
 | `providers/clients.py` | 三种协议的统一 `complete()` |
 | `providers/capabilities.py` | 按 provider/model 显式声明 cache/native/context 能力 |
-| `output_parser.py` | 模型输出 → 动作或最终答案（纯函数） |
-| `tool_executor.py` | 执行护栏 |
-| `tools.py` | 工具白名单与实现 |
+| `agent/output_parser.py` | 模型输出 → 动作或最终答案（纯函数） |
+| `execution/executor.py` | 执行护栏 |
+| `execution/registry.py` | 汇总内置与外部工具，构建显式白名单 |
+| `execution/specs.py` | 工具参数、能力与风险规格 |
+| `execution/builtins/` | files、shell、memory、extensions 四组内置工具实现 |
 
 ### 仓库上下文
 
 | 模块 | 角色 |
 | --- | --- |
-| `workspace.py` | git 事实 + 分层项目文档 + 文件级快照/diff + 指纹 |
-| `repo_map.py` | 目录骨架 + 符号索引 + `rank_relevant_files` 起点锚 |
-| `ignore.py` | 手写 `.gitignore` 匹配器。**只用来少扫/少展示，安全判定不依赖它** |
-| `retrieval.py` | BM25 + 字段权重 + 时间衰减的召回打分 |
+| `context/repository/workspace.py` | git 事实 + 分层项目文档 + 文件级快照/diff + 指纹 |
+| `context/repository/repo_map.py` | 目录骨架 + 符号索引 + `rank_relevant_files` 起点锚 |
+| `context/repository/ignore.py` | 手写 `.gitignore` 匹配器。**只用来少扫/少展示，安全判定不依赖它** |
+| `context/repository/retrieval.py` | BM25 + 字段权重 + 时间衰减的召回打分 |
 
 ### 安全
 
 | 模块 | 角色 |
 | --- | --- |
-| `policy.py` | 能力标签 + 路径 glob 作用域，fail-closed |
-| `shell_policy.py` | 基于 shlex 的结构化 shell 风险分级（六档） |
-| `sandbox.py` | L1 策略 / L2 `sandbox-exec`·`bwrap` / L3 容器，降级必须可见 |
-| `injection.py` | 工具输出里的 prompt injection 检测 |
-| `security.py` | secret 检测/脱敏、`run_shell` 的环境变量白名单 |
-| `hooks.py` | 用户钩子扩展点 |
+| `execution/safety/policy.py` | 能力标签 + 路径 glob 作用域，fail-closed |
+| `execution/safety/shell.py` | 基于 shlex 的结构化 shell 风险分级（六档） |
+| `execution/safety/sandbox.py` | L1 策略 / L2 `sandbox-exec`·`bwrap` / L3 容器，降级必须可见 |
+| `execution/safety/injection.py` | 工具输出里的 prompt injection 检测 |
+| `execution/safety/secrets.py` | secret 检测/脱敏、`run_shell` 的环境变量白名单 |
+| `extensions/hooks.py` | 用户钩子扩展点 |
 
 ### 上下文治理
 
 | 模块 | 角色 |
 | --- | --- |
-| `token_budget.py` | token 估算、在线校准、全部文本裁剪 |
-| `compaction.py` | 历史压成结构化交接（可逆/幂等/闭合/因果单元不可拆） |
-| `output_compressors.py` | 按输出**形状**注册的压缩器 + generic 兜底 |
-| `features/memory.py` | 分层记忆与写入/提炼策略 |
-| `features/memory_store.py` | `records.jsonl` 事实源、冲突消解、紧凑化 |
+| `context/token_budget.py` | token 估算、在线校准、全部文本裁剪 |
+| `context/compaction.py` | 历史压成结构化交接（可逆/幂等/闭合/因果单元不可拆） |
+| `context/compressors.py` | 按输出**形状**注册的压缩器 + generic 兜底 |
+| `memory/service.py` | 分层记忆与写入/提炼策略 |
+| `memory/store.py` | `records.jsonl` 事实源、冲突消解、紧凑化 |
 
 ### 持久化与恢复
 
 | 模块 | 角色 |
 | --- | --- |
 | `atomic_io.py` | 原子 + 持久落盘（临时文件 → fsync → replace → fsync 目录） |
-| `run_store.py` | run 目录的全部读写 |
-| `run_index.py` | append-only run 索引 + 保留策略 |
-| `lease.py` | run 租约（PID + host + boot_id + 心跳 + TTL） |
-| `session_store.py` | session v2 目录、增量写、v1 自动迁移 |
-| `checkpoint.py` | 每步 checkpoint 与恢复部件 |
-| `action_ledger.py` | intent/receipt 两阶段 + 崩溃后对账 |
-| `rewind.py` | `/rewind`：文件 + history + memory 一起回退 |
-| `task_state.py` | 一次 run 的状态机与停机原因 |
+| `runs/store.py` | run 目录的全部读写 |
+| `runs/index.py` | append-only run 索引 + 保留策略 |
+| `runs/lease.py` | run 租约（PID + host + boot_id + 心跳 + TTL） |
+| `runs/session.py` | session v2 目录、增量写、v1 自动迁移 |
+| `runs/checkpoint.py` | 每步 checkpoint 与恢复部件 |
+| `runs/ledger.py` | intent/receipt 两阶段 + 崩溃后对账 |
+| `runs/rewind.py` | `/rewind`：文件 + history + memory 一起回退 |
+| `agent/state.py` | 一次 run 的状态机与停机原因 |
 
 ### 观测
 
 | 模块 | 角色 |
 | --- | --- |
-| `trace_events.py` | 事件名常量 + schema 版本 + `ALL_EVENTS`（**别处禁止写字面量**） |
-| `trace_html.py` | `moss runs show --html`，单文件零外部请求 |
-| `otel.py` | `moss runs export --otel`，stdlib 生成 OTLP/JSON |
-| `budget.py` | 多维预算（步/token/时间/金额） |
-| `stall.py` | 四类停滞检测 |
-| `verification.py` | "这次 `run_shell` 算不算跑过验证" |
+| `runs/observability/events.py` | 事件名常量 + schema 版本 + `ALL_EVENTS`（**别处禁止写字面量**） |
+| `runs/observability/html.py` | `moss runs show --html`，单文件零外部请求 |
+| `runs/observability/otel.py` | `moss runs export --otel`，stdlib 生成 OTLP/JSON |
+| `agent/budget.py` | 多维预算（步/token/时间/金额） |
+| `agent/stall.py` | 四类停滞检测 |
+| `agent/verification.py` | "这次 `run_shell` 算不算跑过验证" |
 
 ### 扩展点
 
 | 模块 | 角色 |
 | --- | --- |
-| `delegation.py` | 子 agent 契约：结构化背景进、带证据锚点的结论出 |
-| `mcp/` | MCP 客户端与服务端，JSON-RPC over stdio 手写 |
-| `skills.py` | `.moss/skills/*.md` 三级渐进披露 + 供应链校验 |
-| `model_router.py` | 多模型路由，aux 失败自动回落主模型 |
+| `extensions/delegation.py` | 子 agent 契约：结构化背景进、带证据锚点的结论出 |
+| `extensions/mcp/` | MCP 客户端与服务端，JSON-RPC over stdio 手写 |
+| `extensions/skills.py` | `.moss/skills/*.md` 三级渐进披露 + 供应链校验 |
+| `extensions/router.py` | 多模型路由，aux 失败自动回落主模型 |
 | `providers/recording.py` | 确定性录制回放（装饰器，对主循环透明） |
-| `code_mode.py` | 受限 Python 编排，AST 三层白名单 + 沙箱硬前置 |
+| `extensions/code_mode.py` | 受限 Python 编排，AST 三层白名单 + 沙箱硬前置 |
 
 ### 不在运行时路径上
 
@@ -238,12 +244,12 @@ allowlist（run 级白名单 + skill 的 allowed-tools 临时覆盖）
 理解 moss 最快的方式是分别追这三条线：
 
 **上下文怎么进 prompt**
-`workspace.snapshot` / `repo_map` → `prompt_prefix` → `context_manager` 分段 → `model_request` →
+`workspace.snapshot` / `repo_map` → `context/prefix.py` → `ContextManager` 分段 → `model_request` →
 provider。看 [features/repo-context.md](features/repo-context.md) 与
 [features/prompt-context.md](features/prompt-context.md)。
 
 **动作怎么落地**
-`output_parser` → `AgentLoop._execute_tool_batch` → `ToolExecutor.execute` → `tools.py` →
+`output_parser` → `AgentLoop._execute_tool_batch` → `ToolExecutor.execute` → `execution/registry.py` →
 快照 diff → artifact 卸载 → history。看 [features/tool-safety.md](features/tool-safety.md)。
 
 **状态怎么活过重启**

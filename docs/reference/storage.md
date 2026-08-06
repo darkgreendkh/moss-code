@@ -98,7 +98,7 @@ run_id  started_at  status  stop_reason  task_summary  cost_usd  pinned
 ### `<run_id>/trace.jsonl`
 
 一行一个事件，带 `schema_version`（当前 **2**）、序号和哈希链。
-事件名必须来自 `trace_events.py` 的 `ALL_EVENTS`。
+事件名必须来自 `runs/observability/events.py` 的 `ALL_EVENTS`。
 `moss runs verify` 逐条校验链，被改过返回非零。
 
 ### `<run_id>/report.json`
@@ -194,7 +194,7 @@ risky 动作执行前的旧内容 + `manifest.json`（含 `after_sha`）。
 | `prompts/system.md` | 覆盖内置 `p1`；版本记为 `file:<sha256前12位>` |
 | `config.json` | 见 [configuration.md](configuration.md#4-mossconfigjson) |
 
-**agent 写不进 `.moss/`**（`policy.DEFAULT_DENY` 覆盖了 `fs_write`），
+**agent 写不进 `.moss/`**（`execution/safety/policy.py::DEFAULT_DENY` 覆盖了 `fs_write`），
 否则它能给自己装钩子。
 
 ---

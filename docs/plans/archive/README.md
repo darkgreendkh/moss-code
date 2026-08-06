@@ -10,6 +10,7 @@
 | [2026-08-05-prompt-cache.md](2026-08-05-prompt-cache.md) | spec-04 的分阶段实施计划 | 完成 |
 | [2026-08-05-structured-memory.md](2026-08-05-structured-memory.md) | spec-05 的分阶段实施计划 | 完成 |
 | [2026-08-06-evaluation-framework.md](2026-08-06-evaluation-framework.md) | spec-08 的分阶段实施计划 | 框架完成；真实模型证据仍缺，见 [../active/l2-l3-evidence.md](../active/l2-l3-evidence.md) |
+| [2026-08-06-capability-package-refactor.md](2026-08-06-capability-package-refactor.md) | 运行时代码按能力分包，并把 `Moss` 收缩为组合 facade | 完成 |
 
 ## 读总方案时注意
 

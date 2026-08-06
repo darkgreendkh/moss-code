@@ -1,7 +1,7 @@
 # 提示词组装与上下文治理
 
-> 代码：`moss/context_manager.py` · `moss/prompt_prefix.py` · `moss/model_request.py` ·
-> `moss/token_budget.py` · `moss/compaction.py` · `moss/output_compressors.py` ·
+> 代码：`moss/context/manager.py` · `moss/context/prefix.py` · `moss/context/model_request.py` ·
+> `moss/context/token_budget.py` · `moss/context/compaction.py` · `moss/context/compressors.py` ·
 > `moss/providers/capabilities.py`
 > 设计稿：[spec-04](../specs/spec-04-prompt-cache.md) · [spec-06](../specs/spec-06-context.md)
 
@@ -119,7 +119,7 @@ context window、native tool 支持、cache 支持与 cache 风格。
 
 ### 结构化请求
 
-`model_request.py` 构造 `system blocks + messages`。
+`context/model_request.py` 构造 `system blocks + messages`。
 **仓库内容与工具输出永不进入 `system`**——
 system 是身份和规则，把不可信数据放进去等于给注入开了最高权限的入口。
 
@@ -149,7 +149,7 @@ provider 支持 native tool 时直接保留全部 `call_id`。
 
 ## 5. Compaction
 
-`compaction.py` 把较早历史压成一份结构化交接：
+`context/compaction.py` 把较早历史压成一份结构化交接：
 
 ```
 goals / completed / excluded / findings / open_questions / plan
@@ -215,7 +215,7 @@ report 里的 `truncated_bytes_lost` **应恒为 0**。这是这套机制是否�
 
 ### 压缩器按"输出形状"注册
 
-`output_compressors.py` 的注册键不只是工具名，而是输出**形状**：
+`context/compressors.py` 的注册键不只是工具名，而是输出**形状**：
 `pytest` / `lint` / `search_text` / `git_diff` / `list_files` + `generic` 兜底。
 
 三条纪律：
@@ -227,7 +227,7 @@ report 里的 `truncated_bytes_lost` **应恒为 0**。这是这套机制是否�
 
 ### 硬切片
 
-`token_budget.py` 提供 `clip_to_budget`（按预算二分）与
+`context/token_budget.py` 提供 `clip_to_budget`（按预算二分）与
 `clip` / `middle`（硬切片）。`MAX_TOOL_OUTPUT = 16000`、`MAX_HISTORY = 32000`。
 
 保头还是保两端取决于关键信息的位置：`run_shell` 的输出是

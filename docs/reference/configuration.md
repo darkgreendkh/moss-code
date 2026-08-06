@@ -40,7 +40,7 @@
 | `anthropic` | `claude-opus-5` | Anthropic-compatible `/messages` |
 | `ollama` | `qwen3:8b` | Ollama `/api/generate` |
 
-> 改动默认模型时**必须同步**：`moss/cli.py`、`moss/evaluation/metrics.py`、
+> 改动默认模型时**必须同步**：`moss/cli/`、`moss/evaluation/metrics.py`、
 > `.env.example`、`README.md`、`CLAUDE.md` 和相关测试断言。
 > 历史上这里出现过四处互相矛盾的编造模型名。
 
@@ -202,16 +202,16 @@ moss --allow-network api.example.com    # 网络命令的 host 白名单
 
 | 常量 | 值 | 位置 |
 | --- | --- | --- |
-| `ARTIFACT_THRESHOLD` | = `MAX_TOOL_OUTPUT`（16000 字符） | `tool_executor.py` |
-| `MAX_TOOL_OUTPUT` / `MAX_HISTORY` | 16000 / 32000 | `token_budget.py` |
-| `CHECKPOINT_HISTORY_LIMIT` | 40 | `checkpoint.py` |
-| `TOOL_CATALOG_THRESHOLD` | 16 | `prompt_prefix.py` |
-| `SKILLS_PREFIX_BUDGET_TOKENS` | 400 | `skills.py` |
-| `GIT_FACTS_TTL_S` | 0.5 秒 | `workspace.py` |
-| `DOC_PREVIEW_BUDGET` | 1200 字符 | `workspace.py` |
-| 租约 TTL | 90 秒 | `lease.py` |
-| 钩子超时 | 3 秒 | `hooks.py` |
-| 并发只读工具上限 | 4 | `agent_loop.py` |
-| 停滞窗口 | 8 步 | `stall.py` |
-| `TRACE_SCHEMA_VERSION` | 2 | `trace_events.py` |
-| `WORKSPACE_FINGERPRINT_VERSION` | `ws-v2` | `workspace.py` |
+| `ARTIFACT_THRESHOLD` | = `MAX_TOOL_OUTPUT`（16000 字符） | `execution/executor.py` |
+| `MAX_TOOL_OUTPUT` / `MAX_HISTORY` | 16000 / 32000 | `context/token_budget.py` |
+| `CHECKPOINT_HISTORY_LIMIT` | 40 | `runs/checkpoint.py` |
+| `TOOL_CATALOG_THRESHOLD` | 16 | `context/prefix.py` |
+| `SKILLS_PREFIX_BUDGET_TOKENS` | 400 | `extensions/skills.py` |
+| `GIT_FACTS_TTL_S` | 0.5 秒 | `context/repository/workspace.py` |
+| `DOC_PREVIEW_BUDGET` | 1200 字符 | `context/repository/workspace.py` |
+| 租约 TTL | 90 秒 | `runs/lease.py` |
+| 钩子超时 | 3 秒 | `extensions/hooks.py` |
+| 并发只读工具上限 | 4 | `agent/loop.py` |
+| 停滞窗口 | 8 步 | `agent/stall.py` |
+| `TRACE_SCHEMA_VERSION` | 2 | `runs/observability/events.py` |
+| `WORKSPACE_FINGERPRINT_VERSION` | `ws-v2` | `context/repository/workspace.py` |

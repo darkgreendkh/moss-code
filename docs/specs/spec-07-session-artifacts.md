@@ -6,7 +6,7 @@
 | 对应优化章节 | [第 7 章](../plans/archive/2026-agent-upgrade-plan.md)（7.1–7.8） |
 | 优先级 | 7.1 / 7.2 / 7.8 是 P0；7.4 / 7.6 / 7.7 是 P1；7.3 / 7.5 是 P2 |
 | 依赖 | 无（7.7 的崩溃矩阵需要 [spec-09](spec-09-new-modules.md) 的录制回放做确定性 oracle） |
-| 被依赖 | 所有 spec（`moss/trace_events.py` 常量在这里定义） |
+| 被依赖 | 所有 spec（`moss/runs/observability/events.py` 常量在这里定义） |
 
 ## 1. 背景与问题
 
@@ -40,17 +40,17 @@ session 是单个 JSON，**每次 `record()` 整份重写**（100 轮 = 100 次�
 
 | 事实 | 位置 |
 | --- | --- |
-| session 单文件整份重写，无 fsync | [moss/session_store.py:35](moss/session_store.py#L35) |
-| `latest()` 按 mtime 取最新 | [moss/session_store.py:41](moss/session_store.py#L41) |
-| `_next_trace_sequence` 每次读全量 trace | [moss/run_store.py:151](moss/run_store.py#L151) |
-| `mark_interrupted_runs` 把所有 running 标 interrupted，无 PID/租约 | [moss/run_store.py:94](moss/run_store.py#L94) |
-| `find_running_runs` glob 全部 `*/task_state.json` | [moss/run_store.py:85](moss/run_store.py#L85) |
-| `_write_json_atomic` 用 tmp + `os.replace`，无 fsync | [moss/run_store.py](moss/run_store.py) |
-| 工具副作用先于 history/trace/checkpoint 落盘 | [moss/agent_loop.py:153](moss/agent_loop.py#L153)–[:201](moss/agent_loop.py#L201) |
-| 每步落 checkpoint，上限 40 | [moss/checkpoint.py](moss/checkpoint.py)、[moss/agent_loop.py:191](moss/agent_loop.py#L191) |
-| 5 种 checkpoint 恢复状态 | [moss/checkpoint.py:16](moss/checkpoint.py#L16) |
-| `parent_checkpoint_id` 字段存在但未用于组树 | [moss/checkpoint.py](moss/checkpoint.py) |
-| `last_prompt_metadata` 只在模型成功返回后更新 | [moss/agent_loop.py:135](moss/agent_loop.py#L135) |
+| session 单文件整份重写，无 fsync | [moss/runs/session.py:35](moss/runs/session.py#L35) |
+| `latest()` 按 mtime 取最新 | [moss/runs/session.py:41](moss/runs/session.py#L41) |
+| `_next_trace_sequence` 每次读全量 trace | [moss/runs/store.py:151](moss/runs/store.py#L151) |
+| `mark_interrupted_runs` 把所有 running 标 interrupted，无 PID/租约 | [moss/runs/store.py:94](moss/runs/store.py#L94) |
+| `find_running_runs` glob 全部 `*/task_state.json` | [moss/runs/store.py:85](moss/runs/store.py#L85) |
+| `_write_json_atomic` 用 tmp + `os.replace`，无 fsync | [moss/runs/store.py](moss/runs/store.py) |
+| 工具副作用先于 history/trace/checkpoint 落盘 | [moss/agent/loop.py:153](moss/agent/loop.py#L153)–[:201](moss/agent/loop.py#L201) |
+| 每步落 checkpoint，上限 40 | [moss/runs/checkpoint.py](moss/runs/checkpoint.py)、[moss/agent/loop.py:191](moss/agent/loop.py#L191) |
+| 5 种 checkpoint 恢复状态 | [moss/runs/checkpoint.py:16](moss/runs/checkpoint.py#L16) |
+| `parent_checkpoint_id` 字段存在但未用于组树 | [moss/runs/checkpoint.py](moss/runs/checkpoint.py) |
+| `last_prompt_metadata` 只在模型成功返回后更新 | [moss/agent/loop.py:135](moss/agent/loop.py#L135) |
 | 评测代码硬编码事件名字面量 | [moss/evaluation/metrics.py](moss/evaluation/metrics.py) |
 
 ## 4. 设计
@@ -102,7 +102,7 @@ def write_atomic(path, data: str, *, encoding="utf-8"):
         os.close(dir_fd)
 ```
 
-放 `moss/atomic_io.py`，`SessionStore.save` / `RunStore._write_json_atomic` / `write_text_atomic`（[moss/tools.py](moss/tools.py)）三处统一走它。Windows 上目录 fsync 不可用 → 捕获并在启动时 stderr 提示一次（**降级要显式**）。
+放 `moss/atomic_io.py`，`SessionStore.save` / `RunStore._write_json_atomic` / `write_text_atomic`（[moss/execution/registry.py](moss/execution/registry.py)）三处统一走它。Windows 上目录 fsync 不可用 → 捕获并在启动时 stderr 提示一次（**降级要显式**）。
 
 append 类写入（jsonl）：`f.write(line); f.flush(); os.fsync(f.fileno())`，每条都 fsync 会拖慢——策略是**每条 flush，每 N 条或每次 checkpoint 时 fsync**，并在文档里写明这个取舍。
 
@@ -157,7 +157,7 @@ class RunLease:
 ### 4.5 trace 事件常量与 schema
 
 ```python
-# moss/trace_events.py
+# moss/runs/observability/events.py
 TRACE_SCHEMA_VERSION = 2
 
 RUN_STARTED = "run_started"
@@ -262,13 +262,13 @@ action_receipt = {
 | 文件 | 改动 |
 | --- | --- |
 | `moss/atomic_io.py` | 新增 |
-| `moss/trace_events.py` | 新增 |
-| `moss/lease.py` | 新增 |
-| [moss/session_store.py](moss/session_store.py) | v2 目录布局 + 迁移 + append |
-| [moss/run_store.py](moss/run_store.py) | 序号 O(1)；租约接管；索引；保留；artifacts/context/undo 路径 |
-| [moss/agent_loop.py](moss/agent_loop.py) | intent/receipt；heartbeat；中断释放租约 |
-| [moss/checkpoint.py](moss/checkpoint.py) | `--explain` 的 diff 渲染；分叉树 |
-| [moss/cli.py](moss/cli.py) | `moss runs ...`、`--explain`、`--resume-parts`、`--fork`、`/rewind` |
+| `moss/runs/observability/events.py` | 新增 |
+| `moss/runs/lease.py` | 新增 |
+| [moss/runs/session.py](moss/runs/session.py) | v2 目录布局 + 迁移 + append |
+| [moss/runs/store.py](moss/runs/store.py) | 序号 O(1)；租约接管；索引；保留；artifacts/context/undo 路径 |
+| [moss/agent/loop.py](moss/agent/loop.py) | intent/receipt；heartbeat；中断释放租约 |
+| [moss/runs/checkpoint.py](moss/runs/checkpoint.py) | `--explain` 的 diff 渲染；分叉树 |
+| [moss/cli/](moss/cli/) | `moss runs ...`、`--explain`、`--resume-parts`、`--fork`、`/rewind` |
 | [moss/evaluation/](moss/evaluation/) | 全部改用 `trace_events` 常量 |
 
 ## 5. 兼容与迁移
@@ -308,11 +308,11 @@ action_receipt = {
 
 ## 8. 实施顺序（PR 拆分）
 
-1. **PR-1（P0，S）**：`moss/lease.py` + `mark_interrupted_runs` 改造 + 回归测试。**并发损坏优先修**。
+1. **PR-1（P0，S）**：`moss/runs/lease.py` + `mark_interrupted_runs` 改造 + 回归测试。**并发损坏优先修**。
 2. **PR-2（P0，S）**：trace 序号 O(1)。
 3. **PR-3（P0，S）**：`moss/atomic_io.py` + 三处统一 + fsync 测试。
 4. **PR-4（P0，M）**：session v2 目录 + 迁移。
-5. **PR-5（P1，S）**：`moss/trace_events.py` + 评测侧全量替换 + AST 扫描测试。
+5. **PR-5（P1，S）**：`moss/runs/observability/events.py` + 评测侧全量替换 + AST 扫描测试。
 6. **PR-6（P1，S）**：run 索引 + 保留策略 + `moss runs list/show/prune`。
 7. **PR-7（P1，M）**：action intent/receipt + reconcile。
 8. **PR-8（P1，M）**：`--explain` / `--resume-parts` / `--fork`。

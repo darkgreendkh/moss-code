@@ -44,19 +44,19 @@
 | Anthropic 路径：`supports_prompt_cache = False`；`del prompt_cache_key, prompt_cache_retention` | [moss/providers/clients.py:437](moss/providers/clients.py#L437)、[moss/providers/clients.py:445](moss/providers/clients.py#L445) |
 | Anthropic `last_completion_metadata` 恒为空 dict | [moss/providers/clients.py:446](moss/providers/clients.py#L446) |
 | 原生 tool_use 序列化回 `<tool>` 文本，只取第一个 | [moss/providers/clients.py:107](moss/providers/clients.py#L107) |
-| 主循环只看 `model_client.supports_prompt_cache`，不读 feature flag | [moss/agent_loop.py:110](moss/agent_loop.py#L110) |
+| 主循环只看 `model_client.supports_prompt_cache`，不读 feature flag | [moss/agent/loop.py:110](moss/agent/loop.py#L110) |
 | `DEFAULT_FEATURE_FLAGS["prompt_cache"] = True` 无人读取 | [moss/runtime.py:42](moss/runtime.py#L42) |
 | `refresh_prefix` 每轮重建 skills/tools | [moss/runtime.py:244](moss/runtime.py#L244) |
-| `stable_hash` 只覆盖身份/规则/Tools/Skills 段（设计正确） | [moss/prompt_prefix.py:11](moss/prompt_prefix.py#L11) |
-| 文本协议规则与示例硬编码在 prefix | [moss/prompt_prefix.py:105](moss/prompt_prefix.py#L105) |
-| `_render_history_section` 每轮重渲染并改写旧条目 | [moss/context_manager.py:419](moss/context_manager.py#L419) |
+| `stable_hash` 只覆盖身份/规则/Tools/Skills 段（设计正确） | [moss/context/prefix.py:11](moss/context/prefix.py#L11) |
+| 文本协议规则与示例硬编码在 prefix | [moss/context/prefix.py:105](moss/context/prefix.py#L105) |
+| `_render_history_section` 每轮重渲染并改写旧条目 | [moss/context/manager.py:419](moss/context/manager.py#L419) |
 
 ## 4. 设计
 
 ### 4.1 结构化请求
 
 ```python
-# moss/model_request.py
+# moss/context/model_request.py
 @dataclass(frozen=True)
 class Block:
     text: str
@@ -201,14 +201,14 @@ cache_enabled = agent.feature_enabled("prompt_cache") and caps.supports_cache
 
 | 文件 | 改动 |
 | --- | --- |
-| `moss/model_request.py` | 新增（`Block`/`Message`/`ModelRequest`） |
+| `moss/context/model_request.py` | 新增（`Block`/`Message`/`ModelRequest`） |
 | `moss/providers/capabilities.py` | 新增 |
 | [moss/providers/clients.py](moss/providers/clients.py) | 新增 `complete_request(request)`；`complete(prompt, ...)` 变薄封装；Anthropic 接 cache_control + usage；删 XML 中转 |
-| [moss/context_manager.py](moss/context_manager.py) | 产出 `PromptBundle`；append-only 模式 |
-| [moss/prompt_prefix.py](moss/prompt_prefix.py) | 拆 native/text 两个变体；`prompt_version` |
-| [moss/agent_loop.py](moss/agent_loop.py) | 走 `complete_request`；cache flag 判定修正；usage 进 `RunBudget` |
+| [moss/context/manager.py](moss/context/manager.py) | 产出 `PromptBundle`；append-only 模式 |
+| [moss/context/prefix.py](moss/context/prefix.py) | 拆 native/text 两个变体；`prompt_version` |
+| [moss/agent/loop.py](moss/agent/loop.py) | 走 `complete_request`；cache flag 判定修正；usage 进 `RunBudget` |
 | [moss/runtime.py](moss/runtime.py) | `begin_run` 冻结注册表；`/reload` |
-| [moss/cli.py](moss/cli.py) | `--context-mode`、`--tool-protocol`、`--no-prompt-cache` |
+| [moss/cli/](moss/cli/) | `--context-mode`、`--tool-protocol`、`--no-prompt-cache` |
 
 ## 5. 兼容与迁移
 
@@ -246,7 +246,7 @@ cache_enabled = agent.feature_enabled("prompt_cache") and caps.supports_cache
 
 1. **PR-1（P0，S）**：修 `prompt_cache` flag 空转 + Anthropic usage 解析 + `cache_metrics_available`。**这一个 PR 就能让报告不再撒谎**，优先做。
 2. **PR-2（P0，S）**：run 内冻结 tools/skills + `prompt_cache_key` 稳定性测试。
-3. **PR-3（P0，M）**：`moss/model_request.py` + `complete_request` + `flatten()` 兼容层（不改行为，纯重构，靠 `flatten` 逐字节对拍）。
+3. **PR-3（P0，M）**：`moss/context/model_request.py` + `complete_request` + `flatten()` 兼容层（不改行为，纯重构，靠 `flatten` 逐字节对拍）。
 4. **PR-4（P0，M）**：角色分层 + `<tool_result>` 包裹（与 [spec-03](spec-03-tool-safety.md) PR-3 合并）。
 5. **PR-5（P0，M）**：Anthropic `cache_control` 断点 + capabilities 表 + 探测。
 6. **PR-6（P1，M）**：native/text 协议二选一 + `call_id`（与 [spec-02](spec-02-agent-loop.md) PR-4 配合）。

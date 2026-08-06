@@ -47,6 +47,7 @@ moss 是一个零第三方运行时依赖的本地 coding agent：一个包在�
 | [decisions/0001-zero-dependencies.md](decisions/0001-zero-dependencies.md) | 零第三方运行时依赖，外部能力一律"探测到就用、探测不到就降级" |
 | [decisions/0002-fail-closed-extensions.md](decisions/0002-fail-closed-extensions.md) | 外部能力（MCP / skill / code mode）一律 fail-closed，不静默降级 |
 | [decisions/0003-evidence-layers.md](decisions/0003-evidence-layers.md) | 评测证据分 L0–L4，不同层的结论不许混写 |
+| [decisions/0004-capability-packages-and-thin-facade.md](decisions/0004-capability-packages-and-thin-facade.md) | 按能力分包，`Moss` 保持为稳定的组合 facade |
 
 ## 计划
 
@@ -75,6 +76,6 @@ moss 是一个零第三方运行时依赖的本地 coding agent：一个包在�
 ## 写文档的约定
 
 - 中文，解释**为什么存在 / 在链路里的位置**，而不是复述代码能读到的东西。
-- 引用代码用相对路径 + 行号（`moss/agent_loop.py:131`），行号会漂，**结论不要依赖行号**。
+- 引用代码用相对路径 + 行号（`moss/agent/loop.py:131`），行号会漂，**结论不要依赖行号**。
 - 精确的数值（默认值、阈值、路径）集中在 `reference/`，功能文档里只引用不复制，避免两处打架。
 - 一个事实只写一处。CLAUDE.md 写"改代码时必须守住的不变量"，docs 写"这东西是怎么回事"。

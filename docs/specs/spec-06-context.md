@@ -37,24 +37,24 @@
 
 | 事实 | 位置 |
 | --- | --- |
-| `SECTION_ORDER = (prefix, memory, relevant_memory, history, current_request)`，总预算 12000 | [moss/context_manager.py:21](moss/context_manager.py#L21)、[moss/context_manager.py:36](moss/context_manager.py#L36) |
-| checkpoint 文本拼在 **prefix 尾部**（prompt 最前面） | [moss/context_manager.py:147](moss/context_manager.py#L147) |
-| 当前请求超预算只标 `over_budget_unrecoverable` 后照发 | [moss/context_manager.py:213](moss/context_manager.py#L213) |
-| `if budget <= 0 or self.measure(candidate) <= budget` → 0 预算不限量 | [moss/context_manager.py:311](moss/context_manager.py#L311) |
-| 历史每轮重渲染：最近 6 条各 900 字符，更早折叠 | [moss/context_manager.py:419](moss/context_manager.py#L419) |
-| shell 老历史只留 3 行信号行 | [moss/context_manager.py:481](moss/context_manager.py#L481) |
-| 工具输出 `clip(..., MAX_TOOL_OUTPUT=16000)`，超出永久丢弃 | [moss/tool_executor.py:232](moss/tool_executor.py#L232) |
-| 截断策略只有 head/middle/tail | [moss/tool_executor.py:16](moss/tool_executor.py#L16) |
-| `estimate_tokens`：CJK 1:1，拉丁 4:1 | [moss/token_budget.py:41](moss/token_budget.py#L41) |
-| `clip()` 先切 limit 再拼说明，会略超上限（注释已声明为有意取舍） | [moss/token_budget.py:112](moss/token_budget.py#L112) |
-| `clip_to_budget` 二分裁剪，保证 ≤limit | [moss/token_budget.py:80](moss/token_budget.py#L80) |
+| `SECTION_ORDER = (prefix, memory, relevant_memory, history, current_request)`，总预算 12000 | [moss/context/manager.py:21](moss/context/manager.py#L21)、[moss/context/manager.py:36](moss/context/manager.py#L36) |
+| checkpoint 文本拼在 **prefix 尾部**（prompt 最前面） | [moss/context/manager.py:147](moss/context/manager.py#L147) |
+| 当前请求超预算只标 `over_budget_unrecoverable` 后照发 | [moss/context/manager.py:213](moss/context/manager.py#L213) |
+| `if budget <= 0 or self.measure(candidate) <= budget` → 0 预算不限量 | [moss/context/manager.py:311](moss/context/manager.py#L311) |
+| 历史每轮重渲染：最近 6 条各 900 字符，更早折叠 | [moss/context/manager.py:419](moss/context/manager.py#L419) |
+| shell 老历史只留 3 行信号行 | [moss/context/manager.py:481](moss/context/manager.py#L481) |
+| 工具输出 `clip(..., MAX_TOOL_OUTPUT=16000)`，超出永久丢弃 | [moss/execution/executor.py:232](moss/execution/executor.py#L232) |
+| 截断策略只有 head/middle/tail | [moss/execution/executor.py:16](moss/execution/executor.py#L16) |
+| `estimate_tokens`：CJK 1:1，拉丁 4:1 | [moss/context/token_budget.py:41](moss/context/token_budget.py#L41) |
+| `clip()` 先切 limit 再拼说明，会略超上限（注释已声明为有意取舍） | [moss/context/token_budget.py:112](moss/context/token_budget.py#L112) |
+| `clip_to_budget` 二分裁剪，保证 ≤limit | [moss/context/token_budget.py:80](moss/context/token_budget.py#L80) |
 
 ## 4. 设计
 
 ### 4.1 Compaction
 
 ```python
-# moss/compaction.py
+# moss/context/compaction.py
 @dataclass(frozen=True)
 class CompactionArtifact:
     schema_version: int          # COMPACTION_SCHEMA_VERSION = 1
@@ -134,7 +134,7 @@ READ_ARTIFACT_TOOL_SPEC = ToolSpec(
 ### 4.3 按类型压缩
 
 ```python
-# moss/output_compressors.py
+# moss/context/compressors.py
 def detect_kind(tool_name: str, args: dict, text: str) -> str: ...
 def compress(kind: str, text: str, budget: int) -> tuple[str, dict]: ...
 def register(kind: str, fn): ...
@@ -154,7 +154,7 @@ def register(kind: str, fn): ...
 ### 4.4 token 在线校准
 
 ```python
-# moss/token_budget.py
+# moss/context/token_budget.py
 @dataclass
 class Calibration:
     provider: str
@@ -236,14 +236,14 @@ class ContextBuildResult:
 
 | 文件 | 改动 |
 | --- | --- |
-| `moss/compaction.py` | 新增 |
-| `moss/output_compressors.py` | 新增 |
-| [moss/context_manager.py](moss/context_manager.py) | 段落顺序 + `constraints` 段；健康度指标；admission gate；0 预算修正；预算按窗口推导 |
-| [moss/token_budget.py](moss/token_budget.py) | 校准；`clip_to_budget` 用于所有进 prompt 的文本 |
-| [moss/tool_executor.py](moss/tool_executor.py) | 卸载 artifact；调用 `output_compressors` |
-| [moss/tools.py](moss/tools.py) | `read_artifact` 工具 |
-| [moss/run_store.py](moss/run_store.py) | `artifacts/` 与 `context/` 子目录的路径方法 |
-| [moss/agent_loop.py](moss/agent_loop.py) | compaction 触发点；`sendable=False` 的收尾 |
+| `moss/context/compaction.py` | 新增 |
+| `moss/context/compressors.py` | 新增 |
+| [moss/context/manager.py](moss/context/manager.py) | 段落顺序 + `constraints` 段；健康度指标；admission gate；0 预算修正；预算按窗口推导 |
+| [moss/context/token_budget.py](moss/context/token_budget.py) | 校准；`clip_to_budget` 用于所有进 prompt 的文本 |
+| [moss/execution/executor.py](moss/execution/executor.py) | 卸载 artifact；调用 `output_compressors` |
+| [moss/execution/registry.py](moss/execution/registry.py) | `read_artifact` 工具 |
+| [moss/runs/store.py](moss/runs/store.py) | `artifacts/` 与 `context/` 子目录的路径方法 |
+| [moss/agent/loop.py](moss/agent/loop.py) | compaction 触发点；`sendable=False` 的收尾 |
 
 ## 5. 兼容与迁移
 
@@ -287,7 +287,7 @@ class ContextBuildResult:
 4. **PR-4（P1，S）**：token 在线校准。
 5. **PR-5（P1，S）**：段落顺序 + `constraints` 段 + 健康度指标。
 6. **PR-6（P1，S）**：预算按窗口推导（依赖 [spec-04](spec-04-prompt-cache.md) 的能力表）。
-7. **PR-7（P1，L）**：`moss/compaction.py` 规则版 + 触发点 + 可逆存储。
+7. **PR-7（P1，L）**：`moss/context/compaction.py` 规则版 + 触发点 + 可逆存储。
 8. **PR-8（P1，M）**：compaction 模型版（依赖 [spec-09](spec-09-new-modules.md) 的 aux model）。
 
 ## 9. 风险与回退

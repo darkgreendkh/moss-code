@@ -34,7 +34,7 @@ moss 的定位是"轻量好用的本地 coding agent"。对这个定位来说，
 | HTTP | `requests` | stdlib `urllib` | 要自己处理重试、超时、流式 |
 | `.env` | `python-dotenv` | 手写解析器 | 不支持 `$VAR` 展开，只读字面量 |
 | frontmatter | `PyYAML` | 手写解析器 | 只支持扁平 key + 简单列表 |
-| `.gitignore` 匹配 | `pathspec` | 手写匹配器（`ignore.py`） | 边角语法可能不一致 |
+| `.gitignore` 匹配 | `pathspec` | 手写匹配器（`context/repository/ignore.py`） | 边角语法可能不一致 |
 | 符号索引 | tree-sitter | stdlib `ast`（Python）+ 行首前缀（其它） | 非 Python 语言准确率低 |
 | token 计数 | `tiktoken` | 启发式估算 + 在线校准 | 有偏差，靠校准收敛 |
 | 沙箱 | 各种 SDK | 直接调 `sandbox-exec` / `bwrap` / docker CLI | 平台相关 |
@@ -61,7 +61,7 @@ docker 能用就上 L3 沙箱，不能就退 L2。
 ### 3. 弱实现要知道自己弱在哪
 
 手写匹配器的边角行为差异，写在模块注释里，而不是等它变成一个"诡异的 bug"。
-`ignore.py` 是最典型的例子——正因为它是手写的、可能不完全对，
+`context/repository/ignore.py` 是最典型的例子——正因为它是手写的、可能不完全对，
 **安全判定（路径锚定）绝不依赖它**，它只用来少扫少展示。
 
 ## 什么情况下会重新考虑

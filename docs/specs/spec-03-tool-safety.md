@@ -39,20 +39,20 @@
 
 | 事实 | 位置 |
 | --- | --- |
-| `classify_shell_command` 纯子串/前缀匹配，`read_only_markers` 前缀命中即判只读 | [moss/tools.py:63](moss/tools.py#L63)、[moss/tools.py:121](moss/tools.py#L121) |
-| `ToolSpec` 只有 `risky: bool` | [moss/tools.py:127](moss/tools.py#L127) |
-| `run_shell` 用 `subprocess.run(shell=True)`，env 走 allowlist | [moss/tools.py:467](moss/tools.py#L467) |
+| `classify_shell_command` 纯子串/前缀匹配，`read_only_markers` 前缀命中即判只读 | [moss/execution/registry.py:63](moss/execution/registry.py#L63)、[moss/execution/registry.py:121](moss/execution/registry.py#L121) |
+| `ToolSpec` 只有 `risky: bool` | [moss/execution/registry.py:127](moss/execution/registry.py#L127) |
+| `run_shell` 用 `subprocess.run(shell=True)`，env 走 allowlist | [moss/execution/registry.py:467](moss/execution/registry.py#L467) |
 | `Moss.tool_write_file` / `tool_run_shell` / `tool_edit_file` / `tool_delegate` 等公共方法直接调 toolkit | [moss/runtime.py:528](moss/runtime.py#L528)–[moss/runtime.py:548](moss/runtime.py#L548) |
 | `approve()` 用 `input()` | [moss/runtime.py:550](moss/runtime.py#L550) |
-| 执行顺序：allowlist → 校验 → 重复 → 审批 → 快照 → 执行 | [moss/tool_executor.py:158](moss/tool_executor.py#L158) |
-| 写文件审批展示脱敏 diff（800 字符） | [moss/tool_executor.py:117](moss/tool_executor.py#L117) |
-| 脱敏只替换已知环境变量的值 | [moss/security.py:62](moss/security.py#L62) |
-| secret 形状正则只在记忆层使用 | [moss/features/memory.py:287](moss/features/memory.py#L287) |
-| 工具结果裸文本进 history | [moss/context_manager.py:503](moss/context_manager.py#L503) |
+| 执行顺序：allowlist → 校验 → 重复 → 审批 → 快照 → 执行 | [moss/execution/executor.py:158](moss/execution/executor.py#L158) |
+| 写文件审批展示脱敏 diff（800 字符） | [moss/execution/executor.py:117](moss/execution/executor.py#L117) |
+| 脱敏只替换已知环境变量的值 | [moss/execution/safety/secrets.py:62](moss/execution/safety/secrets.py#L62) |
+| secret 形状正则只在记忆层使用 | [moss/memory/service.py:287](moss/memory/service.py#L287) |
+| 工具结果裸文本进 history | [moss/context/manager.py:503](moss/context/manager.py#L503) |
 
 ## 4. 设计
 
-### 4.1 shell 分级：`moss/shell_policy.py`
+### 4.1 shell 分级：`moss/execution/safety/shell.py`
 
 ```python
 @dataclass(frozen=True)
@@ -101,7 +101,7 @@ def classify_shell_command(command: str) -> ShellRisk: ...   # 旧名保留，�
 ### 4.2 能力标签
 
 ```python
-# moss/tools.py
+# moss/execution/registry.py
 CAPABILITIES = frozenset({"fs_read", "fs_write", "exec", "network", "spawn", "memory_write"})
 
 @dataclass(frozen=True)
@@ -112,7 +112,7 @@ class ToolSpec:
 ```
 
 ```python
-# moss/policy.py
+# moss/execution/safety/policy.py
 @dataclass(frozen=True)
 class Policy:
     allow: dict[str, tuple[str, ...]]   # capability -> glob 白名单
@@ -173,7 +173,7 @@ fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLL
 ### 4.4 注入防御
 
 ```python
-# moss/injection.py
+# moss/execution/safety/injection.py
 @dataclass(frozen=True)
 class InjectionFinding:
     pattern: str
@@ -219,22 +219,22 @@ def scan(text: str, *, source: str) -> InjectionFinding | None: ...
 
 ### 4.7 审计链与值级脱敏
 
-- `redact_text` 增加形状匹配：`sk-[A-Za-z0-9]{16,}`、`ghp_\w{20,}`、`AKIA[0-9A-Z]{16}`、JWT（`eyJ` 开头三段）、PEM 头 `-----BEGIN [A-Z ]*PRIVATE KEY-----`、`(?i)(api[_-]?key|token|secret)\s*[:=]\s*\S{12,}`。误伤风险：把 `_SECRET_SHAPED_TEXT_PATTERN`（[moss/features/memory.py:287](moss/features/memory.py#L287)）提升到 `moss/security.py` 复用，避免两套正则漂移。
+- `redact_text` 增加形状匹配：`sk-[A-Za-z0-9]{16,}`、`ghp_\w{20,}`、`AKIA[0-9A-Z]{16}`、JWT（`eyJ` 开头三段）、PEM 头 `-----BEGIN [A-Z ]*PRIVATE KEY-----`、`(?i)(api[_-]?key|token|secret)\s*[:=]\s*\S{12,}`。误伤风险：把 `_SECRET_SHAPED_TEXT_PATTERN`（[moss/memory/service.py:287](moss/memory/service.py#L287)）提升到 `moss/execution/safety/secrets.py` 复用，避免两套正则漂移。
 - trace 每条事件带 `prev_hash = sha256(上一条事件的 canonical json)`，`moss runs verify <id>` 逐条校验（实现见 [spec-07](spec-07-session-artifacts.md) §4.5）。
 
 ### 4.8 涉及文件
 
 | 文件 | 改动 |
 | --- | --- |
-| `moss/shell_policy.py` | 新增 |
-| `moss/policy.py` | 新增 |
-| `moss/injection.py` | 新增 |
-| `moss/sandbox.py` | 新增（L2/L3 runner 探测与包裹） |
-| [moss/tools.py](moss/tools.py) | `ToolSpec.capabilities` / `path_scope`；`classify_shell_command` 委托 `shell_policy`；`run_shell` 支持 sandbox 包裹与进程组 |
-| [moss/tool_executor.py](moss/tool_executor.py) | 插入 policy 判定与审批回执校验；结果按 `<tool_result>` 包裹；注入扫描 |
+| `moss/execution/safety/shell.py` | 新增 |
+| `moss/execution/safety/policy.py` | 新增 |
+| `moss/execution/safety/injection.py` | 新增 |
+| `moss/execution/safety/sandbox.py` | 新增（L2/L3 runner 探测与包裹） |
+| [moss/execution/registry.py](moss/execution/registry.py) | `ToolSpec.capabilities` / `path_scope`；`classify_shell_command` 委托 `shell_policy`；`run_shell` 支持 sandbox 包裹与进程组 |
+| [moss/execution/executor.py](moss/execution/executor.py) | 插入 policy 判定与审批回执校验；结果按 `<tool_result>` 包裹；注入扫描 |
 | [moss/runtime.py](moss/runtime.py) | 公共 runner 私有化；`execute(ActionRequest)`；审批走 tty + 决定缓存 |
-| [moss/security.py](moss/security.py) | 值级形状脱敏 |
-| [moss/cli.py](moss/cli.py) | `--allow` / `--deny` / `--allow-network` / `--sandbox` |
+| [moss/execution/safety/secrets.py](moss/execution/safety/secrets.py) | 值级形状脱敏 |
+| [moss/cli/](moss/cli/) | `--allow` / `--deny` / `--allow-network` / `--sandbox` |
 | [tests/test_public_api_contract.py](tests/test_public_api_contract.py) | 新断言：`Moss` 上不存在绕过 executor 的公共执行方法 |
 
 ## 5. 兼容与迁移
@@ -271,10 +271,10 @@ def scan(text: str, *, source: str) -> InjectionFinding | None: ...
 
 ## 8. 实施顺序（PR 拆分）
 
-1. **PR-1（P0，M）**：`moss/shell_policy.py` + 40 条绕过测试 + 误报集。旧接口 shim。
+1. **PR-1（P0，M）**：`moss/execution/safety/shell.py` + 40 条绕过测试 + 误报集。旧接口 shim。
 2. **PR-2（P0，M）**：执行入口收口 + 契约测试（先只做私有化与 wrapper，不动 TOCTOU）。
 3. **PR-3（P0，M）**：注入防御三件套（角色分层与 [spec-04](spec-04-prompt-cache.md) PR-1 合并）。
-4. **PR-4（P1，M）**：能力标签 + `moss/policy.py` + CLI。
+4. **PR-4（P1，M）**：能力标签 + `moss/execution/safety/policy.py` + CLI。
 5. **PR-5（P1，M）**：审批回执 + `expected_sha` + `O_NOFOLLOW`。
 6. **PR-6（P1，S）**：审批走 tty + 决定缓存。
 7. **PR-7（P2，S）**：值级脱敏 + trace hash 链。

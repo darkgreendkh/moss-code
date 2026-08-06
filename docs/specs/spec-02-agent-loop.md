@@ -38,22 +38,22 @@
 
 | 事实 | 位置 |
 | --- | --- |
-| `while tool_steps < max_steps and attempts < max_attempts`，`max_attempts = max(max_steps*3, max_steps+4)` | [moss/agent_loop.py:44](moss/agent_loop.py#L44) |
-| 用户消息先进 history，再由 context_manager 作为 current request 渲染 → 首轮出现两次 | [moss/agent_loop.py:20](moss/agent_loop.py#L20)、[moss/context_manager.py:141](moss/context_manager.py#L141) |
-| `parse_model_output` 只返回单个 `(kind, payload)` | [moss/output_parser.py:29](moss/output_parser.py#L29) |
-| 任何非空裸文本 → final | [moss/output_parser.py:50](moss/output_parser.py#L50) |
+| `while tool_steps < max_steps and attempts < max_attempts`，`max_attempts = max(max_steps*3, max_steps+4)` | [moss/agent/loop.py:44](moss/agent/loop.py#L44) |
+| 用户消息先进 history，再由 context_manager 作为 current request 渲染 → 首轮出现两次 | [moss/agent/loop.py:20](moss/agent/loop.py#L20)、[moss/context/manager.py:141](moss/context/manager.py#L141) |
+| `parse_model_output` 只返回单个 `(kind, payload)` | [moss/agent/output_parser.py:29](moss/agent/output_parser.py#L29) |
+| 任何非空裸文本 → final | [moss/agent/output_parser.py:50](moss/agent/output_parser.py#L50) |
 | 原生 tool_use 被序列化回 `<tool>` 文本，只取第一个，`call_id` 丢弃 | [moss/providers/clients.py:107](moss/providers/clients.py#L107) |
 | `repeated_tool_call` 只比较最近 2 条 tool 事件 | [moss/runtime.py:443](moss/runtime.py#L443) |
-| 每步落 checkpoint | [moss/agent_loop.py:191](moss/agent_loop.py#L191) |
-| 模型后端异常有专门 finalizer，其它异常没有 | [moss/agent_loop.py:266](moss/agent_loop.py#L266) |
-| 预算只有 `max_steps` / `max_new_tokens` | [moss/cli.py:448](moss/cli.py#L448) |
+| 每步落 checkpoint | [moss/agent/loop.py:191](moss/agent/loop.py#L191) |
+| 模型后端异常有专门 finalizer，其它异常没有 | [moss/agent/loop.py:266](moss/agent/loop.py#L266) |
+| 预算只有 `max_steps` / `max_new_tokens` | [moss/cli/parser.py:178](moss/cli/parser.py#L178) |
 
 ## 4. 设计
 
 ### 4.1 动作批（ToolBatch）
 
 ```python
-# moss/output_parser.py
+# moss/agent/output_parser.py
 @dataclass(frozen=True)
 class Action:
     kind: str            # "tool" | "final" | "retry"
@@ -131,7 +131,7 @@ def _needs_verification(task_state, trace_flags) -> bool:
 ### 4.5 停滞检测
 
 ```python
-# moss/stall.py
+# moss/agent/stall.py
 @dataclass(frozen=True)
 class StallSignal:
     kind: str      # repeat_exact | ab_loop | no_progress | error_storm
@@ -153,7 +153,7 @@ def detect_stall(events, *, window=8) -> StallSignal | None: ...
 ### 4.6 多维预算
 
 ```python
-# moss/budget.py
+# moss/agent/budget.py
 @dataclass
 class RunBudget:
     max_steps: int
@@ -192,21 +192,21 @@ except BaseException as exc:            # 含 KeyboardInterrupt / SystemExit
 
 `tools_batch_started{count, parallel}` · `tools_batch_finished{count, duration_ms}` · `plan_updated{steps}` · `plan_pressure{step_id}` · `stall_detected{kind, detail}` · `verification_requested` · `budget_soft_exceeded{dimension}` · `budget_exceeded{dimension}` · `run_interrupted{reason}` · `batch_truncated{dropped}`
 
-全部走 `moss/trace_events.py` 常量（[spec-07](spec-07-session-artifacts.md) §4.5）。
+全部走 `moss/runs/observability/events.py` 常量（[spec-07](spec-07-session-artifacts.md) §4.5）。
 
 ### 4.9 涉及文件
 
 | 文件 | 改动 |
 | --- | --- |
-| [moss/output_parser.py](moss/output_parser.py) | `Action`、`parse_model_actions`；`parse_model_output` 变薄封装 |
-| [moss/agent_loop.py](moss/agent_loop.py) | 批执行、计划、自检、停滞、预算、中断收尾 |
-| `moss/stall.py` | 新增 |
-| `moss/budget.py` | 新增 |
-| [moss/tools.py](moss/tools.py) | `UPDATE_PLAN_TOOL_SPEC` + `tool_update_plan` |
-| [moss/task_state.py](moss/task_state.py) | 新字段 `plan` / `model_turns` / `tool_calls` / `verification_requested` / `budget`；`STOP_REASON_BUDGET_EXCEEDED`、`STOP_REASON_INTERRUPTED`（若无） |
-| [moss/tool_executor.py](moss/tool_executor.py) | 支持按批调用；memory/record/trace 回主线程串行 |
-| [moss/cli.py](moss/cli.py) | 新 CLI 参数；`--parallel-tools`、`--verify-before-final` |
-| [moss/runtime.py](moss/runtime.py) | `repeated_tool_call` 委托给 `moss/stall.py` |
+| [moss/agent/output_parser.py](moss/agent/output_parser.py) | `Action`、`parse_model_actions`；`parse_model_output` 变薄封装 |
+| [moss/agent/loop.py](moss/agent/loop.py) | 批执行、计划、自检、停滞、预算、中断收尾 |
+| `moss/agent/stall.py` | 新增 |
+| `moss/agent/budget.py` | 新增 |
+| [moss/execution/registry.py](moss/execution/registry.py) | `UPDATE_PLAN_TOOL_SPEC` + `tool_update_plan` |
+| [moss/agent/state.py](moss/agent/state.py) | 新字段 `plan` / `model_turns` / `tool_calls` / `verification_requested` / `budget`；`STOP_REASON_BUDGET_EXCEEDED`、`STOP_REASON_INTERRUPTED`（若无） |
+| [moss/execution/executor.py](moss/execution/executor.py) | 支持按批调用；memory/record/trace 回主线程串行 |
+| [moss/cli/](moss/cli/) | 新 CLI 参数；`--parallel-tools`、`--verify-before-final` |
+| [moss/runtime.py](moss/runtime.py) | `repeated_tool_call` 委托给 `moss/agent/stall.py` |
 
 ## 5. 兼容与迁移
 
@@ -247,8 +247,8 @@ except BaseException as exc:            # 含 KeyboardInterrupt / SystemExit
 3. **PR-3（P1，S）**：`model_turns` / `tool_calls` 记账字段（先只记录，不改行为，给评测建基线）。
 4. **PR-4（P1，M）**：`parse_model_actions` + 批执行（默认串行，`--parallel-tools=off`）。
 5. **PR-5（P1，S）**：只读并行开关打开 + 顺序不变量测试。
-6. **PR-6（P1，S）**：`moss/stall.py` 接管停滞检测。
-7. **PR-7（P1，M）**：`moss/budget.py` + CLI 参数 + report `usage` 段。
+6. **PR-6（P1，S）**：`moss/agent/stall.py` 接管停滞检测。
+7. **PR-7（P1，M）**：`moss/agent/budget.py` + CLI 参数 + report `usage` 段。
 8. **PR-8（P1，M）**：`update_plan` 工具 + 计划渲染（与 [spec-04](spec-04-prompt-cache.md) PR 合并上线）。
 9. **PR-9（P1，S）**：收尾前自检。
 

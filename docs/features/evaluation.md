@@ -142,7 +142,7 @@ uv run --with pytest python scripts/eval_audit_tasks.py benchmarks/tasks/mined \
 `moss/evaluation/failure_taxonomy.py` 从 **trace 事件**做确定性分类
 （TRAIL/MAST 风格），不靠人肉看日志，也不靠模型判断。
 分类维度对得上 trace 里已有的事件名——这也是
-[`trace_events.py` 禁止写字面量](../architecture.md#5-全局不变量)的直接动机。
+[`runs/observability/events.py` 禁止写字面量](../architecture.md#5-全局不变量)的直接动机。
 
 ---
 

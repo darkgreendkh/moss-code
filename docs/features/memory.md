@@ -1,7 +1,7 @@
 # 分层记忆
 
-> 代码：`moss/features/memory.py` · `moss/features/memory_store.py` ·
-> `moss/features/memory_records.py` · `moss/retrieval.py`
+> 代码：`moss/memory/service.py` · `moss/memory/store.py` ·
+> `moss/memory/records.py` · `moss/context/repository/retrieval.py`
 > 设计稿：[spec-05](../specs/spec-05-memory.md)
 
 记忆的目标不是"记住一切"，而是**让下一轮少读一次文件、下一次会话少问一遍**。
@@ -70,7 +70,7 @@ append-only 的事件流，读时折叠。一条记录的关键字段：
 
 ## 4. 召回
 
-`retrieval.py`：BM25 + 字段权重 + 时间衰减。
+`context/repository/retrieval.py`：BM25 + 字段权重 + 时间衰减。
 
 字段权重：
 

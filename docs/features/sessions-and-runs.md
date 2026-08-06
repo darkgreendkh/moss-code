@@ -1,8 +1,8 @@
 # 会话、运行工件与恢复
 
-> 代码：`moss/session_store.py` · `moss/run_store.py` · `moss/run_index.py` ·
-> `moss/lease.py` · `moss/checkpoint.py` · `moss/action_ledger.py` ·
-> `moss/rewind.py` · `moss/atomic_io.py` · `moss/task_state.py`
+> 代码：`moss/runs/session.py` · `moss/runs/store.py` · `moss/runs/index.py` ·
+> `moss/runs/lease.py` · `moss/runs/checkpoint.py` · `moss/runs/ledger.py` ·
+> `moss/runs/rewind.py` · `moss/atomic_io.py` · `moss/agent/state.py`
 > 设计稿：[spec-07](../specs/spec-07-session-artifacts.md)
 
 两条互相独立的时间线：
@@ -75,11 +75,11 @@ delegate 子 agent 的会话隔离在 `.moss/delegates/`，正是为了不抢这
 `status`：`running` / `completed` / `stopped` / `failed`。
 `stop_reason` 是为什么结束的唯一口径（`final_answer_returned` / `step_limit_reached` /
 `model_error` / `budget_exceeded` / `context_overflow` / `interrupted` / …，
-完整清单在 `task_state.py`）。
+完整清单在 `agent/state.py`）。
 
 ### trace
 
-事件名**全部来自 `trace_events.py` 的常量**，别处禁止写字面量。
+事件名**全部来自 `runs/observability/events.py` 的常量**，别处禁止写字面量。
 `tests/test_trace_events.py` 用 AST 扫 `moss/evaluation/` 和所有
 `emit_trace`/`append_trace` 调用；trace 里出现的名字也必须在 `ALL_EVENTS` 内。
 
@@ -177,7 +177,7 @@ moss --resume latest --explain                      # 打印会带回什么，�
 moss --resume latest --fork <checkpoint_id>         # 从任意 checkpoint 分叉
 ```
 
-`checkpoint.py` 每步落一个 checkpoint（上限 40，自动裁剪），
+`runs/checkpoint.py` 每步落一个 checkpoint（上限 40，自动裁剪），
 恢复部件有四项：`memory` / `plan` / `history` / `checkpoint`。
 
 `evaluate_resume_state` 给出恢复状态：

@@ -87,7 +87,7 @@ class DelegateResult:
 
 **依赖**：[spec-03](spec-03-tool-safety.md)（能力标签）
 
-**现状**：skill 只是 `.moss/skills/*.md` 的 frontmatter（name/description）+ 全文注入，body 硬 clip 4000（[moss/skills.py](moss/skills.py)）。
+**现状**：skill 只是 `.moss/skills/*.md` 的 frontmatter（name/description）+ 全文注入，body 硬 clip 4000（[moss/extensions/skills.py](moss/extensions/skills.py)）。
 
 **设计**
 
