@@ -54,6 +54,61 @@ def test_large_output_is_offloaded_with_a_pointer(tmp_path):
     assert artifact_path.read_text(encoding="utf-8").splitlines()[-1].endswith("z" * 40)
 
 
+def test_output_that_still_fits_keeps_its_content_instead_of_a_pointer(tmp_path):
+    """装得下的输出不许被换成"摘要 + 指针"。
+
+    卸载的理由是"该被砍掉的部分要能取回"，不是"能省则省"。阈值低于硬截断
+    上限时，一次 read_file 会变成 read_file + read_artifact 两步、而且还只拿回
+    一部分——一个 25 步的 run 就是这样烧完却给不出答案的。
+    """
+    _big_file(tmp_path, name="medium.txt", lines=200)  # 约 10KB，旧阈值 4000 会卸载
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"read_file","args":{"path":"medium.txt","start":1,"end":200}}</tool>',
+            "<final>done</final>",
+        ],
+    )
+
+    agent.ask("read the medium file")
+
+    tool_entry = next(item for item in agent.session["history"] if item.get("role") == "tool")
+    assert "artifact" not in tool_entry
+    assert "read_artifact(" not in tool_entry["content"]
+    assert "line 199 " in tool_entry["content"]
+    # 而且下一轮的 prompt 里也还在：历史压缩同样不该在预算够用时动手。
+    assert "line 199 " in agent.context_manager.render_history_text()
+
+
+def test_read_artifact_rejects_a_start_past_the_end_instead_of_returning_nothing(tmp_path):
+    _big_file(tmp_path)
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"read_file","args":{"path":"big.txt","start":1,"end":900}}</tool>',
+            "<final>placeholder</final>",
+        ],
+    )
+    agent.ask("read the big file")
+    pointer = next(item["artifact"] for item in agent.session["history"] if item.get("artifact"))
+
+    result = agent.run_tool("read_artifact", {"path": pointer, "start": 5000, "end": 5100})
+
+    # 静默的空结果模型没法解释，它只会换个区间再来一次。
+    assert "start is past the end of the artifact" in result
+    assert "901 lines" in result
+
+
+def test_read_file_rejects_a_start_past_the_end(tmp_path):
+    (tmp_path / "small.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool("read_file", {"path": "small.txt", "start": 50, "end": 60})
+
+    assert "start is past the end of the file" in result
+    assert "2 lines" in result
+
+
 def test_offloaded_output_loses_no_bytes(tmp_path):
     _big_file(tmp_path, lines=2000)
     agent = build_agent(
@@ -137,12 +192,14 @@ def test_read_artifact_refuses_to_escape_the_run_directory(tmp_path):
 
 def test_artifact_content_is_redacted_before_it_lands_on_disk(tmp_path, monkeypatch):
     monkeypatch.setenv("MOSS_TEST_TOKEN", "sk-live-abcdef0123456789")
-    body = "\n".join(f"line {index} sk-live-abcdef0123456789" for index in range(400))
+    # 900 行约 34KB，明确超过 MAX_TOOL_OUTPUT；这个测试验证的是“真正需要
+    # 卸载时先脱敏再落盘”，不能依赖已经废弃的 4000 字符旧阈值。
+    body = "\n".join(f"line {index} sk-live-abcdef0123456789" for index in range(900))
     (tmp_path / "leaky.txt").write_text(body, encoding="utf-8")
     agent = build_agent(
         tmp_path,
         [
-            '<tool>{"name":"read_file","args":{"path":"leaky.txt","start":1,"end":400}}</tool>',
+            '<tool>{"name":"read_file","args":{"path":"leaky.txt","start":1,"end":900}}</tool>',
             "<final>done</final>",
         ],
         secret_env_names=["MOSS_TEST_TOKEN"],

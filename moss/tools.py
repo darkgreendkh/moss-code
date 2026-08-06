@@ -614,6 +614,10 @@ def tool_read_file(context, args):
     if start < 1 or end < start:
         raise ValueError("invalid line range")
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    # start 落在文件末尾之后：宁可报错也不要返回空字符串。
+    # 静默的空结果模型没法解释，它只会换个区间再来一次。
+    if start > len(lines):
+        raise ValueError(f"start is past the end of the file ({len(lines)} lines)")
     body = "\n".join(f"{number:>4}: {line}" for number, line in enumerate(lines[start - 1:end], start=start))
     return f"# {path.relative_to(context.root)}\n{body}"
 
@@ -632,6 +636,8 @@ def tool_read_artifact(context, args):
     if start < 1 or end < start:
         raise ValueError("invalid line range")
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if start > len(lines):
+        raise ValueError(f"start is past the end of the artifact ({len(lines)} lines)")
     body = "\n".join(f"{number:>4}: {line}" for number, line in enumerate(lines[start - 1:end], start=start))
     return f"# {path.name} (lines {start}-{min(end, len(lines))} of {len(lines)})\n{body}"
 

@@ -20,9 +20,11 @@ from .workspace import invalidate_git_facts_cache
 
 
 # 超过这个字符数的工具输出就落盘，prompt 里只放摘要 + 指针。
-# 阈值刻意偏低：一份 4000 字符的输出进 prompt 已经是上千 token，
-# 而它里面通常只有几行是决策需要的。
-ARTIFACT_THRESHOLD = 4000
+# 阈值**就是硬截断的上限**：卸载存在的理由是"该被砍掉的部分要能取回"，
+# 而不是"能省则省"。定得比上限低（历史上是 4000）会让一份本来装得下的输出
+# 也被换成摘要 + 指针，模型为了看自己刚读到的东西必须再花一步 read_artifact，
+# 一次 read_file 变成两步且仍然只拿到一部分——25 步烧完还没答案就是这么来的。
+ARTIFACT_THRESHOLD = MAX_TOOL_OUTPUT
 # 卸载后进 prompt 的摘要上限（字符）。
 ARTIFACT_PREVIEW_CHARS = 2000
 # 压缩统计里允许进 metadata/trace 的字段（其余是明细表，只留给调用方）。

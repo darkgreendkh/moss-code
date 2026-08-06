@@ -34,27 +34,32 @@ def _openai_structured_input(model_request):
             }
         )
     for message in model_request.messages:
-        if model_request.protocol == "native" and message.blocks:
-            block = message.blocks[0]
-            if block.kind == "tool_call" and message.call_id:
-                items.append(
-                    {
-                        "type": "function_call",
-                        "call_id": message.call_id,
-                        "name": block.source,
-                        "arguments": block.text,
-                    }
-                )
-                continue
-            if block.kind == "tool_result" and message.call_id:
-                items.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": message.call_id,
-                        "output": block.text,
-                    }
-                )
-                continue
+        if model_request.protocol == "native" and _has_native_blocks(message):
+            # /responses 把 function_call 和 function_call_output 当成**顶层条目**，
+            # 一条消息里的多个工具块要摊平成多条，不能只取 blocks[0]（会丢调用）。
+            for block in message.blocks:
+                call_id = _block_call_id(message, block)
+                if block.kind == "tool_call" and call_id:
+                    items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": call_id,
+                            "name": block.source,
+                            "arguments": block.text,
+                        }
+                    )
+                elif block.kind == "tool_result" and call_id:
+                    items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": block.text,
+                        }
+                    )
+                elif block.text:
+                    role = message.role if message.role in {"user", "assistant"} else "user"
+                    items.append({"role": role, "content": [{"type": "input_text", "text": block.text}]})
+            continue
         role = message.role if message.role in {"user", "assistant"} else "user"
         content = [
             {"type": "input_text", "text": block.text}
@@ -66,39 +71,67 @@ def _openai_structured_input(model_request):
     return items
 
 
+def _block_call_id(message, block):
+    return str(block.call_id or message.call_id or "")
+
+
+def _has_native_blocks(message):
+    return any(
+        block.kind in {"tool_call", "tool_result"} and _block_call_id(message, block)
+        for block in message.blocks
+    )
+
+
+def _anthropic_native_message(message):
+    """把一条带工具块的消息翻成 Anthropic content 数组。
+
+    一条消息里的多个 tool_use / tool_result 必须留在同一条消息里：拆开发出去
+    /messages 会直接 400（`tool_use` 必须被紧随其后的 `tool_result` 配平）。
+    """
+    content = []
+    has_tool_use = False
+    has_tool_result = False
+    for block in message.blocks:
+        call_id = _block_call_id(message, block)
+        if block.kind == "tool_call" and call_id:
+            has_tool_use = True
+            content.append(
+                {
+                    "type": "tool_use",
+                    "id": call_id,
+                    "name": block.source,
+                    "input": _parse_native_tool_args(block.text),
+                }
+            )
+        elif block.kind == "tool_result" and call_id:
+            has_tool_result = True
+            content.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": call_id,
+                    "content": block.text,
+                }
+            )
+        elif block.text:
+            content.append({"type": "text", "text": block.text})
+    if not content:
+        return None
+    if has_tool_use:
+        role = "assistant"
+    elif has_tool_result:
+        role = "user"
+    else:
+        role = "assistant" if message.role == "assistant" else "user"
+    return {"role": role, "content": content}
+
+
 def _anthropic_structured_messages(model_request):
     messages = []
     for message in model_request.messages:
-        if model_request.protocol == "native" and message.blocks:
-            block = message.blocks[0]
-            if block.kind == "tool_call" and message.call_id:
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "id": message.call_id,
-                                "name": block.source,
-                                "input": _parse_native_tool_args(block.text),
-                            }
-                        ],
-                    }
-                )
-                continue
-            if block.kind == "tool_result" and message.call_id:
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": message.call_id,
-                                "content": block.text,
-                            }
-                        ],
-                    }
-                )
+        if model_request.protocol == "native" and _has_native_blocks(message):
+            native = _anthropic_native_message(message)
+            if native is not None:
+                messages.append(native)
                 continue
         role = "assistant" if message.role == "assistant" else "user"
         content = [

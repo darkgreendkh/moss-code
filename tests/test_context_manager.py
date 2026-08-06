@@ -224,14 +224,55 @@ def test_context_manager_collapses_older_duplicate_reads_into_one_summary_line(t
             }
         )
 
-    prompt, metadata = ContextManager(agent).build("check the file")
+    # 折叠是**预算压力下**的行为：装得下就一个字都不该压（否则模型看不到
+    # 自己刚读到的内容，只会再读一遍）。所以这里显式把 history 段勒紧。
+    prompt, metadata = ContextManager(
+        agent,
+        total_budget=2000,
+        section_budgets={"prefix": 200, "memory": 60, "relevant_memory": 60, "history": 260},
+        measure=len,
+    ).build("check the file")
     transcript = transcript_of(prompt)
 
     assert transcript.count('source="read_file"') == 0
     assert "sample.txt -> alpha | beta" in transcript
+    assert metadata["history"]["history_fidelity"] == "compressed"
     assert metadata["history"]["older_entries_count"] == 1
     assert metadata["history"]["collapsed_duplicate_reads"] == 1
     assert metadata["history"]["reused_file_summary_count"] == 1
+
+
+def test_context_manager_keeps_history_verbatim_while_the_budget_has_room(tmp_path):
+    """预算够用时不许压历史。
+
+    压缩是有损的：读过的文件内容被折成一行之后，模型唯一的选择就是再读一遍。
+    历史上这条链路让一次"介绍下你能干嘛"跑满 25 步也没给出答案。
+    """
+    agent = build_agent(tmp_path, [])
+    agent.record(
+        {
+            "role": "tool",
+            "name": "read_file",
+            "args": {"path": "sample.txt", "start": 1, "end": 2},
+            "content": "# sample.txt\nDISTINCTIVE-BODY-LINE\n",
+            "created_at": "2026-04-07T09:00:00+00:00",
+        }
+    )
+    for minute in range(1, 8):
+        agent.record(
+            {
+                "role": "user" if minute % 2 == 0 else "assistant",
+                "content": f"recent-{minute}",
+                "created_at": f"2026-04-07T09:0{minute}:00+00:00",
+            }
+        )
+
+    prompt, metadata = ContextManager(agent).build("check the file")
+
+    assert "DISTINCTIVE-BODY-LINE" in transcript_of(prompt)
+    assert metadata["history"]["history_fidelity"] == "full"
+    assert metadata["history"]["summarized_tool_count"] == 0
+    assert metadata["history"]["collapsed_duplicate_reads"] == 0
 
 
 def test_context_manager_summarizes_older_tool_output_into_one_line(tmp_path):
@@ -256,7 +297,12 @@ def test_context_manager_summarizes_older_tool_output_into_one_line(tmp_path):
             }
         )
 
-    prompt, metadata = ContextManager(agent).build("check failures")
+    prompt, metadata = ContextManager(
+        agent,
+        total_budget=2000,
+        section_budgets={"prefix": 200, "memory": 60, "relevant_memory": 60, "history": 260},
+        measure=len,
+    ).build("check failures")
     transcript = transcript_of(prompt)
 
     assert 'pytest -q -> FAIL test_one | FAIL test_two | FAIL test_three' in transcript
@@ -332,7 +378,12 @@ def test_context_manager_shell_summary_prioritizes_error_lines(tmp_path):
             }
         )
 
-    prompt, _ = ContextManager(agent).build("what failed")
+    prompt, _ = ContextManager(
+        agent,
+        total_budget=2000,
+        section_budgets={"prefix": 200, "memory": 60, "relevant_memory": 60, "history": 260},
+        measure=len,
+    ).build("what failed")
     transcript = transcript_of(prompt)
 
     # 报错在输出末尾：错误优先的摘要应保留它，而不是只取无信息的前 3 行。
@@ -380,6 +431,14 @@ def test_history_text_reuses_context_manager_history_rendering(tmp_path):
 
     # runtime.history_text 现在直接复用 ContextManager 的历史渲染，
     # 单一口径，不再有第二套略有差异的压缩逻辑。
-    rendered = agent.context_manager.render_history_text()
-    assert "pytest -q -> FAIL test_one" in agent.history_text()
-    assert "pytest -q -> FAIL test_one" in rendered
+    assert agent.history_text() == agent.context_manager.render_history_text()
+
+    # 换成勒紧的预算，压缩路径也必须是同一份实现。
+    agent.context_manager = ContextManager(
+        agent,
+        total_budget=2000,
+        section_budgets={"prefix": 200, "memory": 60, "relevant_memory": 60, "history": 260},
+        measure=len,
+    )
+    assert "pytest -q -> FAIL test_one" in agent.context_manager.render_history_text()
+    assert agent.history_text() == agent.context_manager.render_history_text()

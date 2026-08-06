@@ -15,6 +15,10 @@ class Block:
     source: str = ""
     trust: str = "platform"
     cache: bool = False
+    # 原生工具协议里，一条 assistant 消息可以带多个 tool_use，对应的 tool_result
+    # 也必须挤在**同一条** user 消息里（Anthropic /messages 是硬校验）。所以调用 ID
+    # 挂在 block 上而不是只挂在 message 上；message.call_id 保留给单块消息兜底。
+    call_id: str = ""
 
 
 @dataclass(frozen=True)

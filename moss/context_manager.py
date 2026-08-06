@@ -84,6 +84,9 @@ SECTION_PURPOSE = {
     CURRENT_REQUEST_SECTION: "# Below: the user's current request. Act on this.",
 }
 RELEVANT_MEMORY_LIMIT = 3
+# 原生协议里，有调用无结果的那条 tool_use 必须被配平，否则 provider 直接 400。
+# 补的是"如实说没有结果"，不是编一个假输出——模型据此可以决定要不要重来。
+MISSING_TOOL_RESULT = "(no result recorded for this call: the run stopped before it produced output)"
 # 工具输出在历史里被截断时，保留哪一端取决于关键信息的位置：
 # run_shell 是 "exit_code(顶部) / stdout / stderr(底部)"，两端都要留。
 _HISTORY_KEEP = {"run_shell": "middle"}
@@ -612,57 +615,114 @@ class ContextManager:
         )
 
     def _native_history_messages(self):
+        """把 history 翻成原生工具协议的消息序列。
+
+        原生协议下**一轮的所有 tool_use 必须打成一条 assistant 消息，对应的
+        tool_result 必须打成紧随其后的一条 user 消息**——history 里它们是
+        「先记两条调用，再记两条结果」的平铺顺序，逐条翻译出来就是
+        assistant/assistant/user/user，Anthropic /messages 会直接 400。
+        所以这里按"调用组"重组，并保证配平：
+        - 调用有记录、结果缺失（步数预算截断、run 中途被打断）→ 补一条说明性的
+          tool_result，如实说没有结果，而不是伪造输出，也不是丢掉调用；
+        - 结果孤零零存在（对应调用已被裁掉/回退）→ 降级成普通文本消息，
+          没有 tool_use 的 tool_result 同样会被 provider 拒收。
+        """
+        entries = self._history_entries()
+        # call_id → 结果在 entries 里的位置。同 id 只认第一条。
+        result_positions = {}
+        for position, item in enumerate(entries):
+            call_id = str(item.get("call_id", "") or "")
+            if call_id and str(item.get("role", "")) == "tool" and not item.get("native_tool_call"):
+                result_positions.setdefault(call_id, position)
+
         messages = []
-        for item in self._history_entries():
+        consumed = set()
+        index = 0
+        while index < len(entries):
+            item = entries[index]
             role = str(item.get("role", "user"))
-            call_id = str(item.get("call_id", "") or "") or None
+            call_id = str(item.get("call_id", "") or "")
             if item.get("native_tool_call") and call_id:
+                group = []
+                while index < len(entries):
+                    candidate = entries[index]
+                    if not (candidate.get("native_tool_call") and str(candidate.get("call_id", "") or "")):
+                        break
+                    group.append(candidate)
+                    index += 1
+                messages.extend(self._native_tool_turn(group, entries, result_positions, consumed))
+                continue
+            index += 1
+            if role == "tool" and call_id:
+                if index - 1 in consumed:
+                    # 已经跟着它的调用一起发过了。
+                    continue
                 messages.append(
                     Message(
-                        role="assistant",
+                        role="user",
                         blocks=(
                             Block(
-                                json.dumps(item.get("args", {}), separators=(",", ":"), sort_keys=True),
-                                kind="tool_call",
-                                source=str(item.get("name", "")),
-                                trust="model",
-                            ),
-                        ),
-                        call_id=call_id,
-                    )
-                )
-            elif role == "tool" and call_id:
-                messages.append(
-                    Message(
-                        role="tool",
-                        blocks=(
-                            Block(
-                                self._clip(str(item.get("content", "")), 900, keep="head"),
-                                kind="tool_result",
+                                f'{tool_result_open_tag(item)}\n'
+                                f'{self._clip(str(item.get("content", "")), 900, keep="head")}\n</tool_result>',
+                                kind="history",
                                 source=str(item.get("name", "")),
                                 trust="tool",
                             ),
                         ),
-                        call_id=call_id,
                     )
                 )
-            else:
-                safe_role = role if role in {"user", "assistant"} else "user"
-                trust = "user" if safe_role == "user" else "model"
-                messages.append(
-                    Message(
-                        role=safe_role,
-                        blocks=(
-                            Block(
-                                self._clip(str(item.get("content", "")), 900, keep="head"),
-                                kind="history",
-                                source="session",
-                                trust=trust,
-                            ),
+                continue
+            safe_role = role if role in {"user", "assistant"} else "user"
+            trust = "user" if safe_role == "user" else "model"
+            messages.append(
+                Message(
+                    role=safe_role,
+                    blocks=(
+                        Block(
+                            self._clip(str(item.get("content", "")), 900, keep="head"),
+                            kind="history",
+                            source="session",
+                            trust=trust,
                         ),
-                    )
+                    ),
                 )
+            )
         return messages
+
+    def _native_tool_turn(self, group, entries, result_positions, consumed):
+        """一组同轮的原生工具调用 → (assistant 调用消息, tool 结果消息)。"""
+        call_blocks = []
+        result_blocks = []
+        for item in group:
+            call_id = str(item.get("call_id", "") or "")
+            call_blocks.append(
+                Block(
+                    json.dumps(item.get("args", {}), separators=(",", ":"), sort_keys=True),
+                    kind="tool_call",
+                    source=str(item.get("name", "")),
+                    trust="model",
+                    call_id=call_id,
+                )
+            )
+            position = result_positions.get(call_id)
+            if position is None or position in consumed:
+                content = MISSING_TOOL_RESULT
+                source = str(item.get("name", ""))
+            else:
+                consumed.add(position)
+                result = entries[position]
+                content = self._clip(str(result.get("content", "")), 900, keep="head")
+                source = str(result.get("name", "")) or str(item.get("name", ""))
+            result_blocks.append(
+                Block(content, kind="tool_result", source=source, trust="tool", call_id=call_id)
+            )
+        # 单调用的那条路径保持和重组之前逐字节一致：message.call_id 仍然带上，
+        # 免得录制回放的指纹和只读 message.call_id 的旧代码跟着抖。
+        single = str(group[0].get("call_id", "") or "") if len(group) == 1 else None
+        return [
+            Message(role="assistant", blocks=tuple(call_blocks), call_id=single),
+            Message(role="tool", blocks=tuple(result_blocks), call_id=single),
+        ]
 
     def _with_purpose(self, section, text):
         purpose = SECTION_PURPOSE.get(section, "")
@@ -856,6 +916,14 @@ class ContextManager:
                 },
             )
 
+        # 先试完整保真：预算装得下就一个字都不压。
+        # 压缩是**有损**的（旧工具结果折成一行、最近的也砍到 900），而模型看不到
+        # 自己刚读到的内容时，唯一能做的就是再读一遍——"读了 25 步没有产出"正是
+        # 这么来的。预算没花完却先把内容丢掉，省下来的额度不会有任何人受益。
+        full = self._full_fidelity_history(history, budget)
+        if full is not None:
+            return SectionRender(raw=raw, budget=budget, rendered=full[0], details=full[1])
+
         # 优先保留最近的历史，因为下一步决策通常最依赖刚刚发生的工具结果。
         recent_window = 6
         recent_start = max(0, len(history) - recent_window)
@@ -896,12 +964,36 @@ class ContextManager:
             budget=budget,
             rendered=rendered,
             details={
+                "history_fidelity": "compressed",
                 "recent_window": recent_window,
                 "recent_start": recent_start,
                 "rendered_entries": rendered_entries,
                 **history_details,
             },
         )
+
+    def _full_fidelity_history(self, history, budget):
+        """整段历史原样渲染；装不下返回 None，交给压缩路径。
+
+        每条仍按 budget 上限裁一次——单条就超过整段预算时（比如一份巨大的
+        工具输出）不能让它把后面的历史挤没，那种情况本来就该走压缩路径。
+        """
+        lines = []
+        for item in history:
+            lines.extend(self._render_history_item(item, budget))
+        rendered = "\n".join(["Transcript:", *lines])
+        if self.measure(rendered) > budget:
+            return None
+        return rendered, {
+            "history_fidelity": "full",
+            "recent_window": len(history),
+            "recent_start": 0,
+            "rendered_entries": lines,
+            "older_entries_count": 0,
+            "collapsed_duplicate_reads": 0,
+            "reused_file_summary_count": 0,
+            "summarized_tool_count": 0,
+        }
 
     def _compressed_history_entries(self, history, recent_start):
         entries = []
@@ -1153,6 +1245,9 @@ class ContextManager:
             "history": {
                 "raw_chars": rendered["history"].raw_chars,
                 "rendered_chars": rendered["history"].rendered_chars,
+                # full 表示这一轮历史一个字都没压。压缩是有损的，
+                # 报告里要能一眼看出它是被预算逼出来的还是白白发生的。
+                "history_fidelity": str(rendered["history"].details.get("history_fidelity", "full")),
                 "older_entries_count": int(rendered["history"].details.get("older_entries_count", 0)),
                 "collapsed_duplicate_reads": int(rendered["history"].details.get("collapsed_duplicate_reads", 0)),
                 "reused_file_summary_count": int(rendered["history"].details.get("reused_file_summary_count", 0)),

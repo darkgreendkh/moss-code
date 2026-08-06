@@ -2158,7 +2158,21 @@ def test_agent_records_model_cache_metadata_in_last_prompt_metadata(tmp_path):
 
 
 def test_recent_transcript_entries_stay_richer_than_older_ones(tmp_path):
+    """预算不够时，先牺牲旧历史。
+
+    注意这是**预算压力下**的行为：预算装得下时历史一个字都不压
+    （见 test_context_manager_keeps_history_verbatim_while_the_budget_has_room），
+    所以这里显式勒紧 history 段。
+    """
+    from moss.context_manager import ContextManager
+
     agent = build_agent(tmp_path, ["<final>Done.</final>"])
+    agent.context_manager = ContextManager(
+        agent,
+        total_budget=4000,
+        section_budgets={"prefix": 600, "memory": 200, "relevant_memory": 200, "history": 1200},
+        measure=len,
+    )
     old_text = "OLD-" + ("A" * 320)
     recent_text = "RECENT-" + ("B" * 320)
 

@@ -7,6 +7,7 @@ from moss.output_parser import parse_model_actions
 from moss.providers.clients import (
     AnthropicCompatibleModelClient,
     OpenAICompatibleModelClient,
+    _anthropic_structured_messages,
     _extract_anthropic_text,
     _extract_openai_text,
 )
@@ -263,3 +264,151 @@ def test_provider_payloads_return_native_tool_results_with_original_call_id():
         "call_id": "call-1",
         "output": "contents",
     }
+
+
+def native_agent(tmp_path):
+    (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
+    return Moss(
+        model_client=AnthropicCompatibleModelClient(
+            model="claude-opus-5",
+            base_url="https://api.anthropic.com/v1",
+            api_key="sk-test",
+            temperature=0.2,
+            timeout=30,
+        ),
+        workspace=WorkspaceContext.build(tmp_path),
+        session_store=SessionStore(tmp_path / ".moss" / "sessions"),
+        approval_policy="auto",
+        tool_protocol="native",
+    )
+
+
+def record_native_call(agent, call_id, path):
+    agent.record(
+        {
+            "role": "assistant",
+            "name": "read_file",
+            "args": {"path": path},
+            "call_id": call_id,
+            "native_tool_call": True,
+            "content": "",
+            "created_at": "2026-08-05T00:00:00Z",
+        }
+    )
+
+
+def record_native_result(agent, call_id, path, content):
+    agent.record(
+        {
+            "role": "tool",
+            "name": "read_file",
+            "args": {"path": path},
+            "content": content,
+            "call_id": call_id,
+            "created_at": "2026-08-05T00:00:01Z",
+        }
+    )
+
+
+def assert_tool_use_is_balanced(payload_messages):
+    """Anthropic /messages 的硬校验：每条 tool_use 的结果必须在紧随其后的那条消息里。"""
+    for index, message in enumerate(payload_messages):
+        pending = [
+            item["id"] for item in message["content"] if item.get("type") == "tool_use"
+        ]
+        if not pending:
+            continue
+        following = payload_messages[index + 1] if index + 1 < len(payload_messages) else None
+        assert following is not None, f"messages.{index}: tool_use 后面没有消息"
+        answered = [
+            item["tool_use_id"]
+            for item in following["content"]
+            if item.get("type") == "tool_result"
+        ]
+        assert answered == pending, f"messages.{index}: tool_use/tool_result 没配平"
+    for index, message in enumerate(payload_messages):
+        for item in message["content"]:
+            if item.get("type") != "tool_result":
+                continue
+            previous = payload_messages[index - 1] if index else None
+            assert previous is not None and any(
+                block.get("type") == "tool_use" and block.get("id") == item["tool_use_id"]
+                for block in previous["content"]
+            ), f"messages.{index}: tool_result 没有对应的 tool_use"
+
+
+def test_batched_native_calls_and_results_stay_in_one_message_each(tmp_path):
+    agent = native_agent(tmp_path)
+    # agent_loop 先把一轮里的两条调用都 record 下来，再逐条 record 结果——
+    # 逐条翻译会得到 assistant/assistant/user/user，provider 直接 400。
+    record_native_call(agent, "call-a", "CLAUDE.md")
+    record_native_call(agent, "call-b", "README.md")
+    record_native_result(agent, "call-a", "CLAUDE.md", "claude body")
+    record_native_result(agent, "call-b", "README.md", "readme body")
+
+    request = agent.context_manager.build_bundle("介绍一下你能干嘛").request
+    messages = _anthropic_structured_messages(request)
+
+    assert_tool_use_is_balanced(messages)
+    calls = [message for message in messages if message["content"][0].get("type") == "tool_use"]
+    assert len(calls) == 1
+    assert [item["id"] for item in calls[0]["content"]] == ["call-a", "call-b"]
+
+
+def test_native_call_without_a_recorded_result_is_balanced_not_dropped(tmp_path):
+    agent = native_agent(tmp_path)
+    record_native_call(agent, "call-a", "CLAUDE.md")
+    record_native_call(agent, "call-b", "README.md")
+    record_native_result(agent, "call-a", "CLAUDE.md", "claude body")
+
+    messages = _anthropic_structured_messages(
+        agent.context_manager.build_bundle("continue").request
+    )
+
+    assert_tool_use_is_balanced(messages)
+    results = next(
+        message for message in messages if message["content"][0].get("type") == "tool_result"
+    )
+    assert results["content"][0]["content"] == "claude body"
+    assert "no result recorded" in results["content"][1]["content"]
+
+
+def test_orphan_native_result_is_downgraded_to_text(tmp_path):
+    agent = native_agent(tmp_path)
+    # 调用那半截被裁掉/回退掉了：没有 tool_use 的 tool_result 一样会被拒收。
+    record_native_result(agent, "call-a", "CLAUDE.md", "claude body")
+
+    messages = _anthropic_structured_messages(
+        agent.context_manager.build_bundle("continue").request
+    )
+
+    assert_tool_use_is_balanced(messages)
+    assert "tool_result" not in {
+        item.get("type") for message in messages for item in message["content"]
+    }
+    assert any(
+        "claude body" in item.get("text", "")
+        for message in messages
+        for item in message["content"]
+    )
+
+
+def test_interleaved_runtime_notice_does_not_split_a_native_tool_turn(tmp_path):
+    agent = native_agent(tmp_path)
+    record_native_call(agent, "call-a", "CLAUDE.md")
+    record_native_call(agent, "call-b", "README.md")
+    record_native_result(agent, "call-a", "CLAUDE.md", "claude body")
+    # instruction notice 会挤在两条工具结果中间。
+    agent.record({"role": "system", "content": "Runtime notice: x", "created_at": "2026-08-05T00:00:02Z"})
+    record_native_result(agent, "call-b", "README.md", "readme body")
+
+    messages = _anthropic_structured_messages(
+        agent.context_manager.build_bundle("continue").request
+    )
+
+    assert_tool_use_is_balanced(messages)
+    assert any(
+        "Runtime notice: x" in item.get("text", "")
+        for message in messages
+        for item in message["content"]
+    )
