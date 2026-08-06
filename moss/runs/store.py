@@ -33,6 +33,9 @@ def event_digest(event):
 
     canonical json（排序键 + 固定分隔符）是关键：字段顺序或空格变一下就算出
     另一个 hash 的话，链条校验会变成"格式检查"而不是"内容检查"。
+    这里的 `ensure_ascii=True` 也是规范化的一部分，和磁盘上怎么写无关——
+    校验时读回来的是 `json.loads` 之后的对象，重新按这个形式序列化再算，
+    所以 trace.jsonl 换成不转义写不会动到链条。**不要为了好看改这一行。**
     """
     payload = {key: value for key, value in dict(event or {}).items() if key != "prev_hash"}
     text = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
@@ -145,7 +148,7 @@ class RunStore:
         path = directory / f"turns-{int(index)}.jsonl"
         entries = list(entries or [])
         body = "".join(
-            json.dumps(entry, sort_keys=True, ensure_ascii=True) + "\n" for entry in entries
+            json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n" for entry in entries
         )
         self._write_text_atomic(path, body)
         return f"context/{path.name}", len(entries)
@@ -253,7 +256,7 @@ class RunStore:
         # 每条 flush、每 N 条 fsync 的取舍见 moss/atomic_io.py。
         append_line(
             path,
-            json.dumps(event, sort_keys=True, ensure_ascii=True),
+            json.dumps(event, sort_keys=True, ensure_ascii=False),
             force_fsync=force_fsync,
         )
         # 写成功之后再推进缓存的链尾：写失败时缓存必须保持和磁盘一致，
@@ -482,4 +485,6 @@ class RunStore:
     def _write_json_atomic(self, path, payload):
         # 原子写：先写临时文件、fsync，再 replace。
         # 这样即使中途断电，也不会留下半截 JSON。
-        return write_json_atomic(path, payload, ensure_ascii=True)
+        # 不转义非 ASCII：这些是给人看的审计工件，中文请求写成 \uXXXX
+        # 等于把 task_state / report 里最关键的一栏变成没法直读的东西。
+        return write_json_atomic(path, payload, ensure_ascii=False)

@@ -647,7 +647,7 @@ class BenchmarkEvaluator:
 
     def _write_artifact(self, artifact):
         self.artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        self.artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self.artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def _digest_file(path):

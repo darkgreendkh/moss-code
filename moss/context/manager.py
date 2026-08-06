@@ -141,7 +141,9 @@ def tool_result_open_tag(item):
     attributes = [
         'untrusted="true"',
         f'source="{name}"',
-        f"args={json.dumps(item.get('args', {}), sort_keys=True)}",
+        # 同 native_history：进 prompt 的文本不转义，否则中文参数在模型眼里是 \uXXXX，
+        # 而且一个汉字要吃掉 6 个字符的上下文预算。
+        f"args={json.dumps(item.get('args', {}), sort_keys=True, ensure_ascii=False)}",
     ]
     artifact = str(item.get("artifact", "") or "")
     if artifact:

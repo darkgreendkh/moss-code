@@ -240,7 +240,7 @@ class SkillTrustStore:
         payload = self._load()
         payload[skill["name"]] = {"sha256": skill["sha256"], "source": skill.get("source", "")}
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_io.write_atomic(self.path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        atomic_io.write_atomic(self.path, json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
         return payload
 
     def needs_confirmation(self, skill):

@@ -86,7 +86,7 @@ def run_memory_command(argv):
         except KeyError:
             print(f"memory not found: {args.id}", file=sys.stderr)
             return 1
-        print(json.dumps({"deleted": record.id}, sort_keys=True))
+        print(json.dumps({"deleted": record.id}, ensure_ascii=False, sort_keys=True))
         return 0
 
     text = str(args.text).strip()
@@ -94,7 +94,7 @@ def run_memory_command(argv):
     reason = "injection_suspected" if finding is not None else reject_memory_reason(text)
     if reason:
         reason = "too_noisy" if reason == "noisy_output" else reason
-        print(json.dumps({"status": "rejected", "reason": reason}, sort_keys=True))
+        print(json.dumps({"status": "rejected", "reason": reason}, ensure_ascii=False, sort_keys=True))
         return 1
     record = make_record(
         scope=args.scope,
@@ -110,6 +110,7 @@ def run_memory_command(argv):
     print(
         json.dumps(
             {"status": "written", "id": record.id, "scope": record.scope, "trust": record.trust},
+            ensure_ascii=False,
             sort_keys=True,
         )
     )

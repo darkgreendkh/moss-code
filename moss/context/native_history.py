@@ -13,7 +13,9 @@ def native_tool_turn(group, entries, result_positions, consumed, *, clip, missin
         call_id = str(item.get("call_id", "") or "")
         call_blocks.append(
             Block(
-                json.dumps(item.get("args", {}), separators=(",", ":"), sort_keys=True),
+                # 不转义非 ASCII：这串是发给模型的 tool_use 入参，
+                # 中文写成 \uXXXX 既让模型读到的是转义码，一个汉字还要占 6 个字符的预算。
+                json.dumps(item.get("args", {}), separators=(",", ":"), sort_keys=True, ensure_ascii=False),
                 kind="tool_call",
                 source=str(item.get("name", "")),
                 trust="model",

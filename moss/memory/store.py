@@ -158,7 +158,9 @@ class MemoryStore:
         if not records:
             return ""
         return "".join(
-            json.dumps(record.to_dict(), sort_keys=True, ensure_ascii=True) + "\n"
+            # 不转义非 ASCII：records.jsonl 是事实源，人要能直接 grep/读。
+            # 记忆 id 的稳定摘要另有一套 canonical 形式（memory/records.py），不受这里影响。
+            json.dumps(record.to_dict(), sort_keys=True, ensure_ascii=False) + "\n"
             for record in records
         )
 

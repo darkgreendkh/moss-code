@@ -190,3 +190,44 @@ def test_digest_ignores_prev_hash_itself():
     event = {"event": "a", "sequence": 1}
 
     assert event_digest(event) == event_digest({**event, "prev_hash": "whatever"})
+
+
+def test_run_artifacts_store_non_ascii_verbatim(tmp_path):
+    # 审计工件是给人看的。中文请求写成 \uXXXX 之后，task_state 里最关键的
+    # user_request / final_answer 两栏就变成了没法直读的东西。
+    store = RunStore(tmp_path / ".moss" / "runs")
+    state = TaskState.create(run_id="run_cjk", task_id="task_cjk", user_request="每次对话的提示词包含哪几部分？")
+    store.start_run(state)
+    store.append_trace(state, {"event": "step", "note": "读了上下文管理器"})
+    store.write_report(state, {"summary": "已回答", "usage": {}})
+    _, count = store.write_context_turns(state.run_id, 1, [{"role": "user", "content": "压缩掉的原始历史"}])
+
+    assert count == 1
+    run_dir = store.run_dir(state.run_id)
+    for name in ("task_state.json", "trace.jsonl", "report.json", "context/turns-1.jsonl"):
+        text = (run_dir / name).read_text(encoding="utf-8")
+        assert "\\u" not in text, f"{name} 里还有 \\uXXXX 转义"
+    assert "每次对话的提示词包含哪几部分？" in (run_dir / "task_state.json").read_text(encoding="utf-8")
+
+
+def test_trace_hash_chain_still_verifies_and_detects_tampering_with_non_ascii(tmp_path):
+    # 链条摘要用的是自己那套 canonical 形式（ensure_ascii=True），和磁盘上怎么写无关。
+    # 这条测试守的就是"为了好看改了落盘格式"不会顺手把审计链弄坏。
+    store = RunStore(tmp_path / ".moss" / "runs")
+    state = TaskState.create(run_id="run_chain", task_id="task_chain", user_request="中文请求")
+    store.start_run(state)
+    for note in ("第一步", "第二步", "第三步"):
+        store.append_trace(state, {"event": "step", "note": note})
+
+    ok, problems = store.verify_trace(state.run_id)
+    assert ok is True and problems == []
+
+    path = store.trace_path(state.run_id)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    tampered = json.loads(lines[1])
+    tampered["note"] = "被改过的第二步"
+    lines[1] = json.dumps(tampered, sort_keys=True, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    ok, problems = store.verify_trace(state.run_id)
+    assert ok is False and problems

@@ -176,6 +176,12 @@ cli/ (装配/REPL/进度渲染)
 1. **持久化必须原子写**：一律走 `atomic_io.write_atomic`（临时文件 → fsync → `os.replace` → fsync 目录），
    不要在别处再手写一份 tmp+replace。`os.replace` 只保证"不出现半截文件"，不保证落盘——
    两个 fsync 才是"断电不丢"的全部内容。
+   **落盘/打印/进 prompt 的 JSON 一律 `ensure_ascii=False`**：工件是给人读的，中文写成
+   `\uXXXX` 等于把 `user_request` / `final_answer` 变成不可直读的东西；进 prompt 的那几处
+   （`context/manager.py` 的 tool_result 头、`native_history.py` 的 tool_use 入参）还会让一个
+   汉字吃掉 6 个字符的预算。**例外只有"算 hash 用的 canonical 形式"**——`runs/store.py::event_digest`、
+   `memory/records.py` 的记忆 id、`compaction._artifact_id` 保持 `ensure_ascii=True`，
+   它们和磁盘格式无关（校验时是 `json.loads` 之后重新序列化再算），改了会让历史工件全部判成被篡改。
 2. **CLI 输出契约**：最终答案走 stdout（可管道），进度/警告/错误走 stderr。进度通过 `agent.progress_observer` 钩子（`emit_progress`），observer 异常必须被吞掉，绝不影响控制流。
 3. **一轮可以有多个动作**：`parse_model_actions` 按出现位置解析多个 `<tool>` 块，`final` 之后的一律丢弃（记 `batch_truncated`）。
    **顺序不变量**：写回 history/trace 的顺序恒等于 `Action.index`，不是完成顺序——录制回放依赖这条。

@@ -133,12 +133,12 @@ def run_runs_command(argv):
             dry_run=bool(args.dry_run),
         )
         verb = "would archive" if args.dry_run else "archived"
-        print(json.dumps({verb: result}, sort_keys=True))
+        print(json.dumps({verb: result}, ensure_ascii=False, sort_keys=True))
         return 0
 
     if command == "pin":
         store.pin(args.run_id, pinned=not args.off)
-        print(json.dumps({"run_id": args.run_id, "pinned": not args.off}, sort_keys=True))
+        print(json.dumps({"run_id": args.run_id, "pinned": not args.off}, ensure_ascii=False, sort_keys=True))
         return 0
 
     events = store.read_trace(args.run_id)
