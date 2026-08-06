@@ -6,6 +6,7 @@
 """
 
 import argparse
+from datetime import datetime
 import json
 import locale
 import os
@@ -13,7 +14,9 @@ from pathlib import Path
 import shutil
 import sys
 import textwrap
+import uuid
 
+from . import checkpoint as checkpointlib
 from .config import load_project_env, provider_env
 from .features.memory import reject_memory_reason
 from .features.memory_records import SourceRef, make_record
@@ -433,11 +436,22 @@ def build_agent(args):
     if session_id == "latest":
         session_id = store.latest()
     if session_id:
-        return Moss.from_session(
+        session = store.load(session_id)
+        fork_from = getattr(args, "fork", None)
+        if fork_from:
+            # 分叉出的新会话独立落盘，原会话一个字节都不动 —— 分叉的意义就是
+            # "再试一条路"，把原来那条弄坏了就白分叉了。
+            session = checkpointlib.fork_session(
+                session, fork_from, datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+            )
+        session = checkpointlib.apply_resume_parts(
+            session, checkpointlib.parse_resume_parts(getattr(args, "resume_parts", "all"))
+        )
+        return Moss(
             model_client=model,
             workspace=workspace,
             session_store=store,
-            session_id=session_id,
+            session=session,
             approval_policy=args.approval,
             max_steps=args.max_steps,
             max_new_tokens=args.max_new_tokens,
@@ -501,6 +515,25 @@ def build_arg_parser():
     parser.add_argument("--ollama-timeout", type=int, default=300, help="Ollama request timeout in seconds.")
     parser.add_argument("--openai-timeout", type=int, default=300, help="OpenAI-compatible request timeout in seconds.")
     parser.add_argument("--resume", default=None, help="Session id to resume or 'latest'.")
+    parser.add_argument(
+        "--resume-parts",
+        default="all",
+        help=(
+            "Comma-separated subset of the saved session to restore "
+            f"({', '.join(checkpointlib.RESUME_PART_NAMES)}). Defaults to all."
+        ),
+    )
+    parser.add_argument(
+        "--explain",
+        action="store_true",
+        help="Print what resuming would restore (freshness diff, identity mismatches, unconfirmed actions) and exit.",
+    )
+    parser.add_argument(
+        "--fork",
+        default=None,
+        metavar="CHECKPOINT_ID",
+        help="Branch a new session from a checkpoint of the resumed session instead of continuing it.",
+    )
     parser.add_argument("--approval", choices=("ask", "auto", "never"), default="ask", help="Approval policy for risky tools.")
     parser.add_argument(
         "--secret-env-name",
@@ -833,6 +866,12 @@ def main(argv=None):
         return run_runs_command(argv[1:])
     args = build_arg_parser().parse_args(argv)
     agent = build_agent(args)
+
+    if getattr(args, "explain", False):
+        # 恢复之前先说清楚会恢复出什么。走 stdout：它是这次调用的产出，
+        # 应当可以被管道接走。
+        print(checkpointlib.render_explain(checkpointlib.explain_resume(agent)))
+        return 0
 
     model = getattr(agent.model_client, "model", getattr(args, "model", DEFAULT_OLLAMA_MODEL))
     host = getattr(agent.model_client, "host", getattr(agent.model_client, "base_url", getattr(args, "host", DEFAULT_OLLAMA_HOST)))

@@ -221,6 +221,8 @@ class Moss:
             getattr(model_client, "provider", ""), getattr(model_client, "model", "")
         )
         self.context_manager = ContextManager(self, measure=self.token_measure())
+        # 恢复出来的会话要把计划一起带回来，否则 agent 会忘掉自己刚才打算怎么做。
+        self.current_plan = list((self.current_checkpoint() or {}).get("plan", []) or [])
         self.resume_state = self.evaluate_resume_state()
         self.session_path = self.session_store.save(self.session)
         self.current_task_state = None

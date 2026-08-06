@@ -200,6 +200,190 @@ def render_checkpoint_text(agent):
     return "\n".join(lines)
 
 
+def checkpoint_tree(session):
+    """按 parent_checkpoint_id 组出 checkpoint 的父子关系。
+
+    这个字段一直存在但从来没被用过。组成树之后，`--fork` 才能回答
+    "从哪一步分叉出去"，而不是只能从最新那一步继续。
+    """
+    items = dict((session.get("checkpoints", {}) or {}).get("items", {}) or {})
+    children = {}
+    for checkpoint_id, checkpoint in items.items():
+        parent = str(checkpoint.get("parent_checkpoint_id", "") or "")
+        children.setdefault(parent, []).append(checkpoint_id)
+    return {"items": items, "children": children, "roots": children.get("", [])}
+
+
+def fork_session(session, checkpoint_id, new_session_id):
+    """从某个 checkpoint 分叉出一个新 session，返回新的 session dict。
+
+    只继承状态，不继承回滚能力：undo 记录挂在原来那次 run 上，复制过来会让
+    `/rewind` 去改一份它从没写过的工作区。这一点写进 `forked_from`，
+    而不是让用户以为还能 rewind 回去。
+    """
+    items = dict((session.get("checkpoints", {}) or {}).get("items", {}) or {})
+    checkpoint = items.get(str(checkpoint_id))
+    if checkpoint is None:
+        raise KeyError(f"unknown checkpoint: {checkpoint_id}")
+    history = list(session.get("history", []) or [])
+    # 历史裁到分叉点：checkpoint 是"那一刻的状态"，把它之后的历史带过来
+    # 就等于分叉出一条本来不存在的时间线。
+    keep = int(checkpoint.get("history_length", len(history)) or 0)
+    ancestry = []
+    cursor = str(checkpoint_id)
+    while cursor and cursor in items:
+        ancestry.append(cursor)
+        cursor = str(items[cursor].get("parent_checkpoint_id", "") or "")
+    return {
+        "id": str(new_session_id),
+        "created_at": now(),
+        "workspace_root": session.get("workspace_root", ""),
+        "history": history[:keep],
+        "memory": dict(session.get("memory", {}) or {}),
+        "checkpoints": {
+            "current_id": str(checkpoint_id),
+            "items": {key: items[key] for key in reversed(ancestry)},
+        },
+        "runtime_identity": dict(checkpoint.get("runtime_identity", {}) or {}),
+        "forked_from": {
+            "session_id": session.get("id", ""),
+            "checkpoint_id": str(checkpoint_id),
+            "inherits_undo": False,
+        },
+    }
+
+
+RESUME_PART_NAMES = ("memory", "plan", "history", "checkpoint")
+
+
+def parse_resume_parts(raw):
+    """`--resume-parts=memory,plan` -> 一个集合。空/None = 全部。"""
+    if raw in (None, "", "all"):
+        return set(RESUME_PART_NAMES)
+    parts = {item.strip() for item in str(raw).split(",") if item.strip()}
+    unknown = sorted(parts - set(RESUME_PART_NAMES))
+    if unknown:
+        raise ValueError(
+            f"unknown resume part: {', '.join(unknown)}; expected any of {', '.join(RESUME_PART_NAMES)}"
+        )
+    return parts
+
+
+def apply_resume_parts(session, parts):
+    """按用户选的部分裁剪一份待恢复的 session。
+
+    为什么要能只恢复一部分：上次跑歪了的时候，用户往往想留住"读过哪些文件"
+    （memory）却丢掉那段把自己绕进去的对话（history）。全有或全无的恢复，
+    实际结果是用户干脆不恢复。
+    """
+    parts = set(parts or RESUME_PART_NAMES)
+    session = dict(session or {})
+    if "memory" not in parts:
+        session["memory"] = memorylib.default_memory_state()
+    if "history" not in parts:
+        session["history"] = []
+    if "checkpoint" not in parts:
+        session["checkpoints"] = {"current_id": "", "items": {}}
+    if "plan" not in parts:
+        checkpoints = dict(session.get("checkpoints", {}) or {})
+        items = {}
+        for key, checkpoint in dict(checkpoints.get("items", {}) or {}).items():
+            trimmed = dict(checkpoint)
+            trimmed["plan"] = []
+            items[key] = trimmed
+        checkpoints["items"] = items
+        session["checkpoints"] = checkpoints
+        session["plan"] = []
+    return session
+
+
+def explain_resume(agent):
+    """`--resume --explain` 的内容：恢复之后会发生什么。
+
+    三个问题必须当场回答，否则"恢复"就是一次盲跳：
+    哪些文件在我离开之后变了、运行环境有哪些字段对不上、
+    以及**会不会重放有副作用的动作**。
+    """
+    resume_state = dict(agent.resume_state or {})
+    checkpoint = current_checkpoint(agent)
+    stale_paths = list(resume_state.get("stale_paths", []) or [])
+    freshness = []
+    for item in (checkpoint or {}).get("key_files", []) or []:
+        path = str(item.get("path", "")).strip()
+        if not path:
+            continue
+        freshness.append(
+            {
+                "path": path,
+                "recorded": item.get("freshness"),
+                "current": memorylib.file_freshness(path, agent.root),
+                "stale": path in stale_paths,
+            }
+        )
+    saved_identity = dict((checkpoint or {}).get("runtime_identity", {}) or {})
+    current_identity = current_runtime_identity(agent)
+    mismatches = [
+        {"field": field, "saved": saved_identity.get(field), "current": current_identity.get(field)}
+        for field in resume_state.get("runtime_identity_mismatch_fields", []) or []
+    ]
+    pending = []
+    for run in resume_state.get("interrupted_runs", []) or []:
+        for outcome in run.get("pending_actions", []) or []:
+            pending.append({"run_id": run.get("run_id", ""), **outcome})
+    return {
+        "session_id": agent.session.get("id", ""),
+        "status": resume_state.get("status", CHECKPOINT_NONE_STATUS),
+        "checkpoint_id": (checkpoint or {}).get("checkpoint_id", ""),
+        "freshness": freshness,
+        "stale_paths": stale_paths,
+        "runtime_identity_mismatch": mismatches,
+        "pending_actions": pending,
+        "replays_side_effects": any(
+            outcome.get("status") == action_ledger.STATUS_REPLAYABLE for outcome in pending
+        ),
+    }
+
+
+def render_explain(explanation):
+    """把 explain_resume 的结果渲染成人话。"""
+    lines = [
+        f"session: {explanation['session_id']}",
+        f"resume status: {explanation['status']}",
+        f"checkpoint: {explanation['checkpoint_id'] or '-'}",
+        "",
+        "freshness (recorded vs now):",
+    ]
+    if explanation["freshness"]:
+        for item in explanation["freshness"]:
+            mark = "STALE" if item["stale"] else "ok"
+            lines.append(f"  [{mark}] {item['path']}: {item['recorded']} -> {item['current']}")
+    else:
+        lines.append("  (no key files recorded)")
+    lines.append("")
+    lines.append("runtime identity mismatches:")
+    if explanation["runtime_identity_mismatch"]:
+        for item in explanation["runtime_identity_mismatch"]:
+            lines.append(f"  {item['field']}: {item['saved']!r} -> {item['current']!r}")
+    else:
+        lines.append("  (none)")
+    lines.append("")
+    lines.append("actions that were never confirmed:")
+    if explanation["pending_actions"]:
+        for item in explanation["pending_actions"]:
+            lines.append(
+                f"  {item.get('run_id', '-')} {item.get('tool', '-')}: "
+                f"{item.get('status', '-')} ({item.get('reason', '-')})"
+            )
+    else:
+        lines.append("  (none)")
+    lines.append("")
+    lines.append(
+        "resuming will replay a side-effecting action: "
+        + ("yes" if explanation["replays_side_effects"] else "no")
+    )
+    return "\n".join(lines)
+
+
 def infer_next_step(task_state):
     if task_state.status == "completed":
         return "No next step recorded."
@@ -246,6 +430,12 @@ def create_checkpoint(agent, task_state, user_message, trigger):
         "key_files": key_files,
         "freshness": freshness,
         "summary": f"{trigger}: {clip(str(user_message), 120)}",
+        # 计划一起存：它是模型自己写下的意图声明，属于"可恢复的状态"。
+        # 不存的话 --resume 回来的 agent 会忘掉自己刚才打算怎么做。
+        "plan": list(getattr(agent, "current_plan", []) or []),
+        # 这一刻的历史长度。--fork 靠它把历史裁到分叉点，
+        # /rewind 靠它把 history 截回第 n 步结束时的样子。
+        "history_length": len(agent.session.get("history", []) or []),
         "runtime_identity": current_runtime_identity(agent),
     }
     state["items"][checkpoint_id] = checkpoint
