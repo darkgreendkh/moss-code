@@ -58,7 +58,7 @@ HELP_DETAILS = textwrap.dedent(
     Commands:
     /help    Show this help message.
     /memory  Show the agent's distilled working memory.
-    /session Show the path to the saved session file.
+    /session Show the path to the saved session directory.
     /reload  Reload tools and skills from disk.
     /reset   Clear the current session history and memory.
     /exit    Exit the agent.

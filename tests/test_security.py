@@ -89,7 +89,8 @@ def test_reading_a_secret_from_the_workspace_never_reaches_the_artifacts(tmp_pat
     artifacts = [
         (run_dir / "trace.jsonl").read_text(encoding="utf-8"),
         (run_dir / "report.json").read_text(encoding="utf-8"),
-        Path(agent.session_path).read_text(encoding="utf-8"),
+        # session v2 是目录：meta + history + checkpoints 都要查。
+        "".join(item.read_text(encoding="utf-8") for item in sorted(Path(agent.session_path).iterdir())),
     ]
     for text in artifacts:
         assert "sk-live-abcdefghijklmnop123456" not in text

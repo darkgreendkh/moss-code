@@ -146,7 +146,7 @@ def test_approval_memory_is_never_persisted(tmp_path):
         agent.run_tool("write_file", {"path": "src/a.txt", "content": "x"})
 
     assert agent._approval_memory
-    saved = list((tmp_path / ".moss" / "sessions").glob("*.json"))
+    saved = list((tmp_path / ".moss" / "sessions").glob("*/meta.json"))
     assert saved
     for path in saved:
         # 按 key 判而不是按整段文本判：tmp_path 的目录名里就带着测试函数名。

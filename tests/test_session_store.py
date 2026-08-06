@@ -12,9 +12,9 @@ def test_session_store_saves_loads_and_finds_latest_session(tmp_path):
     second_path = store.save(second)
 
     assert first_path == store.path("session_001")
-    assert json.loads(first_path.read_text(encoding="utf-8"))["id"] == "session_001"
-    assert store.load("session_002") == second
-    assert store.latest() == second_path.stem
+    assert json.loads(store.meta_path("session_001").read_text(encoding="utf-8"))["id"] == "session_001"
+    assert store.load("session_002")["history"] == second["history"]
+    assert store.latest() == second_path.name
 
 
 def test_session_store_latest_is_none_when_empty(tmp_path):
@@ -28,13 +28,13 @@ def test_session_store_save_leaves_no_partial_or_temp_files(tmp_path):
     session = {"id": "session_atomic", "history": [{"role": "user", "content": "x"}]}
 
     store.save(session)
-    # 覆盖写第二次，确认没有留下 .tmp 残留，最终文件仍是完整可解析 JSON。
+    # 覆盖写第二次，确认没有留下 .tmp 残留，读回来的仍是完整会话。
     session["history"].append({"role": "assistant", "content": "y"})
     path = store.save(session)
 
-    files = sorted(p.name for p in store.root.iterdir())
-    assert files == ["session_atomic.json"]
-    assert json.loads(path.read_text(encoding="utf-8")) == session
+    assert sorted(item.name for item in store.root.iterdir()) == ["session_atomic"]
+    assert sorted(item.name for item in path.iterdir()) == ["history.jsonl", "meta.json"]
+    assert store.load("session_atomic")["history"] == session["history"]
 
 
 def test_session_store_latest_ignores_delegate_sessions(tmp_path):

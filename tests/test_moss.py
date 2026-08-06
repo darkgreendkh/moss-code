@@ -249,7 +249,7 @@ def test_delegate_session_does_not_pollute_resume_latest(tmp_path):
     # 委派会话被隔离到独立目录，可审计但不干扰恢复。
     delegate_dir = tmp_path / ".moss" / "delegates"
     assert delegate_dir.is_dir()
-    assert list(delegate_dir.glob("*.json"))
+    assert list(delegate_dir.glob("*/meta.json"))
 
 
 def test_edit_file_replaces_exact_match(tmp_path):
@@ -1396,7 +1396,10 @@ def test_session_history_redacts_tool_output_before_save(tmp_path):
             }
         )
 
-        saved_text = agent.session_path.read_text(encoding="utf-8")
+        # session v2 是目录：整份会话的落盘文本 = meta + history + checkpoints。
+        saved_text = "".join(
+            item.read_text(encoding="utf-8") for item in sorted(agent.session_path.iterdir())
+        )
         prompt = agent.prompt("continue")
 
     assert secret not in saved_text
