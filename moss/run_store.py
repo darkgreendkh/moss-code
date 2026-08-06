@@ -8,7 +8,13 @@ import hashlib
 import json
 from pathlib import Path
 
-from .atomic_io import write_atomic, write_json_atomic
+from .atomic_io import (
+    append_line,
+    read_last_line,
+    truncate_partial_tail,
+    write_atomic,
+    write_json_atomic,
+)
 from .lease import RunLease
 from .task_state import STATUS_RUNNING, TaskState
 
@@ -40,6 +46,9 @@ class RunStore:
         # 租约：谁在跑这个 run。没有它，启动时的"把所有 running 标成 interrupted"
         # 会在并发下杀掉另一个终端正在进行的任务（spec-07 §1 的 bug #2）。
         self.lease = lease if lease is not None else RunLease(self.run_dir)
+        # {run_id: (上一条事件的 digest, 上一条的 sequence)}。只在首次访问时扫盘，
+        # 之后每次追加就地推进——序号和哈希链因此都是 O(1)。
+        self._trace_tails = {}
 
     def run_dir(self, run_id):
         return self.root / _run_id(run_id)
@@ -128,15 +137,24 @@ class RunStore:
         self._write_json_atomic(path, payload)
         return path
 
-    def append_trace(self, task_state, event):
+    def append_trace(self, task_state, event, force_fsync=False):
         path = self.trace_path(task_state)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        run_id = _run_id(task_state)
         event = self._trace_event(task_state, event)
         # trace 采用 jsonl 追加写入，原因是 agent 运行过程是流式事件序列，
-        # 逐条落盘比“最后一次性写整份 trace”更稳，也更适合调试。
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, sort_keys=True, ensure_ascii=True))
-            handle.write("\n")
+        # 逐条落盘比"最后一次性写整份 trace"更稳，也更适合调试。
+        # 每条 flush、每 N 条 fsync 的取舍见 moss/atomic_io.py。
+        append_line(
+            path,
+            json.dumps(event, sort_keys=True, ensure_ascii=True),
+            force_fsync=force_fsync,
+        )
+        # 写成功之后再推进缓存的链尾：写失败时缓存必须保持和磁盘一致，
+        # 否则下一条事件的 prev_hash 会指向一条根本不存在的记录。
+        self._trace_tails[run_id] = (
+            event_digest(event),
+            int(event.get("sequence", 0) or 0),
+        )
         return path
 
     def verify_trace(self, run_id):
@@ -275,17 +293,43 @@ class RunStore:
             payload.setdefault("tool_steps", int(payload.get("tool_steps", 0) or 0))
         return payload
 
+    def _last_trace_event(self, run_id):
+        """trace 的最后一条事件。反向读末行，不解析全文。
+
+        原来这里读全量 trace 再取 max —— 每追加一条就把整个文件读一遍，
+        n 条事件就是 O(n²)。一次长 run 的 trace 上千条，写入本身会明显卡顿。
+        """
+        path = self.trace_path(run_id)
+        line = read_last_line(path)
+        if not line:
+            return None
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            # 末行是上次崩在写一半的半截 JSON。先就地截断——否则下一条事件会被
+            # 粘在它后面，两条一起变成读不出来的一行；再退回全量读一次拿链尾。
+            truncate_partial_tail(path)
+            events = self.read_trace(run_id)
+            return events[-1] if events else None
+
+    def _trace_tail(self, run_id):
+        """(上一条的 digest, 上一条的 sequence)。进程内缓存，只在首次扫盘。"""
+        cached = self._trace_tails.get(run_id)
+        if cached is not None:
+            return cached
+        last = self._last_trace_event(run_id)
+        if last is None:
+            tail = (TRACE_CHAIN_GENESIS, 0)
+        else:
+            tail = (event_digest(last), int(last.get("sequence", 0) or 0))
+        self._trace_tails[run_id] = tail
+        return tail
+
     def _last_trace_hash(self, run_id):
-        events = self.read_trace(run_id)
-        if not events:
-            return TRACE_CHAIN_GENESIS
-        return event_digest(events[-1])
+        return self._trace_tail(run_id)[0]
 
     def _next_trace_sequence(self, run_id):
-        events = self.read_trace(run_id)
-        if not events:
-            return 1
-        return max(int(event.get("sequence", 0) or 0) for event in events) + 1
+        return self._trace_tail(run_id)[1] + 1
 
     def _write_text_atomic(self, path, text):
         # 和 _write_json_atomic 同样的理由：半截 artifact 比没有 artifact 更难排查，

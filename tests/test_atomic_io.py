@@ -121,6 +121,35 @@ def test_append_line_force_fsync_settles_the_interval(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
+def test_truncate_partial_tail_drops_the_unfinished_record(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    path.write_text('{"a": 1}\n{"a": 2}\n{"a": ', encoding="utf-8")
+
+    dropped = atomic_io.truncate_partial_tail(path)
+
+    assert dropped == len('{"a": ')
+    assert path.read_text(encoding="utf-8") == '{"a": 1}\n{"a": 2}\n'
+    assert [item["name"] for item in atomic_io.degradations()] == ["partial_jsonl_tail_dropped"]
+
+
+def test_truncate_partial_tail_is_a_no_op_on_clean_files(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    path.write_text('{"a": 1}\n', encoding="utf-8")
+
+    assert atomic_io.truncate_partial_tail(path) == 0
+    assert atomic_io.truncate_partial_tail(tmp_path / "missing.jsonl") == 0
+    assert path.read_text(encoding="utf-8") == '{"a": 1}\n'
+
+
+def test_truncate_partial_tail_handles_a_file_with_no_complete_record(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    path.write_text('{"a": ', encoding="utf-8")
+
+    atomic_io.truncate_partial_tail(path)
+
+    assert path.read_text(encoding="utf-8") == ""
+
+
 def test_read_last_line_returns_last_non_empty_line(tmp_path):
     path = tmp_path / "trace.jsonl"
     path.write_text('{"a": 1}\n{"a": 2}\n', encoding="utf-8")

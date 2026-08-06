@@ -153,6 +153,39 @@ def append_line(path, line, *, fsync_every=FSYNC_INTERVAL, force_fsync=False):
     return path
 
 
+def truncate_partial_tail(path):
+    """砍掉 jsonl 末尾那条没写完的记录，返回被丢弃的字节数。
+
+    为什么必须砍：崩在写一半会留下一个没有换行的半截行。直接往后追加会把
+    新记录粘在它后面，粘出来的那一行两条都读不出来——一次崩溃于是吃掉了
+    崩溃之后的第一条事件。半截记录本身也无从恢复（它连一个完整 JSON 都不是），
+    所以就地截断是唯一能让文件重新自洽的做法，且要记一条降级让它看得见。
+    """
+    path = Path(path)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return 0
+    if size <= 0:
+        return 0
+    with path.open("rb") as handle:
+        handle.seek(-1, os.SEEK_END)
+        if handle.read(1) in (b"\n", b"\r"):
+            return 0
+    data = path.read_bytes()
+    cut = data.rfind(b"\n")
+    keep = cut + 1 if cut >= 0 else 0
+    dropped = len(data) - keep
+    with path.open("r+b") as handle:
+        handle.truncate(keep)
+        fsync_file(handle)
+    note_degradation(
+        "partial_jsonl_tail_dropped",
+        f"{path.name}: dropped {dropped} bytes of an unfinished record",
+    )
+    return dropped
+
+
 def read_last_line(path):
     """从文件末尾反向读最后一个非空行，不解析全文。
 

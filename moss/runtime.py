@@ -649,12 +649,24 @@ class Moss:
         except Exception:
             pass
 
+    # 这些事件之后可以认为"状态已经落地"，把摊派的 fsync 间隔提前结清。
+    # 它们正好也是崩溃后最需要看到的那几条：run 收尾、checkpoint、中断。
+    DURABLE_TRACE_EVENTS = frozenset(
+        {
+            trace_events.RUN_FINISHED,
+            trace_events.CHECKPOINT_CREATED,
+            trace_events.RUN_INTERRUPTED,
+        }
+    )
+
     def emit_trace(self, task_state, event, payload=None):
         payload = self.redact_artifact(payload or {})
         payload["event"] = event
         payload["created_at"] = now()
         # trace 是运行中的逐事件时间线，适合回答“这一轮 agent 到底做了什么”。
-        self.run_store.append_trace(task_state, payload)
+        self.run_store.append_trace(
+            task_state, payload, force_fsync=event in self.DURABLE_TRACE_EVENTS
+        )
         return payload
 
     def record_memory_event(self, event, payload=None):

@@ -4,6 +4,10 @@
 散在各处用字面量写，改一处漏一处的成本很高，所以集中在这里。
 """
 
+# 主循环骨架（spec-07 §4.5）
+RUN_FINISHED = "run_finished"
+CHECKPOINT_CREATED = "checkpoint_created"
+
 # 就近文档注入（spec-01 §4.2）
 INSTRUCTION_LOADED = "instruction_loaded"
 INSTRUCTION_CONFLICT = "instruction_conflict"
@@ -38,6 +42,8 @@ CONTEXT_COMPACTED = "context_compacted"
 REQUEST_OFFLOADED = "request_offloaded"
 
 __all__ = [
+    "RUN_FINISHED",
+    "CHECKPOINT_CREATED",
     "CONTEXT_OVERFLOW",
     "CONTEXT_COMPACTED",
     "REQUEST_OFFLOADED",
