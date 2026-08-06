@@ -19,6 +19,7 @@ from . import atomic_io
 from . import checkpoint as checkpointlib
 from . import compaction as compactionlib
 from . import delegation as delegationlib
+from .mcp import registry as mcplib
 from . import model_router as model_routerlib
 from .features import memory as memorylib
 from .features.memory_records import SourceRef
@@ -216,6 +217,12 @@ class Moss:
             event_callback=self.record_memory_event,
         )
         self.session["memory"] = self.memory.to_dict()
+        # 外部 MCP server 在**启动期**连一次，工具落进白名单（spec-09 §9.2）。
+        # 连不上不让 agent 起不来，但失败要打到 stderr——静默少几个工具，
+        # 表现是模型莫名其妙做不成事。
+        self.mcp_tools, self.mcp_clients, self.tool_catalog_threshold = mcplib.build_mcp_tools(
+            self.root, on_error=lambda message: print(f"warning: {message}", file=sys.stderr)
+        )
         # 当前点亮的 skill（use_skill 写入）。它的 allowed-tools 是**临时**覆盖：
         # 换 skill 或 run 结束即失效。落盘的"永久放开"会变成一个没人记得的后门。
         self.active_skill = None
@@ -439,7 +446,8 @@ class Moss:
     def _apply_tool_allowlist(self, tools):
         if self.allowed_tools is None:
             return tools
-        legal_names = toolkit.legal_tool_names()
+        # MCP 工具是启动期才知道名字的，不在 legal_tool_names() 的静态集合里。
+        legal_names = toolkit.legal_tool_names() | set(tools)
         unknown = [name for name in self.allowed_tools if name not in legal_names]
         if unknown:
             raise ValueError(f"unknown allowed tool: {', '.join(unknown)}")
@@ -459,6 +467,7 @@ class Moss:
             tools=self.tools,
             skills=self.skills,
             protocol=self.resolved_tool_protocol(),
+            catalog_threshold=self.tool_catalog_threshold,
         )
 
     def _apply_prefix_state(self, prefix_state):
@@ -1263,6 +1272,9 @@ class Moss:
             spawn_delegate=self.spawn_delegate,
             skills_provider=lambda: self.skills,
             skill_activator=self.activate_skill,
+            mcp_tools_provider=lambda: self.mcp_tools,
+            catalog_threshold=self.tool_catalog_threshold,
+            tool_registry_provider=lambda: self.tools,
             cancel_token=self.cancel_token,
             plan_writer=self.set_plan,
             memory_writer=self.memory_write_action,

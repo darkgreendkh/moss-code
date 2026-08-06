@@ -202,6 +202,14 @@ DELEGATE_TOOL_SPEC = ToolSpec(
     description="Ask bounded read-only child agents to investigate; returns findings with evidence anchors.",
 )
 
+DESCRIBE_TOOL_SPEC = ToolSpec(
+    name="describe_tool",
+    fields={"name": ToolField("str")},
+    risky=False,
+    capabilities=frozenset(),
+    description="Show one tool's full argument schema (used when the tool list is in catalog mode).",
+)
+
 USE_SKILL_TOOL_SPEC = ToolSpec(
     name="use_skill",
     fields={"name": ToolField("str")},
@@ -212,7 +220,7 @@ USE_SKILL_TOOL_SPEC = ToolSpec(
 
 
 def legal_tool_names():
-    return set(BASE_TOOL_SPECS) | {"delegate", "use_skill"}
+    return set(BASE_TOOL_SPECS) | {"delegate", "use_skill", "describe_tool"}
 
 TOOL_EXAMPLES = {
     "list_files": '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
@@ -223,6 +231,7 @@ TOOL_EXAMPLES = {
     "edit_file": '<tool name="edit_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
     "delegate": '<tool>{"name":"delegate","args":{"task":"where is retry handled?","focus":["moss/agent_loop.py"],"max_steps":3}}</tool>',
     "use_skill": '<tool>{"name":"use_skill","args":{"name":"some-skill"}}</tool>',
+    "describe_tool": '<tool>{"name":"describe_tool","args":{"name":"search_text"}}</tool>',
     "update_plan": '<tool>{"name":"update_plan","args":{"steps":[{"id":"1","title":"read the parser","status":"in_progress"},{"id":"2","title":"add a test","status":"pending"}]}}</tool>',
     "memory_write": '<tool>{"name":"memory_write","args":{"scope":"project","topic":"key-decisions","text":"Use SQLite","tags":["database"]}}</tool>',
     "memory_update": '<tool>{"name":"memory_update","args":{"id":"mem_123456789abc","text":"Use SQLite WAL"}}</tool>',
@@ -243,6 +252,19 @@ def _context_skills(context):
     if provider is None:
         return {}
     return provider() or {}
+
+
+def _context_mcp_tools(context):
+    # 和 _context_skills 一样走 getattr：context 不一定是完整的 ToolContext
+    # （评测和测试会传更窄的桩），少一个可选字段不该让整张注册表建不起来。
+    provider = getattr(context, "mcp_tools", None)
+    return dict(provider() or {}) if provider is not None else {}
+
+
+def _context_catalog_threshold(context):
+    from .prompt_prefix import TOOL_CATALOG_THRESHOLD
+
+    return int(getattr(context, "catalog_threshold", TOOL_CATALOG_THRESHOLD) or TOOL_CATALOG_THRESHOLD)
 
 
 def _registry_entry(spec, context, runner):
@@ -325,6 +347,12 @@ def build_tool_registry(context):
     # 只有真的存在 skill 时才暴露 use_skill，避免给模型一个无处可用的工具。
     if _context_skills(context):
         tools["use_skill"] = _registry_entry(USE_SKILL_TOOL_SPEC, context, tool_use_skill)
+    # 外部 MCP 工具在**启动期**并进来，和内置工具走同一套护栏。
+    # 运行期不做动态发现：模型看到的动作集合在 run 内必须是冻结的。
+    tools.update(_context_mcp_tools(context))
+    if len(tools) > _context_catalog_threshold(context):
+        # 目录模式下 schema 不进 prefix，得留一条按需取回的路。
+        tools["describe_tool"] = _registry_entry(DESCRIBE_TOOL_SPEC, context, tool_describe_tool)
     return tools
 
 
@@ -344,11 +372,13 @@ def _tool_spec(name):
         return DELEGATE_TOOL_SPEC
     if name == "use_skill":
         return USE_SKILL_TOOL_SPEC
+    if name == "describe_tool":
+        return DESCRIBE_TOOL_SPEC
     return None
 
 
-def _validate_schema(name, args):
-    spec = _tool_spec(name)
+def _validate_schema(name, args, spec=None):
+    spec = spec or _tool_spec(name)
     if spec is None:
         return
     for field_name, field in spec.fields.items():
@@ -380,7 +410,17 @@ def _validate_schema(name, args):
 
 def validate_tool(context, name, args):
     args = args or {}
-    _validate_schema(name, args)
+    # MCP 工具的 spec 不在 BASE_TOOL_SPECS 里，但它照样要过参数校验——
+    # 外部工具的入参**更**需要校验，它的实现不在我们手上。
+    registry = getattr(context, "tool_registry", None)
+    external = (
+        (registry() or {}).get(name, {}).get("spec")
+        if registry is not None and name.startswith("mcp__")
+        else None
+    )
+    _validate_schema(name, args, spec=external)
+    if external is not None:
+        return
 
     if name == "list_files":
         path = context.path(args.get("path", "."))
@@ -507,6 +547,11 @@ def validate_tool(context, name, args):
             raise ValueError("name must not be empty")
         if skill_name not in _context_skills(context):
             raise ValueError(f"unknown skill: {skill_name}")
+        return
+
+    if name == "describe_tool":
+        if not str(args.get("name", "")).strip():
+            raise ValueError("name must not be empty")
         return
 
 
@@ -784,6 +829,27 @@ def tool_use_skill(context, args):
     # 点亮 skill 是有状态的（能力临时覆盖 + 供应链确认），所以走 runtime 那条路，
     # 这里不自己拼正文——两处各拼一份迟早会漂移。
     return context.activate_skill(skill_name)
+
+
+def tool_describe_tool(context, args):
+    """把一个工具的完整参数 schema 取回来。
+
+    目录模式下 prefix 里只有名字和一句话，模型要用某个不熟的工具时得先问一次。
+    """
+    name = str(args.get("name", "")).strip()
+    tool = (getattr(context, "tool_registry", lambda: {})() or {}).get(name)
+    if tool is None:
+        raise ValueError(f"unknown tool: {name}")
+    from .prompt_prefix import render_tool_schema
+
+    risk = "approval required" if tool["risky"] else "safe"
+    return "\n".join(
+        [
+            f"{name}({render_tool_schema(tool['schema'])}) [{risk}]",
+            str(tool["description"]),
+            "capabilities: " + (", ".join(sorted(tool.get("capabilities") or ())) or "(none)"),
+        ]
+    )
 
 
 _TOOL_RUNNERS = {

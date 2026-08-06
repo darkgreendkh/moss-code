@@ -7,9 +7,21 @@ from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 
 from .clock import now
-from .skills import render_skill_lines
+from .skills import _one_line, render_skill_lines
+from .token_budget import estimate_tokens
 
 PROMPT_VERSION = "p1"
+
+# 超过这么多工具就把 Tools 段切成目录（spec-09 §9.2）。默认值高于内置注册表的
+# 14 个：这个开关是给"接了外部 MCP server 之后工具数膨胀"用的，
+# 不该让每一次默认运行都改变渲染方式。
+TOOL_CATALOG_THRESHOLD = 16
+# 目录段的 token 预算。工具再多，Tools 段也就这么大——这是"工具数 30 时
+# prefix 增长 <20%"（spec-09 §9.2 验收）能成立的机制，靠一个固定的描述宽度
+# 是保证不了的：宽度固定，段落大小仍然随工具数线性增长。
+TOOL_CATALOG_BUDGET_TOKENS = 600
+TOOL_CATALOG_DESCRIPTION_CHARS = 90
+MIN_TOOL_CATALOG_DESCRIPTION_CHARS = 24
 
 
 @dataclass
@@ -97,13 +109,44 @@ def skill_signature(skills):
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def build_prompt_prefix(workspace, tools, skills=None, built_at=None, protocol="text"):
-    tool_lines = []
-    for name, tool in tools.items():
-        fields = render_tool_schema(tool["schema"])
-        risk = "approval required" if tool["risky"] else "safe"
-        tool_lines.append(f"- {name}({fields}) [{risk}] {tool['description']}")
-    tool_text = "\n".join(tool_lines)
+def render_tool_lines(tools, catalog_threshold=None):
+    """Tools 段的渲染。工具多了就退成目录，schema 改由 `describe_tool` 按需取。
+
+    为什么需要这一档（spec-09 §9.2）：接进外部 MCP server 之后工具数会膨胀，
+    而每个工具的完整 schema 都常驻稳定前缀——30 个工具的 schema 是纯粹的
+    每轮开销，其中模型这一轮真正会用的通常只有一两个。
+    """
+    threshold = TOOL_CATALOG_THRESHOLD if catalog_threshold is None else int(catalog_threshold)
+    if len(tools) <= threshold:
+        return [
+            f"- {name}({render_tool_schema(tool['schema'])}) "
+            f"[{'approval required' if tool['risky'] else 'safe'}] {tool['description']}"
+            for name, tool in tools.items()
+        ]
+    hint = (
+        "(catalog mode: argument schemas are omitted; "
+        'call <tool>{"name":"describe_tool","args":{"name":"..."}}</tool> before using an unfamiliar tool)'
+    )
+
+    def render(width):
+        return [
+            f"- {name} [{'approval required' if tool['risky'] else 'safe'}] "
+            f"{_one_line(tool['description'], width)}".rstrip()
+            for name, tool in tools.items()
+        ] + [hint]
+
+    width = TOOL_CATALOG_DESCRIPTION_CHARS
+    lines = render(width)
+    # 描述按比例缩短，而不是砍掉排在后面的工具——被砍掉的工具在模型眼里
+    # 就是不存在，它永远不会去 describe_tool 问一个它没见过的名字。
+    while estimate_tokens("\n".join(lines)) > TOOL_CATALOG_BUDGET_TOKENS and width > MIN_TOOL_CATALOG_DESCRIPTION_CHARS:
+        width = max(MIN_TOOL_CATALOG_DESCRIPTION_CHARS, width // 2)
+        lines = render(width)
+    return lines
+
+
+def build_prompt_prefix(workspace, tools, skills=None, built_at=None, protocol="text", catalog_threshold=None):
+    tool_text = "\n".join(render_tool_lines(tools, catalog_threshold))
     skills = skills or {}
     # 渐进披露第一级：prefix 里只放名字 + 一句话，且整段卡在预算内
     # （spec-09 §9.4）。稳定前缀每轮都要发，不能随 skill 数量线性膨胀。

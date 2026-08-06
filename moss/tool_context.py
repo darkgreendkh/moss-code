@@ -33,6 +33,12 @@ class ToolContext:
     run_path_resolver: Callable[[str], Path] = None
     # 点亮 skill：供应链确认 + 能力临时覆盖都是有状态的，只能由 runtime 做。
     skill_activator: Callable[[str], str] = None
+    # 启动期连上的 MCP 工具条目。空 dict = 没接外部 server，行为与接入前一致。
+    mcp_tools_provider: Callable[[], dict] = None
+    # 超过多少个工具就把 prefix 的 Tools 段切成目录（spec-09 §9.2）。
+    catalog_threshold: int = 16
+    # describe_tool 要看整张注册表，但它只读——所以给的是取回调而不是引用。
+    tool_registry_provider: Callable[[], dict] = None
 
     def path(self, raw_path):
         return self.path_resolver(str(raw_path))
@@ -52,6 +58,16 @@ class ToolContext:
         if self.skill_activator is None:
             raise RuntimeError("use_skill is unavailable")
         return self.skill_activator(str(name))
+
+    def mcp_tools(self):
+        if self.mcp_tools_provider is None:
+            return {}
+        return dict(self.mcp_tools_provider() or {})
+
+    def tool_registry(self):
+        if self.tool_registry_provider is None:
+            return {}
+        return dict(self.tool_registry_provider() or {})
 
     def set_plan(self, plan):
         if self.plan_writer is None:

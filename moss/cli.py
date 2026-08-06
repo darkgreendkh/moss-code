@@ -22,9 +22,15 @@ from .features.memory import reject_memory_reason
 from .features.memory_records import SourceRef, make_record
 from .features.memory_store import MemoryStore, project_scope_key
 from . import injection as injectionlib
+from .mcp.server import DEFAULT_EXPORTED_TOOLS, MossMcpServer
 from .otel import trace_to_otlp
 from .prompt_prefix import PROMPT_VERSION
-from .providers.clients import AnthropicCompatibleModelClient, OllamaModelClient, OpenAICompatibleModelClient
+from .providers.clients import (
+    AnthropicCompatibleModelClient,
+    FakeModelClient,
+    OllamaModelClient,
+    OpenAICompatibleModelClient,
+)
 from .providers.recording import ON_MISS_CHOICES, RecordingModelClient, ReplayModelClient
 from . import rewind as rewindlib
 from .run_index import referenced_run_ids
@@ -950,12 +956,45 @@ def run_runs_command(argv):
     return 0
 
 
+def build_mcp_arg_parser():
+    parser = argparse.ArgumentParser(prog="moss mcp", description="Expose moss over MCP.")
+    commands = parser.add_subparsers(dest="mcp_command", required=True)
+    serve_parser = commands.add_parser("serve", help="Serve read-only workspace tools over MCP stdio.")
+    serve_parser.add_argument("--cwd", default=".", help="Workspace to expose.")
+    serve_parser.add_argument(
+        "--tools",
+        default=",".join(DEFAULT_EXPORTED_TOOLS),
+        help="Comma-separated tools to export. Risky tools are dropped regardless.",
+    )
+    return parser
+
+
+def run_mcp_command(argv):
+    args = build_mcp_arg_parser().parse_args(argv)
+    workspace = WorkspaceContext.build(args.cwd)
+    load_project_env(workspace.repo_root)
+    agent = Moss(
+        # server 模式下没有模型调用，只有工具执行——所以给一个空 client。
+        # 别让"暴露只读工具"这件事顺带需要一把 API key。
+        model_client=FakeModelClient([]),
+        workspace=workspace,
+        session_store=SessionStore(workspace.repo_root + "/.moss/sessions"),
+        approval_policy="never",
+        read_only=True,
+    )
+    tools = tuple(name.strip() for name in str(args.tools).split(",") if name.strip())
+    MossMcpServer(agent, exported_tools=tools).serve()
+    return 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["memory"]:
         return run_memory_command(argv[1:])
     if argv[:1] == ["runs"]:
         return run_runs_command(argv[1:])
+    if argv[:1] == ["mcp"]:
+        return run_mcp_command(argv[1:])
     args = build_arg_parser().parse_args(argv)
     agent = build_agent(args)
 
