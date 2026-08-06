@@ -196,6 +196,9 @@ class Moss:
         self._artifact_lock = threading.Lock()
         # 本次运行因硬截断而永久丢掉的字节数。卸载生效后它应当恒为 0。
         self.truncated_bytes_lost = 0
+        # 压缩把"说明成败的行"全切掉了的次数。压缩器最不该犯的错，
+        # 做成可统计的标签而不是靠人工抽检。
+        self.error_signal_lost_count = 0
         # 可选的进度观察者：CLI 用它把 agent 每一步在做什么实时打给用户看。
         # 默认 None（比如 benchmark / 子 agent 场景），完全不影响控制循环。
         self.progress_observer = None
@@ -1009,6 +1012,7 @@ class Moss:
             "snapshot_strategy": self.snapshot_strategy(),
             # 卸载生效后这个数应当恒为 0：大输出全部落盘，没有字节被永久丢掉。
             "truncated_bytes_lost": int(getattr(self, "truncated_bytes_lost", 0)),
+            "error_signal_lost_count": int(getattr(self, "error_signal_lost_count", 0)),
             "redacted_env": self.detected_secret_env_summary(),
         }
 

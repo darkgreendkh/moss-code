@@ -6,6 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 
+from . import output_compressors
 from .clock import now
 from .injection import scan as scan_for_injection
 from .token_budget import MAX_TOOL_OUTPUT, clip
@@ -19,6 +20,13 @@ from .workspace import invalidate_git_facts_cache
 ARTIFACT_THRESHOLD = 4000
 # 卸载后进 prompt 的摘要上限（字符）。
 ARTIFACT_PREVIEW_CHARS = 2000
+# 压缩统计里允许进 metadata/trace 的字段（其余是明细表，只留给调用方）。
+COMPRESSION_METADATA_KEYS = (
+    "compressor_kind",
+    "compressed_chars",
+    "original_chars",
+    "error_signal_lost",
+)
 
 
 # 工具输出超上限时，保留哪一端取决于关键信息的位置。
@@ -256,7 +264,10 @@ def prepare_tool_output(agent, name, args, raw_text):
         return content, {"truncated_bytes_lost": max(0, len(raw_text) - MAX_TOOL_OUTPUT)}
 
     artifact_path, lines = stored
-    summary = compress_tool_output(name, args, safe_text, ARTIFACT_PREVIEW_CHARS)
+    summary, stats = compress_tool_output(name, args, safe_text, ARTIFACT_PREVIEW_CHARS)
+    # 压缩器的完整 stats 里有按文件/按 CODE 的明细，可能上百条。
+    # 进 metadata 的只取标量：trace 是时间线，不该被一份统计表撑爆。
+    compression = {key: stats[key] for key in COMPRESSION_METADATA_KEYS if key in stats}
     pointer = (
         f'... full output is {lines} lines; '
         f'read it with read_artifact("{artifact_path}", start, end)'
@@ -267,17 +278,15 @@ def prepare_tool_output(agent, name, args, raw_text):
             "artifact_path": artifact_path,
             "artifact_lines": lines,
             "truncated_bytes_lost": 0,
+            **compression,
         },
     )
 
 
 def compress_tool_output(name, args, text, budget_chars):
-    """把大输出压成进 prompt 的摘要。
-
-    PR-3 会把这里换成按工具类型注册的压缩器；现在先用既有的保头/保两端切片，
-    保证卸载这一步本身不改变"模型看到什么形状的内容"。
-    """
-    return clip(text, budget_chars, keep=_TRUNCATION_KEEP.get(name, "head"))
+    """把大输出压成进 prompt 的摘要，按输出类型选压缩器。"""
+    kind = output_compressors.detect_kind(name, args, text)
+    return output_compressors.compress(kind, text, budget_chars)
 
 
 def approval_summary(agent, name, args):
@@ -483,6 +492,8 @@ class ToolExecutor:
             lost = int(output_metadata.get("truncated_bytes_lost", 0))
             if lost:
                 agent.truncated_bytes_lost = getattr(agent, "truncated_bytes_lost", 0) + lost
+            if output_metadata.get("error_signal_lost"):
+                agent.error_signal_lost_count = getattr(agent, "error_signal_lost_count", 0) + 1
             if name == "run_shell":
                 exit_code = output.exit_code
                 if exit_code is None:
