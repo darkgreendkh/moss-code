@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 状态 | Draft |
+| 状态 | Implemented（框架完成）；L2/L3 真实模型与人工盲标证据待补 |
 | 对应优化章节 | [第 8 章](docs/optimize/2026-agent-upgrade-plan.md)（8.0–8.12） |
 | 优先级 | 8.1 / 8.2 / 8.3 / 8.4 / 8.5 / 8.8 / 8.12 是 P0；8.6 / 8.7 / 8.9 / 8.10 是 P1；8.11 是 P2 |
 | 依赖 | [spec-02](spec-02-agent-loop.md)（`RunBudget`/`model_turns`）、[spec-07](spec-07-session-artifacts.md)（trace 常量）、[spec-09](spec-09-new-modules.md)（录制回放） |
@@ -397,3 +397,13 @@ class RunManifest:
 2. `hidden_tests` 从哪来？moss 自己的历史 commit 通常只有一套测试。倾向：从同一 commit 的测试里**随机划一半**作 hidden，并记录划分种子；不够时标 `no_holdout` 并在报告里注明。
 3. 50 条金标要不要我自己标？倾向：是，但要盲标（不看模型输出的来源），并记录标注耗时。
 4. L2 的默认 provider 用 deepseek 还是本地 ollama？倾向：主结论用 deepseek（真实使用场景），另跑一次 ollama 作为"小模型下 harness 是否仍稳"的辅助证据。
+
+## 11. 实施状态与证据边界（2026-08-06）
+
+13 个阶段均已落地并各自测试、提交。实现入口包括 `levels/`、`stats.py`、`pricing.py`、`verifier.py`、`mining.py`、`audit.py`、`ablations.py`、`failure_taxonomy.py`、`manifest.py`、`runner.py`、`adversarial.py`、`judge.py` 与 `adapters/swe_task.py`；操作说明见 [评测操作指南](../evaluation.md)。
+
+- 20 个本仓库历史任务已通过 parent-fail / commit-pass ×3、archive SHA 与 mutation 审计，仍保持 `draft`，未冒充人工审核后的 active 任务。
+- 30 个对抗场景已具备可复现矩阵和指标合同；**L2/L3 真实模型结果：待运行**，因此当前没有声称 ASR <5%、utility retention >95% 或 wall-clock 4×。
+- `benchmarks/gold/judge-calibration-v1.json` 提供盲标流程所需的 50 个空槽位；**50 条人工盲标：待标注**，因此当前没有声称 κ≥0.7。
+- SWE-style adapter 只处理调用方合法取得的本地记录与 archive，不下载外部数据；公开 benchmark 分数尚未运行，也没有写入本 spec。
+- 历史 v2 合成产物只按 L1 兼容读取；真实能力与成本结论只能来自带 schema v3、L2/L3 level 和完整 manifest 的新产物。

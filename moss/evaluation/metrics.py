@@ -1,5 +1,6 @@
 import json
 import tempfile
+import warnings
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -1611,6 +1612,11 @@ def _runtime_facts(root):
 
 
 def run_context_ablation_v2(artifact_path=DEFAULT_CONTEXT_ABLATION_V2_PATH, repetitions=5):
+    warnings.warn(
+        "run_context_ablation_v2 is an L1 compatibility experiment; use L2 ablation trials for capability claims",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     payload = run_context_stress_matrix(repetitions=repetitions)
     artifact = {
         "schema_version": METRICS_SCHEMA_VERSION,
@@ -1627,6 +1633,11 @@ def run_context_ablation_v2(artifact_path=DEFAULT_CONTEXT_ABLATION_V2_PATH, repe
 
 
 def run_memory_ablation_v2(artifact_path=DEFAULT_MEMORY_ABLATION_V2_PATH, repetitions=5):
+    warnings.warn(
+        "run_memory_ablation_v2 is an L1 compatibility experiment; use L2 ablation trials for capability claims",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     payload = run_large_scale_memory_experiment(repetitions=repetitions)
     artifact = {
         "schema_version": METRICS_SCHEMA_VERSION,
@@ -1645,6 +1656,11 @@ def run_memory_ablation_v2(artifact_path=DEFAULT_MEMORY_ABLATION_V2_PATH, repeti
 
 
 def run_recovery_ablation_v2(artifact_path=DEFAULT_RECOVERY_ABLATION_V2_PATH, repetitions=3):
+    warnings.warn(
+        "run_recovery_ablation_v2 is an L1 compatibility experiment; use L2 ablation trials for capability claims",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     repetitions = int(repetitions)
     variants = {"resume_enabled": [], "resume_disabled": []}
     for task in RECOVERY_ABLATION_TASKS:

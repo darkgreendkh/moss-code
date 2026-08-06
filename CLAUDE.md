@@ -5,16 +5,14 @@ moss 是一个轻量本地 coding agent：一个包在模型外面的控制循�
 ## 常用命令
 
 ```bash
-python -m pytest tests/ -q        # 全量测试，约 4 分钟
+uv run --with pytest python -m pytest tests/ -q
 python -m pytest tests/test_moss.py -q -k "pattern"   # 单点调试
 pip install -e .                  # 安装后可直接用 `moss` 命令
 python -m moss                    # 模块入口（等价于 moss）
 uv run ruff check moss tests scripts   # lint（本机 base 环境没装 ruff，用 uv）
 ```
 
-**测试基线（Windows 本机）：全量通过、仅 4 个失败即为绿色。** 那 4 个失败全部是 Windows 环境问题，不是代码 bug，只需要关注新增失败：
-- `test_evaluator.py` ×3：benchmark verifier 需要真实环境/`python3`
-- `test_safety_invariants.py::test_symlink_path_traversal_is_rejected`：Windows 创建符号链接需要特权（WinError 1314）
+**测试基线：全量测试必须零失败。** 环境差异应显式归类或跳过，不能把固定失败数当成绿色。
 
 CI（`.github/workflows/ci.yml`）在 Ubuntu 上跑同样的 `ruff check` + `pytest`（Python 3.10 与 3.12），那里应当全绿；CI 出现任何失败都必须排查，不允许 skip 了事。
 
@@ -99,6 +97,9 @@ cli.py (装配/REPL/进度渲染)
 - `config.py`：`.env` 加载（坏行跳过并警告，不允许让整个启动崩掉）；`.moss/config.json` 装结构化配置（如 `repo_context.doc_names`）
 - `skills.py`：`.moss/skills/*.md`（frontmatter: name/description，正文按 `use_skill` 懒加载）
 - `evaluation/`：benchmark 与 ablation，不属于运行时路径
+  - L0–L4 证据不得跨层混写；scripted 入口只属于 L1，不能声称模型能力
+  - L2/L3 必须使用临时 workspace、RunManifest、成本字段与统计区间；infra failure 单列
+  - judge 不能决定 binary pass；公开 adapter 不负责下载数据或宣称榜单分数
 
 公共 API 只从 `moss/__init__.py` 导出；旧的 `moss.evaluator`/`moss.metrics`/`moss.models`/`moss.memory` 平铺模块已删除，不要复活它们。
 

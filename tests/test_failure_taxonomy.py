@@ -1,6 +1,7 @@
 import pytest
 
 from moss.evaluation.failure_taxonomy import LABELS, label_trial, summarize_failure_labels
+from moss.evaluation.analysis.trajectory import analyze_trajectories
 
 
 CASES = {
@@ -117,3 +118,18 @@ def test_failure_summary_is_a_histogram_with_run_id_drilldown():
     assert summary["failed_runs"] == 2
     assert summary["histogram"]["timeout"] == 2
     assert summary["run_ids_by_label"]["timeout"] == ["run-1", "run-2"]
+
+
+def test_trajectory_analysis_reports_automatic_label_coverage():
+    summary = analyze_trajectories(
+        [
+            {
+                "run_id": "run-1",
+                "status": "fail",
+                "trace_events": [{"event": "tool_error", "error_code": "timeout"}],
+            },
+            {"run_id": "run-2", "status": "fail", "trace_events": []},
+        ]
+    )
+
+    assert summary["automatic_label_coverage"] == 0.5

@@ -44,7 +44,8 @@ def test_summarize_rows_uses_status_as_the_only_pass_fail_contract():
 def test_ablation_artifact_uses_shared_utc_clock(tmp_path, monkeypatch):
     monkeypatch.setattr("moss.evaluation.metrics.now", lambda: "2030-01-02T03:04:05+00:00")
 
-    artifact = run_context_ablation_v2(tmp_path / "context.json", repetitions=1)
+    with pytest.warns(DeprecationWarning, match="L1 compatibility"):
+        artifact = run_context_ablation_v2(tmp_path / "context.json", repetitions=1)
 
     assert artifact["captured_at"] == "2030-01-02T03:04:05+00:00"
 
