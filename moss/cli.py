@@ -37,6 +37,7 @@ from .run_index import referenced_run_ids
 from .run_store import RunStore
 from .runtime import Moss, SessionStore
 from .token_budget import middle
+from .trace_html import render_run_html
 from . import policy as policylib
 from . import sandbox as sandboxlib
 from .workspace import WorkspaceContext
@@ -849,6 +850,11 @@ def build_runs_arg_parser():
 
     show_parser = commands.add_parser("show", help="Show one run's task state and report.")
     show_parser.add_argument("run_id")
+    show_parser.add_argument(
+        "--html",
+        action="store_true",
+        help="Emit a single self-contained HTML page (inline CSS/SVG, no external requests).",
+    )
     add_location(show_parser)
 
     verify_parser = commands.add_parser("verify", help="Verify a run's trace hash chain.")
@@ -904,6 +910,20 @@ def run_runs_command(argv):
         return 0
 
     if command == "show":
+        if args.html:
+            events = store.read_trace(args.run_id)
+            if not events:
+                print(f"no trace for run: {args.run_id}", file=sys.stderr)
+                return 1
+            report = store.load_report(args.run_id) if store.report_path(args.run_id).exists() else None
+            try:
+                task_state = store.load_task_state(args.run_id)
+            except (OSError, json.JSONDecodeError):
+                # 归档过的 run 只剩 trace。信息不全也得出得来页面——
+                # 排查工具在最需要它的时候往往就是信息不全的。
+                task_state = None
+            print(render_run_html(args.run_id, events, report=report, task_state=task_state), end="")
+            return 0
         try:
             payload = {
                 "task_state": store.load_task_state(args.run_id),
