@@ -450,6 +450,7 @@ def build_agent(args):
             tool_protocol=tool_protocol,
             context_mode=context_mode,
             reflect_mode=getattr(args, "reflect", "rule"),
+            compaction_mode=getattr(args, "compaction", "off"),
         )
     return Moss(
         model_client=model,
@@ -470,6 +471,7 @@ def build_agent(args):
         tool_protocol=tool_protocol,
         context_mode=context_mode,
         reflect_mode=getattr(args, "reflect", "rule"),
+        compaction_mode=getattr(args, "compaction", "off"),
     )
 
 
@@ -567,6 +569,15 @@ def build_arg_parser():
         choices=("rerender", "append_only"),
         default="rerender",
         help="Render compressed history each turn or keep stable append-only messages.",
+    )
+    parser.add_argument(
+        "--compaction",
+        choices=("off", "rule", "model"),
+        default="off",
+        help=(
+            "Compact older history into a structured handoff when context gets tight. "
+            "off keeps today's truncate-only behaviour and is the ablation baseline."
+        ),
     )
     parser.add_argument(
         "--reflect",

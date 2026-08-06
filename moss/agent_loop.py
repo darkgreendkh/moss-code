@@ -16,6 +16,11 @@ from .token_budget import clip, estimate_tokens
 # 并发只读工具的上限。固定 4：再多也受限于磁盘和后端延迟，
 # 而线程数越多，出问题时越难复现。
 PARALLEL_MAX_WORKERS = 4
+# 上下文占用率超过这个比例就压缩（spec-06 §4.1）。留 20% 余量是因为
+# 压缩本身也要在窗口里完成，等撞墙再压就晚了。
+COMPACTION_UTILIZATION_THRESHOLD = 0.8
+# 历史段连续被削这么多轮就压缩：一次是偶发的大输出，两次是历史装不下了。
+COMPACTION_REDUCTION_STREAK = 2
 
 
 def _record_instruction_notices(agent, task_state):
@@ -99,6 +104,9 @@ class AgentLoop:
         attempts = 0
         max_attempts = max(agent.max_steps * 3, agent.max_steps + 4)
         budget = agent.new_run_budget()
+        # 进 prompt 的那份请求文本。请求大到装不下时会被换成"摘要 + artifact 指针"，
+        # 但 history / checkpoint 里记的始终是用户原话。
+        prompt_message = user_message
 
         # 这是 agent 的主循环，可以按“感知 -> 决策 -> 行动 -> 记录”来理解：
         # 1. 感知：重新组 prompt，把当前状态整理给模型看
@@ -116,20 +124,32 @@ class AgentLoop:
             attempts += 1
             task_state.record_attempt()
             agent.write_task_state(task_state)
-            prompt_started_at = time.monotonic()
-            prompt_bundle = agent.build_context_result(user_message)
+            prompt_bundle = self._build_prompt(task_state, prompt_message)
+            # 上下文吃紧时先压缩再重算（spec-06 §4.7 的第 1 步）。
+            trigger = self._compaction_trigger(prompt_bundle, budget)
+            if trigger and agent.compact_context(trigger=trigger) is not None:
+                agent.emit_trace(
+                    task_state,
+                    trace_events.CONTEXT_COMPACTED,
+                    {"trigger": trigger, **agent.session["compactions"][-1]},
+                )
+                prompt_bundle = self._build_prompt(task_state, prompt_message)
+            if not prompt_bundle.sendable and prompt_bundle.overflow_reason == "request_too_large":
+                # 第 2 步：当前请求本身就装不下 —— 卸载成 artifact，
+                # prompt 里放摘要 + 指针，让模型自己分段读。
+                replacement = agent.offload_request(prompt_message)
+                if replacement:
+                    agent.emit_trace(
+                        task_state,
+                        trace_events.REQUEST_OFFLOADED,
+                        {"chars": len(prompt_message)},
+                    )
+                    prompt_message = replacement
+                    prompt_bundle = self._build_prompt(task_state, prompt_message)
             prompt = prompt_bundle.text
             prompt_metadata = prompt_bundle.metadata
-            agent.emit_trace(
-                task_state,
-                "prompt_built",
-                {
-                    "prompt_metadata": prompt_metadata,
-                    "duration_ms": int((time.monotonic() - prompt_started_at) * 1000),
-                },
-            )
             if not prompt_bundle.sendable:
-                # admission gate：装不下就别发。发出去的结局是一个 400，
+                # 第 3 步：仍然装不下就不发。发出去的结局是一个 400，
                 # 而那时这一轮的钱和时间已经花掉了，用户还只能看到 provider 的报错。
                 return self._finish_context_overflow(
                     task_state, user_message, prompt_bundle, run_started_at
@@ -381,6 +401,46 @@ class AgentLoop:
         )
         agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
         return final
+
+    def _build_prompt(self, task_state, user_message):
+        """组一轮 prompt 并落 prompt_built。
+
+        压缩之后会再调一次：trace 里必须留下**真正发出去的**那一份，
+        否则事后没法解释"模型当时看到的是什么"。
+        """
+        agent = self.agent
+        started_at = time.monotonic()
+        bundle = agent.build_context_result(user_message)
+        reductions = [entry["section"] for entry in bundle.metadata.get("budget_reductions", [])]
+        agent.history_reduction_streak = (
+            agent.history_reduction_streak + 1 if "history" in reductions else 0
+        )
+        agent.emit_trace(
+            task_state,
+            "prompt_built",
+            {
+                "prompt_metadata": bundle.metadata,
+                "duration_ms": int((time.monotonic() - started_at) * 1000),
+            },
+        )
+        return bundle
+
+    def _compaction_trigger(self, bundle, budget):
+        """该不该压缩，以及是因为什么。返回空串表示不压。"""
+        agent = self.agent
+        if agent.compaction_mode == "off":
+            return ""
+        if not bundle.sendable:
+            return "context_overflow"
+        utilization = float(bundle.metadata.get("context_health", {}).get("context_utilization", 0.0))
+        if utilization > COMPACTION_UTILIZATION_THRESHOLD:
+            return "context_utilization"
+        if agent.history_reduction_streak >= COMPACTION_REDUCTION_STREAK:
+            # 连续两轮削历史说明不是偶发的大输出，而是历史本身装不下了。
+            return "history_reduction"
+        if budget.soft_exceeded():
+            return "budget_soft_exceeded"
+        return ""
 
     def _can_run_in_parallel(self, actions):
         """只有"全是只读工具、且不止一个"的批才允许并发。

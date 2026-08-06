@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import checkpoint as checkpointlib
+from . import compaction as compactionlib
 from .features import memory as memorylib
 from .features.memory_records import SourceRef
 from . import security as securitylib
@@ -103,6 +104,7 @@ class Moss:
         tool_protocol="auto",
         context_mode="rerender",
         reflect_mode="rule",
+        compaction_mode="off",
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -137,6 +139,14 @@ class Moss:
         if reflect_mode not in {"off", "rule", "model"}:
             raise ValueError("reflect_mode must be off, rule, or model")
         self.reflect_mode = reflect_mode
+        if compaction_mode not in {"off", "rule", "model"}:
+            raise ValueError("compaction_mode must be off, rule, or model")
+        # 默认 off = 今天的纯截断行为，也是消融基线（spec-06 §5）。
+        # 等评测证明收益之后再翻默认值。
+        self.compaction_mode = compaction_mode
+        # 历史段连续几轮触发了收缩。连续两轮说明不是偶发的大输出，
+        # 而是历史本身已经装不下了 —— 那是该压缩而不是继续削的信号。
+        self.history_reduction_streak = 0
         self.sandbox_plan = sandboxlib.announce(sandboxlib.detect(sandbox))
         # 审批决定的记忆：{(工具, 风险, 路径桶): 是否允许}。刻意只存在内存里，
         # 会话结束即失效——落盘的"上次批过"会变成永久后门。
@@ -1056,6 +1066,8 @@ class Moss:
             "truncated_bytes_lost": int(getattr(self, "truncated_bytes_lost", 0)),
             "error_signal_lost_count": int(getattr(self, "error_signal_lost_count", 0)),
             "token_calibration": self.token_calibration.to_dict(),
+            "compaction_mode": self.compaction_mode,
+            "compactions": list(self.session.get("compactions", [])),
             "redacted_env": self.detected_secret_env_summary(),
         }
 
@@ -1310,6 +1322,84 @@ class Moss:
         if os.path.commonpath([str(run_root), str(resolved)]) != str(run_root):
             raise ValueError(f"path escapes run directory: {raw_path}")
         return resolved
+
+    def compact_context(self, trigger="context_pressure"):
+        """把较早的历史压成一份结构化交接，返回 artifact（没压则返回 None）。
+
+        在链路里的位置：主循环发现上下文吃紧（占用率过高 / 历史连续被削 /
+        软预算命中 / prompt 根本发不出去）时调用它，然后重新组一次 prompt。
+        """
+        if self.compaction_mode == "off":
+            return None
+        task_state = self.current_task_state
+        if task_state is None:
+            return None
+        history = list(self.session.get("history", []))
+        pending = [item for item in history if item.get("pending")]
+        # 当前用户请求不参与压缩：它每轮都要作为 Current user request 出现。
+        compactable = [item for item in history if not item.get("pending")]
+        artifact, remaining = compactionlib.compact(
+            compactable,
+            self.run_store.read_trace(task_state.run_id),
+            method=self.compaction_mode,
+            budget=int(self.context_manager.section_budgets.get("history", 1200)),
+            aux_client=self.aux_model_client(),
+            run_id=task_state.run_id,
+            measure=self.context_manager.measure,
+        )
+        if artifact is None:
+            return None
+        covered_count = artifact.covered_history_count
+        covered = compactable[:covered_count]
+        if all(item.get("compaction") for item in covered):
+            # 压过的区间再压一次只会产出一份"摘要的摘要"，既没有新信息，
+            # 又让 covered_range 变得没法追溯。
+            return None
+        compactions = self.session.setdefault("compactions", [])
+        raw_path, _ = self.run_store.write_context_turns(
+            task_state.run_id,
+            len(compactions) + 1,
+            [self.redact_artifact(dict(item)) for item in covered],
+        )
+        artifact = replace(artifact, raw_path=raw_path)
+        summary = compactionlib.render_compaction(
+            artifact, int(self.context_manager.section_budgets.get("history", 1200))
+        )
+        summary_entry = {
+            "role": "system",
+            "content": summary,
+            "created_at": now(),
+            "compaction": artifact.id,
+        }
+        # 顺序：摘要 -> 当前请求 -> 未压缩的最近步骤。这是时间顺序，
+        # 当前请求确实发生在这些最近步骤之前。
+        self.session["history"] = [summary_entry, *pending, *remaining]
+        compactions.append(artifact.to_dict())
+        self.session_path = self.session_store.save(self.session)
+        self.history_reduction_streak = 0
+        return artifact
+
+    def aux_model_client(self):
+        """给 compaction 模型模式用的辅助后端。默认就用主后端。"""
+        return getattr(self, "_aux_model_client", None) or self.model_client
+
+    def offload_request(self, user_message):
+        """当前请求本身就装不下时，把它落盘并换成摘要 + 指针。
+
+        为什么不裁剪它：`当前请求永不裁剪` 这条原则的意义在于，被砍掉的那半句
+        很可能正是任务的关键约束。落盘之后模型可以自己分段读回来。
+        """
+        text = str(user_message)
+        stored = self.store_tool_artifact("user_request", self.redact_text(text))
+        if stored is None:
+            return ""
+        path, lines = stored
+        head = clip(text, 1500, keep="head")
+        return (
+            f"{head}\n"
+            f'... this request is {lines} line(s) long and was offloaded; '
+            f'read the rest with read_artifact("{path}", start, end).'
+        )
 
     def store_tool_artifact(self, tool_name, text):
         """把一份超阈值的工具输出卸载到 run 目录，返回 (相对路径, 行数)。

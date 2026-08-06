@@ -37,11 +37,20 @@ def build_agent(tmp_path, outputs, **kwargs):
     )
 
 
-def test_oversized_request_never_reaches_the_provider(tmp_path):
-    agent = build_agent(tmp_path, ["<final>never asked</final>"])
-    huge = "x" * (1024 * 1024)
+def _starve_the_budget(agent):
+    """把总预算压到连稳定前缀都装不下。
 
-    final = agent.ask(huge)
+    这是"卸载当前请求也救不回来"的那一档：spec-06 §4.7 的第 1、2 步都用不上，
+    只剩第 3 步的硬闸。
+    """
+    agent.context_manager.total_budget = 40
+    return agent
+
+
+def test_unsendable_prompt_never_reaches_the_provider(tmp_path):
+    agent = _starve_the_budget(build_agent(tmp_path, ["<final>never asked</final>"]))
+
+    final = agent.ask("anything at all")
 
     assert agent.model_client.calls == 0
     assert "Stopped without calling the model" in final
@@ -50,12 +59,12 @@ def test_oversized_request_never_reaches_the_provider(tmp_path):
 
 
 def test_context_overflow_writes_full_artifacts_and_a_readable_reason(tmp_path):
-    agent = build_agent(tmp_path, ["<final>never asked</final>"])
+    agent = _starve_the_budget(build_agent(tmp_path, ["<final>never asked</final>"]))
     stderr = io.StringIO()
     messages = []
     agent.progress_observer = lambda event, payload: messages.append((event, payload))
 
-    agent.ask("y" * (1024 * 1024))
+    agent.ask("y" * 400)
 
     task_state = agent.current_task_state
     report = agent.run_store.load_report(task_state.run_id)
@@ -81,9 +90,9 @@ def test_context_overflow_writes_full_artifacts_and_a_readable_reason(tmp_path):
 def test_one_shot_exit_code_is_non_zero_on_context_overflow(tmp_path, monkeypatch):
     from moss import cli
 
-    agent = build_agent(tmp_path, ["<final>never asked</final>"])
+    agent = _starve_the_budget(build_agent(tmp_path, ["<final>never asked</final>"]))
     monkeypatch.setattr(cli, "build_agent", lambda args: agent)
-    code = cli.main(["--cwd", str(tmp_path), "z" * 200000])
+    code = cli.main(["--cwd", str(tmp_path), "hello"])
 
     assert code == 1
     assert agent.model_client.calls == 0
@@ -118,9 +127,22 @@ def test_build_result_reports_sendable_for_a_normal_prompt(tmp_path):
 
 
 def test_admission_gate_still_applies_when_context_reduction_is_off(tmp_path):
-    agent = build_agent(tmp_path, ["<final>never asked</final>"], feature_flags={"context_reduction": False})
+    agent = _starve_the_budget(
+        build_agent(tmp_path, ["<final>never asked</final>"], feature_flags={"context_reduction": False})
+    )
 
-    final = agent.ask("q" * (1024 * 1024))
+    final = agent.ask("q" * 400)
 
     assert agent.model_client.calls == 0
     assert "Stopped without calling the model" in final
+
+
+def test_an_oversized_request_is_offloaded_rather_than_refused(tmp_path):
+    """请求太大先卸载再试（§4.7 第 2 步），拒发是最后一档，不是第一反应。"""
+    agent = build_agent(tmp_path, ["<final>read it back</final>"])
+
+    final = agent.ask("x" * (1024 * 1024))
+
+    assert agent.model_client.calls == 1
+    assert final == "read it back"
+    assert 'read_artifact("artifacts/' in agent.model_client.prompts[-1]

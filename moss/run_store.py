@@ -61,6 +61,22 @@ class RunStore:
         """被 compaction 压缩掉的原始历史。摘要里附路径，模型可用 read_artifact 取回。"""
         return self.run_dir(run_id) / "context"
 
+    def write_context_turns(self, run_id, index, entries):
+        """把被 compaction 压掉的原始历史整份存下来，返回 (相对路径, 条数)。
+
+        没有这一步，压缩就是又一种有损截断：模型看到摘要说"读过 parser.py"，
+        却再也拿不回当时到底读到了什么。
+        """
+        directory = self.context_dir(run_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"turns-{int(index)}.jsonl"
+        entries = list(entries or [])
+        body = "".join(
+            json.dumps(entry, sort_keys=True, ensure_ascii=True) + "\n" for entry in entries
+        )
+        self._write_text_atomic(path, body)
+        return f"context/{path.name}", len(entries)
+
     def write_artifact(self, run_id, sequence, tool, text):
         """把一份大输出落盘，返回 (相对 run 目录的路径, 行数)。
 

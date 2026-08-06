@@ -34,9 +34,13 @@ MEMORY_POISONING_BLOCKED = "memory_poisoning_blocked"
 
 # 上下文压缩与输出管理（spec-06）
 CONTEXT_OVERFLOW = "context_overflow"
+CONTEXT_COMPACTED = "context_compacted"
+REQUEST_OFFLOADED = "request_offloaded"
 
 __all__ = [
     "CONTEXT_OVERFLOW",
+    "CONTEXT_COMPACTED",
+    "REQUEST_OFFLOADED",
     "TOOLS_BATCH_STARTED",
     "TOOLS_BATCH_FINISHED",
     "BATCH_TRUNCATED",
