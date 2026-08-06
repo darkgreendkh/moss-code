@@ -1615,6 +1615,9 @@ def run_context_ablation_v2(artifact_path=DEFAULT_CONTEXT_ABLATION_V2_PATH, repe
     artifact = {
         "schema_version": METRICS_SCHEMA_VERSION,
         "artifact_type": "context-ablation-v2",
+        "eval_level": "L1",
+        "suite": "context-contract",
+        "cannot_prove": "real-model capability, token-cost benefit, or latency benefit",
         "captured_at": now(),
         "config_count": payload["config_count"],
         "configs": payload["configs"],
@@ -1628,6 +1631,9 @@ def run_memory_ablation_v2(artifact_path=DEFAULT_MEMORY_ABLATION_V2_PATH, repeti
     artifact = {
         "schema_version": METRICS_SCHEMA_VERSION,
         "artifact_type": "memory-ablation-v2",
+        "eval_level": "L1",
+        "suite": "memory-contract",
+        "cannot_prove": "cross-run real-model recall or false-memory rate",
         "captured_at": now(),
         "task_count": payload["task_count"],
         "runs_per_variant": payload["runs_per_variant"],
@@ -1648,6 +1654,9 @@ def run_recovery_ablation_v2(artifact_path=DEFAULT_RECOVERY_ABLATION_V2_PATH, re
     artifact = {
         "schema_version": METRICS_SCHEMA_VERSION,
         "artifact_type": "recovery-ablation-v2",
+        "eval_level": "L1",
+        "suite": "recovery-contract",
+        "cannot_prove": "real-model crash recovery or exactly-once side effects",
         "captured_at": now(),
         "task_count": len(RECOVERY_ABLATION_TASKS),
         "variants": {
