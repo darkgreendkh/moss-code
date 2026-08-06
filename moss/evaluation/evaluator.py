@@ -17,6 +17,7 @@ from ..run_store import RunStore
 from ..task_state import STOP_REASON_FINAL_ANSWER_RETURNED
 from ..tools import legal_tool_names
 from ..workspace import WORKSPACE_FINGERPRINT_VERSION, WorkspaceContext
+from . import cassettes
 from .verifier import run_verification
 
 BENCHMARK_SCHEMA_VERSION = 1
@@ -280,6 +281,9 @@ def summarize_rows(rows):
     total_tasks = len(rows)
     within_budget = sum(1 for row in rows if row.get("within_budget"))
     verifier_passes = sum(1 for row in rows if row.get("verifier_passed"))
+    # 磁带覆盖率是"这份 L1 有多少来自真实请求指纹回放"的度量。
+    # 它不是能力指标，只是证据来源的分布——但不报出来就没人知道占比在退化。
+    replayed = sum(1 for row in rows if str(row.get("model_source", "")).startswith("cassette"))
     return {
         "total_tasks": total_tasks,
         "passed": passed,
@@ -290,6 +294,9 @@ def summarize_rows(rows):
         "within_budget_rate": (within_budget / total_tasks) if total_tasks else 0.0,
         "verifier_pass_rate": (verifier_passes / total_tasks) if total_tasks else 0.0,
         "failure_category_counts": failure_category_counts,
+        "replayed_tasks": replayed,
+        "cassette_coverage": (replayed / total_tasks) if total_tasks else 0.0,
+        "replay_misses": sum(int(row.get("replay_misses", 0) or 0) for row in rows),
     }
 
 
@@ -415,6 +422,7 @@ class BenchmarkEvaluator:
         allow_dirty_workspace=False,
         eval_level="L1",
         suite="contract-smoke",
+        replay_on_miss="fail",
     ):
         self.benchmark_path = Path(benchmark_path)
         self.artifact_path = Path(artifact_path)
@@ -432,6 +440,13 @@ class BenchmarkEvaluator:
         self.model_client_factory = model_client_factory
         self.eval_level = str(eval_level)
         self.suite = str(suite)
+        # 磁带未命中的默认策略。CI 里必须是 fail：一次 miss 就说明回放已经
+        # 不是"同一条轨迹"了，把它当成通过是在骗自己。
+        self.replay_on_miss = str(replay_on_miss)
+        # 磁带是在**一次性 fixture 副本**里录的：那里没有 .git，workspace 段是恒定的。
+        # 写进真实 checkout 时 git status / recent_commits 每台机器都不一样，
+        # 录下来的 prompt 根本不可能再现，所以这种模式下直接不用磁带。
+        self.use_cassettes = not bool(allow_dirty_workspace)
         self.repo_root = self.benchmark_path.resolve().parent.parent
 
     def load(self):
@@ -492,8 +507,23 @@ class BenchmarkEvaluator:
         run_store = RunStore(fixture_copy_root / ".moss" / "runs")
         if self.model_client_factory is not None:
             model_client = self.model_client_factory(task=task, workspace=workspace)
+            model_source = "factory"
         else:
-            model_client = FakeModelClient(_scripted_outputs_for_task(task))
+            # 优先回放磁带：L1 的意义是"同样的模型输出，harness 的执行结果有没有变"，
+            # 磁带比手写脚本更接近真实轨迹。没有磁带就老实回落脚本，并把来源记进工件——
+            # 两种证据强度不同，不能在报表里混成一个数。
+            model_client = (
+                cassettes.build_replay_client(
+                    self.repo_root, task["id"], workspace, on_miss=self.replay_on_miss
+                )
+                if self.use_cassettes
+                else None
+            )
+            if model_client is None:
+                model_client = FakeModelClient(_scripted_outputs_for_task(task))
+                model_source = "scripted"
+            else:
+                model_source = f"cassette:{cassettes.cassette_source(self.repo_root, task['id']) or 'unknown'}"
         agent = Moss(
             model_client=model_client,
             workspace=workspace,
@@ -575,6 +605,10 @@ class BenchmarkEvaluator:
             "verifier_stderr": verifier_run.stderr,
             "verification_labels": list(verification.labels),
             "category": task["category"],
+            # 这一行是证据强度的标签：cassette:* 是回放的真实请求指纹，
+            # scripted 是手写脚本。报表里必须分得开。
+            "model_source": model_source,
+            "replay_misses": len(getattr(model_client, "misses", []) or []),
             "status": "pass" if passed else "fail",
             "passed": passed,
             "failure_category": failure_category,

@@ -106,6 +106,11 @@ def test_run_fixed_benchmark_reports_metadata_and_success_definition(tmp_path):
         "within_budget_rate": 1.0,
         "verifier_pass_rate": 1.0,
         "failure_category_counts": {},
+        # 大多数任务由录制磁带驱动；剩下两条 UNCASSETTABLE_TASKS 留在脚本上。
+        # 一次 miss 都不许有——miss 意味着回放的已经不是同一条轨迹了。
+        "replayed_tasks": 10,
+        "cassette_coverage": 10 / 12,
+        "replay_misses": 0,
     }
     assert artifact["failure_category_counts"] == {}
 

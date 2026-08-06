@@ -34,7 +34,9 @@ tmp/
 .mini-moss/
 artifacts/
 release/
-readme_intro_locked/
+# 评测污染真实 checkout 时留在**仓库根目录**的 fixture 副本。
+# 必须锚定到根：不锚的话它会顺手吞掉 benchmarks/cassettes/*/readme_intro_locked/。
+/readme_intro_locked/
 
 # Local secrets and provider configuration
 .env

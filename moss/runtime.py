@@ -256,6 +256,10 @@ class Moss:
         self._run_active = False
         self._frozen_registry = None
         self._reported_registry_drifts = set()
+        # 回放客户端把未命中回调给 runtime，这样 miss 会进 trace 而不只是 stderr
+        # 一行——评测要按 run 统计"这次回放到底有多少步偏离了磁带"。
+        if getattr(model_client, "miss_observer", "unset") is None:
+            model_client.miss_observer = self.note_replay_miss
 
     @classmethod
     def from_session(cls, model_client, workspace, session_store, session_id, **kwargs):
@@ -682,6 +686,19 @@ class Moss:
             task_state, payload, force_fsync=event in self.DURABLE_TRACE_EVENTS
         )
         return payload
+
+    def note_replay_miss(self, record):
+        """回放未命中：stderr 告警一次 + trace 记一条 `replay_miss`。
+
+        为什么两处都要：stderr 是给正在盯着跑的人看的，trace 是给评测统计用的。
+        只留 stderr，CI 里没人看；只留 trace，开发期会一路跑到结论才发现不对。
+        """
+        fingerprint = str((record or {}).get("fingerprint", ""))[:12]
+        print(f"warning: replay miss for request {fingerprint}", file=sys.stderr)
+        task_state = getattr(self, "current_task_state", None)
+        if task_state is None:
+            return None
+        return self.emit_trace(task_state, trace_events.REPLAY_MISS, dict(record or {}))
 
     def record_memory_event(self, event, payload=None):
         task_state = getattr(self, "current_task_state", None)
@@ -1110,6 +1127,20 @@ class Moss:
             "compaction_mode": self.compaction_mode,
             "compactions": list(self.session.get("compactions", [])),
             "redacted_env": self.detected_secret_env_summary(),
+            # 回放跑出来的 run 必须能一眼看出来，否则它会被当成一次真实运行去下结论。
+            "replay": self.replay_summary(),
+        }
+
+    def replay_summary(self):
+        """这次运行是不是在回放磁带，以及偏离了多少步。非回放返回空 dict。"""
+        client = self.model_client
+        cassette = getattr(client, "cassette", None)
+        if cassette is None or not hasattr(client, "on_miss"):
+            return {}
+        return {
+            "cassette": str(getattr(cassette, "directory", "")),
+            "on_miss": str(getattr(client, "on_miss", "")),
+            "miss_count": len(getattr(client, "misses", []) or []),
         }
 
     def tool_example(self, name):

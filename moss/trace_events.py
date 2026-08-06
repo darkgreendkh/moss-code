@@ -55,6 +55,10 @@ CONTEXT_OVERFLOW = "context_overflow"
 CONTEXT_COMPACTED = "context_compacted"
 REQUEST_OFFLOADED = "request_offloaded"
 
+# 确定性录制回放（spec-09 §9.8）。磁带里没有这次请求——要么 prompt 改了，
+# 要么轨迹分叉了。无论哪种，"回放结果和真实运行一致"这个前提都已经不成立。
+REPLAY_MISS = "replay_miss"
+
 # 动作意图/回执（spec-07 §4.6）。两条成对出现：
 # 有 intent 无 receipt 的那一段，就是崩溃窗口里"不知道做没做"的动作。
 ACTION_INTENT = "action_intent"
@@ -95,6 +99,7 @@ __all__ = [
     "ACTION_INTENT",
     "ACTION_RECEIPT",
     "ACTION_RECONCILED",
+    "REPLAY_MISS",
     "ALL_EVENTS",
 ]
 

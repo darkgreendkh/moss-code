@@ -23,7 +23,9 @@ from .features.memory_records import SourceRef, make_record
 from .features.memory_store import MemoryStore, project_scope_key
 from . import injection as injectionlib
 from .otel import trace_to_otlp
+from .prompt_prefix import PROMPT_VERSION
 from .providers.clients import AnthropicCompatibleModelClient, OllamaModelClient, OpenAICompatibleModelClient
+from .providers.recording import ON_MISS_CHOICES, RecordingModelClient, ReplayModelClient
 from . import rewind as rewindlib
 from .run_index import referenced_run_ids
 from .run_store import RunStore
@@ -195,6 +197,35 @@ def _build_model_client(args):
         top_p=args.top_p,
         timeout=args.ollama_timeout,
     )
+
+
+def _wrap_cassette_client(model, args, workspace, secret_env_names):
+    """按 `--record` / `--replay` 把真实 client 包成录制或回放 client。
+
+    两个都不给时原样返回——录制回放是可选设施，不该在默认路径上多一层包装。
+    """
+    replay_dir = getattr(args, "replay", None)
+    record_dir = getattr(args, "record", None)
+    if replay_dir and record_dir:
+        raise ValueError("--record and --replay are mutually exclusive")
+    if replay_dir:
+        return ReplayModelClient(
+            replay_dir,
+            on_miss=getattr(args, "replay_on_miss", "fail"),
+            # passthrough 要有真后端可落；其余策略下它只是个身份信息来源。
+            inner=model,
+            root=workspace.repo_root,
+            miss_observer=None,
+        )
+    if record_dir:
+        return RecordingModelClient(
+            model,
+            record_dir,
+            root=workspace.repo_root,
+            secret_env_names=secret_env_names,
+            prompt_version=PROMPT_VERSION,
+        )
+    return model
 
 
 def _ctype_codeset():
@@ -434,7 +465,7 @@ def build_agent(args):
     load_project_env(workspace.repo_root)
     configured_secret_names = _configured_secret_names(args)
     store = SessionStore(workspace.repo_root + "/.moss/sessions")
-    model = _build_model_client(args)
+    model = _wrap_cassette_client(_build_model_client(args), args, workspace, configured_secret_names)
     session_id = args.resume
     if session_id == "latest":
         session_id = store.latest()
@@ -623,6 +654,25 @@ def build_arg_parser():
         choices=("off", "rule", "model"),
         default="rule",
         help="Distill procedural memory at run completion; model uses an aux summarizer when available.",
+    )
+    # 确定性录制回放。录一次真实轨迹，之后离线、零成本、逐字节可复现地重跑。
+    parser.add_argument(
+        "--record",
+        default=None,
+        metavar="DIR",
+        help="Record every model call into a cassette directory (redacted before it lands on disk).",
+    )
+    parser.add_argument(
+        "--replay",
+        default=None,
+        metavar="DIR",
+        help="Replay model calls from a cassette directory instead of calling the provider.",
+    )
+    parser.add_argument(
+        "--replay-on-miss",
+        choices=ON_MISS_CHOICES,
+        default="fail",
+        help="What to do when a replayed request is not on the cassette. fail is the CI default.",
     )
     parser.add_argument("--max-new-tokens", type=int, default=4096, help="Maximum model output tokens per step.")
     # 多维预算。默认全 None：不设就完全按老行为跑，只有 --max-steps 生效。
