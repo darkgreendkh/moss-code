@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from moss.evaluation.task_schema import lint_task_paths, validate_task
+from moss.evaluation.task_schema import lint_task_paths, split_holdout, validate_task
 
 
 def _valid_task():
@@ -39,6 +39,11 @@ def _valid_task():
         },
         "rubric": None,
         "status": "draft",
+        "negative_patches": [
+            {"name": "delete-key-assertion", "operator": "delete_assertion"},
+            {"name": "surface-text-only", "operator": "surface_text"},
+            {"name": "obvious-wrong", "operator": "obvious_wrong"},
+        ],
     }
 
 
@@ -58,6 +63,7 @@ def test_task_schema_accepts_complete_v2_task():
         (lambda task: task["verifier"].update(argv="python -m pytest"), "verifier.argv"),
         (lambda task: task["verifier"].update(cwd="../outside"), "verifier.cwd"),
         (lambda task: task.update(visible_tests=["../secret.py"]), "visible_tests"),
+        (lambda task: task.update(negative_patches=[]), "negative_patches"),
     ],
 )
 def test_task_schema_rejects_bad_tasks(mutate, message):
@@ -78,3 +84,17 @@ def test_lint_task_paths_reports_each_bad_file(tmp_path):
 
     assert len(errors) == 1
     assert str(bad) in errors[0]
+
+
+def test_holdout_split_is_deterministic_and_keeps_single_test_tasks_explicit():
+    first = split_holdout(["tests/a.py", "tests/b.py", "tests/c.py"], seed=17)
+    second = split_holdout(["tests/a.py", "tests/b.py", "tests/c.py"], seed=17)
+
+    assert first == second
+    assert sorted([*first[0], *first[1]]) == ["tests/a.py", "tests/b.py", "tests/c.py"]
+    assert first[1]
+    assert split_holdout(["tests/only.py"], seed=17) == (
+        ["tests/only.py"],
+        [],
+        "no_holdout",
+    )

@@ -12,8 +12,26 @@
   },
   "difficulty": "multi_file",
   "eval_level": "L2",
-  "hidden_tests": [],
+  "hidden_tests": [
+    "tests/test_atomic_io.py"
+  ],
+  "holdout_seed": 3011170716,
+  "holdout_status": "held_out",
   "human_time_bucket": "minutes",
+  "negative_patches": [
+    {
+      "name": "delete-key-assertion",
+      "operator": "delete_assertion"
+    },
+    {
+      "name": "surface-text-only",
+      "operator": "surface_text"
+    },
+    {
+      "name": "obvious-wrong",
+      "operator": "obvious_wrong"
+    }
+  ],
   "prompt": "perf(runs): trace 序号与哈希链 O(1)",
   "provenance": {
     "contamination_status": "private",
@@ -33,7 +51,6 @@
       "-m",
       "pytest",
       "-q",
-      "tests/test_atomic_io.py",
       "tests/test_trace_sequence.py"
     ],
     "clean_env": true,
@@ -42,7 +59,6 @@
     "timeout_s": 120.0
   },
   "visible_tests": [
-    "tests/test_atomic_io.py",
     "tests/test_trace_sequence.py"
   ],
   "workspace": {

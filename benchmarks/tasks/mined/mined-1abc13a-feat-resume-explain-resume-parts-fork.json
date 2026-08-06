@@ -13,7 +13,23 @@
   "difficulty": "multi_file",
   "eval_level": "L2",
   "hidden_tests": [],
+  "holdout_seed": 448533420,
+  "holdout_status": "no_holdout",
   "human_time_bucket": "minutes",
+  "negative_patches": [
+    {
+      "name": "delete-key-assertion",
+      "operator": "delete_assertion"
+    },
+    {
+      "name": "surface-text-only",
+      "operator": "surface_text"
+    },
+    {
+      "name": "obvious-wrong",
+      "operator": "obvious_wrong"
+    }
+  ],
   "prompt": "feat(resume): --explain / --resume-parts / --fork",
   "provenance": {
     "contamination_status": "private",

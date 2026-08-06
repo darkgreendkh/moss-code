@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path, PurePosixPath
+import random
 
 from ..tools import legal_tool_names
 from .verifier import ExecutableSpec
@@ -27,6 +28,7 @@ REQUIRED_KEYS = {
 SUITES = {"contract-smoke", "coding-mined", "memory", "context", "recovery", "adversarial"}
 DIFFICULTIES = {"single_file", "multi_file", "needs_iteration"}
 HUMAN_TIME_BUCKETS = {"minutes", "hours"}
+NEGATIVE_PATCH_OPERATORS = {"delete_assertion", "surface_text", "obvious_wrong"}
 
 
 def _safe_path(value, field):
@@ -41,6 +43,18 @@ def _path_list(value, field, *, allow_empty=False):
     if not isinstance(value, list) or (not value and not allow_empty):
         raise ValueError(f"{field} must be a {'possibly empty ' if allow_empty else 'non-empty '}list")
     return [_safe_path(item, field) for item in value]
+
+
+def split_holdout(test_paths, *, seed):
+    paths = sorted(dict.fromkeys(str(path) for path in test_paths))
+    if len(paths) < 2:
+        return paths, [], "no_holdout"
+    shuffled = list(paths)
+    random.Random(int(seed)).shuffle(shuffled)
+    hidden_count = max(1, len(shuffled) // 2)
+    hidden = sorted(shuffled[:hidden_count])
+    visible = sorted(shuffled[hidden_count:])
+    return visible, hidden, "held_out"
 
 
 def validate_task(value):
@@ -111,6 +125,13 @@ def validate_task(value):
         raise ValueError("provenance.mined_from_commit is required")
     if task.get("status", "draft") not in {"draft", "active", "quarantine"}:
         raise ValueError("status must be draft, active, or quarantine")
+    if task["suite"] == "coding-mined":
+        patches = task.get("negative_patches")
+        if not isinstance(patches, list) or len(patches) != 3:
+            raise ValueError("negative_patches must contain exactly three mutations")
+        operators = {str(patch.get("operator", "")) for patch in patches if isinstance(patch, dict)}
+        if operators != NEGATIVE_PATCH_OPERATORS:
+            raise ValueError("negative_patches must cover delete_assertion, surface_text, and obvious_wrong")
     task.setdefault("status", "draft")
     return task
 

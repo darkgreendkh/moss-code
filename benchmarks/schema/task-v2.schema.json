@@ -18,7 +18,10 @@
     "difficulty",
     "human_time_bucket",
     "provenance",
-    "rubric"
+    "rubric",
+    "holdout_seed",
+    "holdout_status",
+    "negative_patches"
   ],
   "properties": {
     "schema_version": {"const": 2},
@@ -77,6 +80,21 @@
       }
     },
     "rubric": {"type": ["object", "array", "null"]},
+    "holdout_seed": {"type": "integer"},
+    "holdout_status": {"enum": ["held_out", "no_holdout"]},
+    "negative_patches": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["name", "operator"],
+        "properties": {
+          "name": {"type": "string"},
+          "operator": {"enum": ["delete_assertion", "surface_text", "obvious_wrong"]}
+        }
+      }
+    },
     "status": {"enum": ["draft", "active", "quarantine"]}
   }
 }

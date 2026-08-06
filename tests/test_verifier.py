@@ -131,3 +131,23 @@ def test_verifier_uses_clean_environment_and_cannot_mutate_agent_workspace(tmp_p
     assert result.passed is True
     assert not (agent / "verify-only.txt").exists()
     assert os.environ["MOSS_EVAL_SECRET"] == "must-not-leak"
+
+
+def test_visible_pass_hidden_fail_is_overfit_and_both_suites_are_isolated(tmp_path):
+    fixture, agent = _workspace_pair(tmp_path)
+    (fixture / "tests" / "visible.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    (fixture / "tests" / "hidden.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
+    shutil.copy2(fixture / "tests" / "visible.py", agent / "tests" / "visible.py")
+    shutil.copy2(fixture / "tests" / "hidden.py", agent / "tests" / "hidden.py")
+    task = _task(
+        [sys.executable, "tests/visible.py"],
+        visible_tests=["tests/visible.py"],
+        hidden_tests=["tests/hidden.py"],
+    )
+
+    result = run_verification(task, agent, fixture)
+
+    assert [run.name for run in result.runs] == ["visible", "hidden"]
+    assert [run.returncode for run in result.runs] == [0, 1]
+    assert "overfit_to_visible" in result.labels
+    assert result.passed is False

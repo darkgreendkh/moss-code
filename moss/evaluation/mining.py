@@ -11,7 +11,7 @@ import tarfile
 import tempfile
 
 from ..clock import now
-from .task_schema import validate_task
+from .task_schema import split_holdout, validate_task
 
 
 SOURCE_SUFFIXES = {".py", ".js", ".ts", ".tsx", ".go", ".rs", ".java", ".kt"}
@@ -162,6 +162,8 @@ def mine_tasks(repo_root, *, since=None, limit=50, diagnostics=None, progress=No
             continue
 
         message = _git(repo_root, "show", "-s", "--format=%s", commit)
+        holdout_seed = int(commit[:8], 16)
+        visible_tests, hidden_tests, holdout_status = split_holdout(tests, seed=holdout_seed)
         task = {
             "schema_version": 2,
             "task_id": f"mined-{commit[:7]}-{_slug(message)}",
@@ -175,10 +177,12 @@ def mine_tasks(repo_root, *, since=None, limit=50, diagnostics=None, progress=No
                 "overlay_paths": tests,
                 "archive_sha256": "sha256:" + hashlib.sha256(parent_archive).hexdigest(),
             },
-            "visible_tests": tests,
-            "hidden_tests": [],
+            "visible_tests": visible_tests,
+            "hidden_tests": hidden_tests,
+            "holdout_seed": holdout_seed,
+            "holdout_status": holdout_status,
             "verifier": {
-                "argv": ["python", "-m", "pytest", "-q", *tests],
+                "argv": ["python", "-m", "pytest", "-q", *visible_tests],
                 "cwd": ".",
                 "clean_env": True,
                 "timeout_s": 120,
@@ -196,6 +200,11 @@ def mine_tasks(repo_root, *, since=None, limit=50, diagnostics=None, progress=No
             },
             "rubric": None,
             "status": "draft",
+            "negative_patches": [
+                {"name": "delete-key-assertion", "operator": "delete_assertion"},
+                {"name": "surface-text-only", "operator": "surface_text"},
+                {"name": "obvious-wrong", "operator": "obvious_wrong"},
+            ],
         }
         tasks.append(validate_task(task))
     return tasks

@@ -45,6 +45,8 @@ def test_mine_tasks_validates_parent_fail_commit_pass_and_preserves_caller(tmp_p
     assert task["prompt"] == "fix add arithmetic"
     assert task["workspace"]["overlay_paths"] == ["tests/test_calc.py"]
     assert task["workspace"]["archive_sha256"].startswith("sha256:")
+    assert task["holdout_status"] == "no_holdout"
+    assert len(task["negative_patches"]) == 3
     assert task["provenance"]["mined_from_commit"] == _git(repo, "rev-parse", "HEAD")
     assert Path.cwd() == caller
     assert marker.read_text(encoding="utf-8") == "do not touch\n"
