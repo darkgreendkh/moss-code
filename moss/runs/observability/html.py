@@ -20,7 +20,7 @@ from __future__ import annotations
 import html
 import json
 
-from . import trace_events
+from . import events as trace_events
 
 BANNER = (
     "This page contains redacted tool output from a local run. "

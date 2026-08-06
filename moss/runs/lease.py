@@ -20,7 +20,7 @@ import socket
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .clock import now
+from ..clock import now
 
 # 心跳超时。90s 是这么来的：主循环每步刷新一次，而单步里最慢的是模型调用
 # （默认超时 300s）——所以工具/模型执行期间由独立心跳线程续租，主循环的步间隔
@@ -193,7 +193,7 @@ class RunLease:
         return True, TAKEOVER_INTERRUPTED
 
     def _write(self, run_id, payload):
-        from .atomic_io import write_json_atomic
+        from ..atomic_io import write_json_atomic
 
         path = self.path(run_id)
         path.parent.mkdir(parents=True, exist_ok=True)

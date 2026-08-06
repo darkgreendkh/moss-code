@@ -1,10 +1,10 @@
 import pytest
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.features.memory import LayeredMemory
-from moss.features.memory_records import SourceRef, make_record
-from moss.features.memory_store import MemoryStore, project_scope_key
-from moss.trace_events import MEMORY_POISONING_BLOCKED
+from moss.memory.service import LayeredMemory
+from moss.memory.records import SourceRef, make_record
+from moss.memory.store import MemoryStore, project_scope_key
+from moss.runs.observability.events import MEMORY_POISONING_BLOCKED
 
 
 def test_durable_write_rejects_injection_secret_noise_and_duplicate(tmp_path):

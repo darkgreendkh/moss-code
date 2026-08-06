@@ -9,7 +9,7 @@ import os
 import stat
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss import trace_events
+from moss.runs.observability import events as trace_events
 from moss.hooks import HOOK_POINTS, HookOutcome, find_hook, run_hook
 
 

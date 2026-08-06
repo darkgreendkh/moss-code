@@ -1,5 +1,5 @@
-from moss.features.memory import LayeredMemory
-from moss.features.memory_store import MemoryStore
+from moss.memory.service import LayeredMemory
+from moss.memory.store import MemoryStore
 
 
 def _write_legacy_memory(root):

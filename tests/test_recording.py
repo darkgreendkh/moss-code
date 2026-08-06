@@ -8,7 +8,7 @@
 import pytest
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss import trace_events
+from moss.runs.observability import events as trace_events
 from moss.model_request import Block, Message, ModelRequest
 from moss.providers.recording import (
     Cassette,

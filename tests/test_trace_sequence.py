@@ -7,7 +7,7 @@
 import json
 import time
 
-from moss.run_store import TRACE_CHAIN_GENESIS, RunStore, event_digest
+from moss.runs.store import TRACE_CHAIN_GENESIS, RunStore, event_digest
 from moss.task_state import TaskState
 
 

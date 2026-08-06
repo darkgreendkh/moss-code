@@ -3,8 +3,8 @@
 import json
 
 from moss.cli import main
-from moss.otel import trace_to_otlp
-from moss.run_store import RunStore
+from moss.runs.observability.otel import trace_to_otlp
+from moss.runs.store import RunStore
 from moss.task_state import TaskState
 
 

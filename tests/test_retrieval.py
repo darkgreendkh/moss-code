@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from moss.features.memory import _tokenize
+from moss.memory.service import _tokenize
 from moss.retrieval import BM25Index
 
 

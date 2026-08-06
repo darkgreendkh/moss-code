@@ -196,19 +196,19 @@ git commit -m "test(architecture): lock capability package boundaries"
 - Produces: `moss.memory.{service,records,store}` and `moss.runs.*`; `moss.memory.__init__` exports `MemoryStore`, `MemoryRecord`, `SourceRef`, `project_scope_key`.
 - Preserves: JSONL schemas, run directory paths, trace event string values, `SessionStore` public re-export from `moss`.
 
-- [ ] **Step 1: Move memory modules without editing behavior**
-- [ ] **Step 2: Update relative imports inside memory and all consumers**
-- [ ] **Step 3: Run memory-focused tests**
+- [x] **Step 1: Move memory modules without editing behavior**
+- [x] **Step 2: Update relative imports inside memory and all consumers**
+- [x] **Step 3: Run memory-focused tests**
 
 Run: `uv run --with pytest python -m pytest tests/ -q -k "memory or retrieval or checkpoint or rewind"`
 
-- [ ] **Step 4: Move run, session, checkpoint, ledger, rewind and observability modules**
-- [ ] **Step 5: Update all consumers and trace-event AST checks to the new paths**
-- [ ] **Step 6: Run persistence and artifact tests**
+- [x] **Step 4: Move run, session, checkpoint, ledger, rewind and observability modules**
+- [x] **Step 5: Update all consumers and trace-event AST checks to the new paths**
+- [x] **Step 6: Run persistence and artifact tests**
 
-Run: `uv run --with pytest python -m pytest tests/test_run_store.py tests/test_run_index.py tests/test_session_store_v2.py tests/test_checkpoint_resume.py tests/test_action_ledger.py tests/test_rewind.py tests/test_artifact_offload.py tests/test_trace_events.py -q`
+Run: `uv run --with pytest python -m pytest tests/test_run_store.py tests/test_run_index.py tests/test_session_store_v2.py tests/test_checkpoint.py tests/test_action_receipt.py tests/test_rewind.py tests/test_artifact_offload.py tests/test_trace_events.py -q`
 
-- [ ] **Step 7: Run full tests and lint, then commit**
+- [x] **Step 7: Run full tests and lint, then commit**
 
 ```bash
 uv run --with pytest python -m pytest tests/ -q

@@ -6,9 +6,9 @@
 import re
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss import trace_events
+from moss.runs.observability import events as trace_events
 from moss.cli import run_runs_command
-from moss.trace_html import BANNER, render_run_html
+from moss.runs.observability.html import BANNER, render_run_html
 
 # 任何会让浏览器去连网的东西。这份页面是排查材料，打开它不该泄露 run_id，
 # 也不该在离线时半残。

@@ -7,9 +7,9 @@
 import json
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss import action_ledger
-from moss import trace_events
-from moss.run_store import RunStore
+from moss.runs import ledger as action_ledger
+from moss.runs.observability import events as trace_events
+from moss.runs.store import RunStore
 from moss.task_state import TaskState
 
 

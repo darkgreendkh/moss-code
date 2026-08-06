@@ -1,6 +1,6 @@
 import math
 
-from moss.features.memory import LayeredMemory, _tokenize
+from moss.memory.service import LayeredMemory, _tokenize
 from moss.retrieval import BM25Index
 
 

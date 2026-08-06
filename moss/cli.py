@@ -16,14 +16,14 @@ import sys
 import textwrap
 import uuid
 
-from . import checkpoint as checkpointlib
+from .runs import checkpoint as checkpointlib
 from .config import load_project_env, provider_env
-from .features.memory import reject_memory_reason
-from .features.memory_records import SourceRef, make_record
-from .features.memory_store import MemoryStore, project_scope_key
+from .memory.service import reject_memory_reason
+from .memory.records import SourceRef, make_record
+from .memory.store import MemoryStore, project_scope_key
 from . import injection as injectionlib
 from .mcp.server import DEFAULT_EXPORTED_TOOLS, MossMcpServer
-from .otel import trace_to_otlp
+from .runs.observability.otel import trace_to_otlp
 from .prompt_prefix import PROMPT_VERSION
 from .providers.clients import (
     AnthropicCompatibleModelClient,
@@ -32,12 +32,12 @@ from .providers.clients import (
     OpenAICompatibleModelClient,
 )
 from .providers.recording import ON_MISS_CHOICES, RecordingModelClient, ReplayModelClient
-from . import rewind as rewindlib
-from .run_index import referenced_run_ids
-from .run_store import RunStore
+from .runs import rewind as rewindlib
+from .runs.index import referenced_run_ids
+from .runs.store import RunStore
 from .runtime import Moss, SessionStore
 from .token_budget import middle
-from .trace_html import render_run_html
+from .runs.observability.html import render_run_html
 from . import policy as policylib
 from . import sandbox as sandboxlib
 from .workspace import WorkspaceContext

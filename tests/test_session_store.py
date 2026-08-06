@@ -1,6 +1,6 @@
 import json
 
-from moss.session_store import SessionStore
+from moss.runs.session import SessionStore
 
 
 def test_session_store_saves_loads_and_finds_latest_session(tmp_path):

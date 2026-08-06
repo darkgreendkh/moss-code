@@ -8,7 +8,7 @@ import json
 import pytest
 
 from moss import atomic_io
-from moss.session_store import (
+from moss.runs.session import (
     CHECKPOINT_FILE_LIMIT,
     LEGACY_BACKUP_SUFFIX,
     SESSION_SCHEMA_VERSION,
@@ -125,7 +125,7 @@ def test_write_volume_drops_by_at_least_95_percent_over_500_turns(tmp_path):
         written.append(len(str(line)))
         return real_append_line(path, line, **kwargs)
 
-    import moss.session_store as module
+    import moss.runs.session as module
 
     module.write_atomic = counting_write
     module.append_line = counting_append

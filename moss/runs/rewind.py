@@ -19,9 +19,9 @@ after_sha 和当前文件比一比，对不上就说明这个文件在 agent 改
 
 import copy
 
-from . import action_ledger
-from .features import memory as memorylib
-from .tools import write_text_atomic
+from . import ledger as action_ledger
+from ..memory import service as memorylib
+from ..tools import write_text_atomic
 
 STATUS_OK = "ok"
 STATUS_NOTHING_TO_DO = "nothing_to_do"

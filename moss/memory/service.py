@@ -18,10 +18,10 @@ from .. import injection as injectionlib
 from ..security import REDACTED_VALUE
 from ..token_budget import clip, estimate_tokens
 # 直接导常量而不是导模块：本文件里有同名的 trace_events 形参。
-from ..trace_events import MEMORY_POISONING_BLOCKED, TOOL_EXECUTED
+from ..runs.observability.events import MEMORY_POISONING_BLOCKED, TOOL_EXECUTED
 from ..retrieval import BM25Index
-from .memory_store import MemoryStore, project_scope_key
-from .memory_records import SourceRef, make_record
+from .store import MemoryStore, project_scope_key
+from .records import SourceRef, make_record
 
 WORKING_FILE_LIMIT = 8
 DEFAULT_EPISODIC_TOKEN_BUDGET = 1000

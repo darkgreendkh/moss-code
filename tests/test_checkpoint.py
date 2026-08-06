@@ -1,5 +1,5 @@
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.checkpoint import (
+from moss.runs.checkpoint import (
     CHECKPOINT_FULL_VALID_STATUS,
     CHECKPOINT_HISTORY_LIMIT,
     CHECKPOINT_NONE_STATUS,
@@ -10,7 +10,7 @@ from moss.checkpoint import (
     current_runtime_identity,
     evaluate_resume_state,
 )
-from moss.run_store import RunStore
+from moss.runs.store import RunStore
 from moss.task_state import TaskState
 
 

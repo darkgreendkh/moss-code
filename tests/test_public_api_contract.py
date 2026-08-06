@@ -28,7 +28,7 @@ def test_build_agent_returns_moss(tmp_path):
 def test_lightweight_package_split_uses_package_paths_without_legacy_shims():
     from moss.evaluation.evaluator import BenchmarkEvaluator
     from moss.evaluation.metrics import run_context_ablation_v2
-    from moss.features.memory import LayeredMemory
+    from moss.memory.service import LayeredMemory
     from moss.providers.clients import FakeModelClient as ProviderFakeModelClient
 
     assert BenchmarkEvaluator is not None

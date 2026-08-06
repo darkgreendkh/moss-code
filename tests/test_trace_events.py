@@ -7,8 +7,8 @@
 import ast
 import pathlib
 
-from moss import trace_events
-from moss.run_store import RunStore
+from moss.runs.observability import events as trace_events
+from moss.runs.store import RunStore
 from moss.task_state import TaskState
 
 EVALUATION_DIR = pathlib.Path(trace_events.__file__).parent / "evaluation"
@@ -29,7 +29,7 @@ def test_evaluation_never_hardcodes_a_known_event_name():
                 offenders.append(f"{path.name}:{lineno}: {value!r}")
 
     assert not offenders, (
-        "评测侧必须 from moss.trace_events import ...，不许写字面量：\n"
+        "评测侧必须 from moss.runs.observability.events import ...，不许写字面量：\n"
         + "\n".join(offenders)
     )
 

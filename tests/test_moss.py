@@ -2075,7 +2075,7 @@ def test_explicit_memory_promotion_rejects_secret_shaped_and_transient_lines(tmp
     ]
     assert "Use constrained tools instead of guessing." in conventions_path.read_text(encoding="utf-8")
     assert not dependency_path.exists()
-    from moss.features.memory_store import MemoryStore
+    from moss.memory.store import MemoryStore
 
     records = MemoryStore(tmp_path / ".moss" / "memory", workspace_root=tmp_path).active_records()
     assert records and all(record.source_refs for record in records)
@@ -2101,7 +2101,7 @@ def test_explicit_memory_promotion_flags_close_contradiction_for_review(tmp_path
     assert "Python runtime is 3.12." in text
     assert "Python runtime is 3.11." in text
     assert report["durable_superseded"] == []
-    from moss.features.memory_store import MemoryStore
+    from moss.memory.store import MemoryStore
 
     records = MemoryStore(tmp_path / ".moss" / "memory", workspace_root=tmp_path).recallable_records()
     assert {record.status for record in records} == {"needs_review"}

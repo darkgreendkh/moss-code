@@ -8,7 +8,7 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 
-from moss.run_index import (
+from moss.runs.index import (
     ARCHIVE_SUFFIX,
     DEFAULT_RETENTION_COUNT,
     DEFAULT_RETENTION_DAYS,
@@ -19,7 +19,7 @@ from moss.run_index import (
     referenced_run_ids,
     retention_limits,
 )
-from moss.run_store import RunStore
+from moss.runs.store import RunStore
 from moss.task_state import STATUS_RUNNING, TaskState
 
 

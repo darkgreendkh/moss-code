@@ -1,6 +1,6 @@
 import json
 
-from moss.features.memory import LayeredMemory, episodic_note_tokens
+from moss.memory.service import LayeredMemory, episodic_note_tokens
 
 
 def test_value_eviction_keeps_used_early_note_and_respects_token_budget(tmp_path):

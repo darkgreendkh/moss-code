@@ -20,7 +20,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .atomic_io import append_line, write_atomic
+from ..atomic_io import append_line, write_atomic
 
 INDEX_FILENAME = "index.jsonl"
 ARCHIVE_SUFFIX = ".jsonl.gz"
@@ -98,7 +98,7 @@ class RunIndex:
         return None
 
     def running_run_ids(self):
-        from .task_state import STATUS_RUNNING
+        from ..task_state import STATUS_RUNNING
 
         return [entry["run_id"] for entry in self.entries() if entry.get("status") == STATUS_RUNNING]
 

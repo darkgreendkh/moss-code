@@ -3,9 +3,9 @@ from dataclasses import replace
 
 import pytest
 
-from moss.features import memory_store as memory_store_module
-from moss.features.memory_records import MemoryRecord, SourceRef, make_record
-from moss.features.memory_store import MemoryStore
+from moss.memory import store as memory_store_module
+from moss.memory.records import MemoryRecord, SourceRef, make_record
+from moss.memory.store import MemoryStore
 
 
 def _record(text="Use pytest", **overrides):

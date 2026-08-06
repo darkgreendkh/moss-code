@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import time
 
-from .. import trace_events as runtime_trace_events
+from ..runs.observability import events as runtime_trace_events
 from ..runtime import DEFAULT_SHELL_ENV_ALLOWLIST
 from ..security import shell_env
 

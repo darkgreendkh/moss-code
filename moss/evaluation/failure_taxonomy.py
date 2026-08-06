@@ -2,7 +2,7 @@
 
 import json
 
-from ..trace_events import CONTEXT_OVERFLOW
+from ..runs.observability.events import CONTEXT_OVERFLOW
 
 
 LABELS = (

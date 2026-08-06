@@ -8,7 +8,7 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 
-from moss.lease import (
+from moss.runs.lease import (
     DEFAULT_TTL_S,
     TAKEOVER_INTERRUPTED,
     TAKEOVER_STALE,
@@ -16,7 +16,7 @@ from moss.lease import (
     RunLease,
     age_seconds,
 )
-from moss.run_store import RunStore
+from moss.runs.store import RunStore
 from moss.task_state import STATUS_FAILED, STATUS_RUNNING, TaskState
 
 

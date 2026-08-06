@@ -5,7 +5,7 @@
 """
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.rewind import (
+from moss.runs.rewind import (
     STATUS_NEEDS_CONFIRMATION,
     STATUS_NOTHING_TO_DO,
     STATUS_OK,

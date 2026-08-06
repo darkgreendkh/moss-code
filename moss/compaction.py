@@ -27,7 +27,7 @@ from dataclasses import dataclass, field, replace
 from .clock import now
 from .token_budget import clip, clip_to_budget, estimate_tokens
 # 直接导常量而不是导模块：本文件里有同名的 trace_events 形参（一段 trace 事件列表）。
-from .trace_events import STALL_DETECTED, TOOL_EXECUTED
+from .runs.observability.events import STALL_DETECTED, TOOL_EXECUTED
 
 COMPACTION_SCHEMA_VERSION = 1
 # 最近这么多个执行步骤原样保留：刚发生的错误如果被摘要掉，
@@ -291,7 +291,7 @@ def extract_rule(covered_entries, covered_events):
 
 def summarize_read(result, limit=160):
     """复用 spec-05 的读文件摘要口径，避免出现第二套"读到了什么"的说法。"""
-    from .features.memory import summarize_read_result
+    from .memory.service import summarize_read_result
 
     return summarize_read_result(result, limit=limit)
 

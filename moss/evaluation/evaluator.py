@@ -9,11 +9,11 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from ..features import memory as memorylib
+from ..memory import service as memorylib
 from ..task_state import STOP_REASON_BUDGET_EXCEEDED
 from ..providers.clients import FakeModelClient
 from ..runtime import Moss, SessionStore
-from ..run_store import RunStore
+from ..runs.store import RunStore
 from ..task_state import STOP_REASON_FINAL_ANSWER_RETURNED
 from ..tools import legal_tool_names
 from ..workspace import WORKSPACE_FINGERPRINT_VERSION, WorkspaceContext

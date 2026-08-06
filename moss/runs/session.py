@@ -22,7 +22,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .atomic_io import append_line, write_atomic
+from ..atomic_io import append_line, write_atomic
 
 SESSION_SCHEMA_VERSION = 2
 

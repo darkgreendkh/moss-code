@@ -1,4 +1,4 @@
-from moss.features.memory import (
+from moss.memory.service import (
     LayeredMemory,
     extract_durable_promotions,
     reject_durable_reason,

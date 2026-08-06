@@ -3,8 +3,9 @@
 import pytest
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss import action_ledger, trace_events
-from moss.checkpoint import (
+from moss.runs import ledger as action_ledger
+from moss.runs.observability import events as trace_events
+from moss.runs.checkpoint import (
     RESUME_PART_NAMES,
     apply_resume_parts,
     checkpoint_tree,
@@ -14,7 +15,7 @@ from moss.checkpoint import (
     render_explain,
 )
 from moss.cli import build_agent, build_arg_parser, main
-from moss.run_store import RunStore
+from moss.runs.store import RunStore
 from moss.task_state import TaskState
 
 

@@ -26,7 +26,7 @@ import hashlib
 import json
 import uuid
 
-from . import trace_events
+from .observability import events as trace_events
 
 # 这些工具的副作用完全由参数决定：同样的参数重放两次，结果和一次一样。
 # 所以崩溃窗口里可以靠"当前文件是什么样"反推它到底生效了没有。

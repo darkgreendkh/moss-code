@@ -12,7 +12,7 @@ import re
 import tempfile
 
 from ..clock import now
-from .memory_records import MemoryRecord, make_record
+from .records import MemoryRecord, make_record
 
 
 DEFAULT_COMPACT_THRESHOLD = 2000

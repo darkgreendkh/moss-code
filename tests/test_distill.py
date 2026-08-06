@@ -1,5 +1,5 @@
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext, build_arg_parser
-from moss.features.memory import distill_run
+from moss.memory.service import distill_run
 
 
 def _tool_event(sequence, *, name="run_shell", args=None, status="ok", exit_code=0, result=""):

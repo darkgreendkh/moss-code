@@ -1,7 +1,7 @@
 import hashlib
 
-from moss.features.memory import LayeredMemory
-from moss.features.memory_records import SourceRef
+from moss.memory.service import LayeredMemory
+from moss.memory.records import SourceRef
 
 
 def _write(memory, text, *, trust="model", observed_at="2026-08-05T10:00:00+00:00", path=None, sha=None):
