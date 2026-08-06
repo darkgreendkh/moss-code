@@ -160,14 +160,14 @@ def test_run_shell_uses_allowlisted_environment_only(tmp_path):
 def test_private_tool_methods_delegate_into_tools_module(tmp_path):
     agent = build_agent(tmp_path, [], approval_policy="auto")
 
-    with patch("moss.tools.run_shell_command", return_value=(0, "toolkit-shell\n", "")) as fake_run:
+    with patch("moss.execution.registry.run_shell_command", return_value=(0, "toolkit-shell\n", "")) as fake_run:
         shell_result = agent._tool_run_shell({"command": "echo bypass", "timeout": 20})
 
     assert "toolkit-shell" in shell_result
     fake_run.assert_called_once()
     assert agent._tool_run_shell.__func__.__module__ == "moss.runtime"
 
-    with patch("moss.tools.tool_delegate", return_value="toolkit-delegate") as fake_delegate:
+    with patch("moss.execution.registry.tool_delegate", return_value="toolkit-delegate") as fake_delegate:
         delegate_result = agent._tool_delegate({"task": "inspect README.md", "max_steps": 2})
 
     assert delegate_result == "toolkit-delegate"
@@ -322,7 +322,7 @@ def test_same_size_rewrite_is_caught_by_the_git_changed_set(tmp_path):
 
 def test_execute_is_a_guarded_structured_entry_point(tmp_path):
     """收口之后外部集成必须有受护栏的入口，否则大家会退回去直连 toolkit。"""
-    from moss.tool_context import ActionRequest
+    from moss.execution.protocol import ActionRequest
 
     agent = build_agent(tmp_path, [], approval_policy="never")
 
@@ -334,7 +334,7 @@ def test_execute_is_a_guarded_structured_entry_point(tmp_path):
 
 
 def test_execute_respects_the_allowed_tools_list(tmp_path):
-    from moss.tool_context import ActionRequest
+    from moss.execution.protocol import ActionRequest
 
     agent = build_agent(tmp_path, [], allowed_tools=["read_file"])
 

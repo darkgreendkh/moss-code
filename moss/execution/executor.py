@@ -8,15 +8,15 @@ import subprocess
 import time
 from dataclasses import dataclass
 
-from .runs import ledger as action_ledger
-from . import hooks as hookslib
-from .context import compressors as output_compressors
-from .clock import now
-from .injection import scan as scan_for_injection
-from .context.token_budget import MAX_TOOL_OUTPUT, clip
-from .tools import ToolRunOutput, classify_shell_command
-from .runs.observability import events as trace_events
-from .context.repository.workspace import invalidate_git_facts_cache
+from ..extensions import hooks as hookslib
+from ..clock import now
+from ..context import compressors as output_compressors
+from ..context.repository.workspace import invalidate_git_facts_cache
+from ..context.token_budget import MAX_TOOL_OUTPUT, clip
+from ..runs import ledger as action_ledger
+from ..runs.observability import events as trace_events
+from .registry import ToolRunOutput, classify_shell_command
+from .safety.injection import scan as scan_for_injection
 
 
 # 超过这个字符数的工具输出就落盘，prompt 里只放摘要 + 指针。

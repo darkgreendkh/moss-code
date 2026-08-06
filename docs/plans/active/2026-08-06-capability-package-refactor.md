@@ -263,18 +263,18 @@ git commit -m "refactor(packages): group prompt and repository context"
 - Produces: `moss.execution.executor.ToolExecutor`, `moss.execution.registry.ToolSpec`, `moss.execution.protocol.ActionRequest`, `moss.extensions.mcp.*`.
 - Preserves: ToolExecutor guard order, approval behavior, shell risk levels, sandbox degradation reporting, capability fail-closed policy and MCP JSON-RPC behavior.
 
-- [ ] **Step 1: Move safety leaf modules and update consumers**
-- [ ] **Step 2: Run safety and policy tests**
+- [x] **Step 1: Move safety leaf modules and update consumers**
+- [x] **Step 2: Run safety and policy tests**
 
 Run: `uv run --with pytest python -m pytest tests/ -q -k "policy or shell or sandbox or injection or security or approval"`
 
-- [ ] **Step 3: Move tool protocol, registry and executor modules**
-- [ ] **Step 4: Move extensions and MCP modules**
-- [ ] **Step 5: Run tool, skill, hook, delegate, code-mode and MCP tests**
+- [x] **Step 3: Move tool protocol, registry and executor modules**
+- [x] **Step 4: Move extensions and MCP modules**
+- [x] **Step 5: Run tool, skill, hook, delegate, code-mode and MCP tests**
 
 Run: `uv run --with pytest python -m pytest tests/ -q -k "tool or skill or hook or delegate or code_mode or mcp"`
 
-- [ ] **Step 6: Run full tests and lint, then commit**
+- [x] **Step 6: Run full tests and lint, then commit**
 
 ```bash
 uv run --with pytest python -m pytest tests/ -q

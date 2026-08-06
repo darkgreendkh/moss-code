@@ -9,7 +9,7 @@
 
 import pytest
 
-from moss.shell_policy import (
+from moss.execution.safety.shell import (
     RISK_ORDER,
     classify_shell_command,
     classify_shell_command_level,

@@ -3,8 +3,8 @@
 import pytest
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.policy import CAPABILITIES, Policy, parse_capability_rules
-from moss.tools import BASE_TOOL_SPECS, DELEGATE_TOOL_SPEC, USE_SKILL_TOOL_SPEC, ToolSpec
+from moss.execution.safety.policy import CAPABILITIES, Policy, parse_capability_rules
+from moss.execution.registry import BASE_TOOL_SPECS, DELEGATE_TOOL_SPEC, USE_SKILL_TOOL_SPEC, ToolSpec
 
 
 def _spec(**overrides):

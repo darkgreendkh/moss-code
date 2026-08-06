@@ -15,9 +15,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..config import project_config_section
-from ..policy import CAPABILITIES
-from ..tools import ToolField, ToolSpec
+from ...config import project_config_section
+from ...execution.registry import ToolField, ToolSpec
+from ...execution.safety.policy import CAPABILITIES
 from .client import McpClient, McpError, StdioTransport
 
 # 工具名前缀。加前缀是为了让 MCP 工具在 trace / 审批摘要 / 报错里一眼可辨，

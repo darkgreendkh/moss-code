@@ -12,7 +12,7 @@ import pytest
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
 from moss.task_state import STATUS_FAILED, STOP_REASON_INTERRUPTED
-from moss.tools import run_shell_command
+from moss.execution.registry import run_shell_command
 
 
 class _ExplodingModelClient(FakeModelClient):

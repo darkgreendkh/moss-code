@@ -10,7 +10,7 @@ import time
 
 from ..runs.observability import events as runtime_trace_events
 from ..runtime import DEFAULT_SHELL_ENV_ALLOWLIST
-from ..security import shell_env
+from ..execution.safety.secrets import shell_env
 
 
 @dataclass(frozen=True)

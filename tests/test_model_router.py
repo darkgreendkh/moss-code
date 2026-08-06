@@ -6,7 +6,7 @@ aux 失败自动回落主模型并且这件事在 report 里看得见。
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
 from moss.runs.observability import events as trace_events
-from moss.model_router import AUX_TASKS, ModelRouter
+from moss.extensions.router import AUX_TASKS, ModelRouter
 
 
 class _Client(FakeModelClient):

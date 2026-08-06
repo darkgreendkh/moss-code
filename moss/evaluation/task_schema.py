@@ -4,7 +4,7 @@ import json
 from pathlib import Path, PurePosixPath
 import random
 
-from ..tools import legal_tool_names
+from ..execution.registry import legal_tool_names
 from .verifier import ExecutableSpec
 
 

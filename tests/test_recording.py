@@ -196,7 +196,7 @@ def test_committed_cassettes_carry_no_secret_shapes():
     """仓库里真实存在的磁带也扫一遍——这条断言是防线，不是演示。"""
     from pathlib import Path
 
-    from moss.security import redact_text
+    from moss.execution.safety.secrets import redact_text
 
     offenders = []
     for path in sorted(Path("benchmarks/cassettes").rglob("*.json")):

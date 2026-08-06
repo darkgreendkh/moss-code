@@ -2,7 +2,7 @@ import hashlib
 
 import moss.context.prefix as prompt_module
 from moss.context.prefix import build_prompt_prefix, tool_signature
-from moss.tools import ToolField, build_tool_registry
+from moss.execution.registry import ToolField, build_tool_registry
 from moss.context.repository.workspace import WorkspaceContext
 
 

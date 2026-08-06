@@ -17,7 +17,7 @@ from moss import (
     build_welcome,
 )
 from moss.context.model_request import Block, Message, ModelRequest
-from moss.tool_executor import approval_summary
+from moss.execution.executor import approval_summary
 from moss.context.repository.workspace import WORKSPACE_FINGERPRINT_VERSION
 
 

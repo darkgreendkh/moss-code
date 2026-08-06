@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import sys
 
-from ..tool_context import ActionRequest
+from ...execution.protocol import ActionRequest
 from .client import JSONRPC_VERSION, PROTOCOL_VERSION
 
 SERVER_INFO = {"name": "moss", "version": "0.1"}
@@ -24,7 +24,7 @@ DEFAULT_EXPORTED_TOOLS = ("list_files", "read_file", "search_text")
 
 
 def _json_schema(tool):
-    from ..context.prefix import _schema_payload
+    from ...context.prefix import _schema_payload
 
     properties, required = {}, []
     type_map = {"str": "string", "int": "integer", "list": "array"}

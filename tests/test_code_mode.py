@@ -8,7 +8,7 @@ AST 白名单要挡住全部逃逸样例（验收要求 ≥20 条），沙箱是
 import pytest
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.code_mode import (
+from moss.extensions.code_mode import (
     MAX_SCRIPT_CHARS,
     CodeModeError,
     render_result,
@@ -16,7 +16,7 @@ from moss.code_mode import (
     sandbox_ready,
     validate_script,
 )
-from moss.sandbox import SandboxPlan
+from moss.execution.safety.sandbox import SandboxPlan
 
 # 逃逸样例集。每一条都是一条真实存在的提权路径，或者通往它的第一步。
 # 白名单的意义就在这里：这份名单不可能穷尽，所以正确的做法不是逐条封堵，
@@ -226,7 +226,7 @@ def test_tool_stays_absent_without_a_sandbox(tmp_path, capsys):
 
 
 def test_tool_appears_with_a_sandbox(tmp_path, monkeypatch):
-    import moss.sandbox as sandboxlib
+    from moss.execution.safety import sandbox as sandboxlib
 
     monkeypatch.setattr(sandboxlib, "detect", lambda requested="auto", platform=None: SandboxPlan(mode="bwrap"))
     agent = _agent(tmp_path, code_mode=True, sandbox="auto")
@@ -236,7 +236,7 @@ def test_tool_appears_with_a_sandbox(tmp_path, monkeypatch):
 
 
 def test_end_to_end_orchestration_replaces_several_round_trips(tmp_path, monkeypatch):
-    import moss.sandbox as sandboxlib
+    from moss.execution.safety import sandbox as sandboxlib
 
     monkeypatch.setattr(sandboxlib, "detect", lambda requested="auto", platform=None: SandboxPlan(mode="bwrap"))
     agent = _agent(tmp_path, code_mode=True, sandbox="auto")
@@ -256,7 +256,7 @@ def test_end_to_end_orchestration_replaces_several_round_trips(tmp_path, monkeyp
 
 def test_escape_scripts_are_rejected_at_validation_time(tmp_path, monkeypatch):
     """一段逃逸脚本该在审批摘要出现之前就被拒掉，不该让用户对着它按 y。"""
-    import moss.sandbox as sandboxlib
+    from moss.execution.safety import sandbox as sandboxlib
 
     monkeypatch.setattr(sandboxlib, "detect", lambda requested="auto", platform=None: SandboxPlan(mode="bwrap"))
     agent = _agent(tmp_path, code_mode=True, sandbox="auto")
@@ -268,7 +268,7 @@ def test_escape_scripts_are_rejected_at_validation_time(tmp_path, monkeypatch):
 
 def test_orchestrated_calls_still_hit_the_guardrails(tmp_path, monkeypatch):
     """脚本只是把多次调用打包，不是绕过护栏的旁路。"""
-    import moss.sandbox as sandboxlib
+    from moss.execution.safety import sandbox as sandboxlib
 
     monkeypatch.setattr(sandboxlib, "detect", lambda requested="auto", platform=None: SandboxPlan(mode="bwrap"))
     agent = _agent(tmp_path, code_mode=True, sandbox="auto")

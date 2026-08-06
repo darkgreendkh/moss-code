@@ -24,7 +24,7 @@ from pathlib import Path
 
 from .. import atomic_io
 from ..clock import now
-from ..security import redact_artifact
+from ..execution.safety.secrets import redact_artifact
 
 CASSETTE_MANIFEST = "manifest.json"
 CASSETTE_SCHEMA_VERSION = 1

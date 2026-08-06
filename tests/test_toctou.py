@@ -7,7 +7,7 @@
 import pytest
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.tools import NOFOLLOW_SUPPORTED
+from moss.execution.registry import NOFOLLOW_SUPPORTED
 
 
 def _build_agent(tmp_path, **kwargs):

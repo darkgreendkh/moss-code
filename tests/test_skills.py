@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.skills import build_skill_registry, parse_skill_file
+from moss.extensions.skills import build_skill_registry, parse_skill_file
 from moss.context.prefix import skill_signature
 
 

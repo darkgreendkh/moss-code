@@ -18,14 +18,14 @@ from pathlib import Path
 from . import atomic_io
 from .runs import checkpoint as checkpointlib
 from .context import compaction as compactionlib
-from . import delegation as delegationlib
-from . import code_mode as code_modelib
-from . import hooks as hookslib
-from .mcp import registry as mcplib
-from . import model_router as model_routerlib
+from .extensions import code_mode as code_modelib
+from .extensions import delegation as delegationlib
+from .extensions import hooks as hookslib
+from .extensions import router as model_routerlib
+from .extensions.mcp import registry as mcplib
 from .memory import service as memorylib
 from .memory.records import SourceRef
-from . import security as securitylib
+from .execution.safety import secrets as securitylib
 from .context.manager import ContextManager
 from .context.model_request import PromptBundle
 from .runs.checkpoint import CHECKPOINT_NONE_STATUS
@@ -33,11 +33,11 @@ from .context.prefix import build_prompt_prefix, skill_signature, tool_signature
 from .runs.store import RunStore
 from .runs import rewind as rewindlib
 from .runs.session import SessionStore
-from . import skills as skilllib
+from .extensions import skills as skilllib
 from .task_state import STOP_REASON_FINAL_ANSWER_RETURNED
-from .tool_context import ToolContext
-from .tool_executor import ToolExecutor, approval_summary
-from . import tools as toolkit
+from .execution.executor import ToolExecutor, approval_summary
+from .execution.protocol import ToolContext
+from .execution import registry as toolkit
 from .clock import now
 from .context.token_budget import (
     MAX_HISTORY,
@@ -50,8 +50,8 @@ from .context.token_budget import (
 from .context.repository import ignore as ignorelib
 from .context.repository import repo_map as repo_maplib
 from . import budget as budgetlib
-from . import policy as policylib
-from . import sandbox as sandboxlib
+from .execution.safety import policy as policylib
+from .execution.safety import sandbox as sandboxlib
 from . import stall as stalllib
 from .verification import is_verification_command
 from .runs.observability import events as trace_events

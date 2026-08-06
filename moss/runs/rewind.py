@@ -21,7 +21,7 @@ import copy
 
 from . import ledger as action_ledger
 from ..memory import service as memorylib
-from ..tools import write_text_atomic
+from ..execution.registry import write_text_atomic
 
 STATUS_OK = "ok"
 STATUS_NOTHING_TO_DO = "nothing_to_do"

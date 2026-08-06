@@ -12,7 +12,7 @@ from ..providers.capabilities import PROVIDER_CAPABILITIES
 from ..providers.clients import AnthropicCompatibleModelClient, FakeModelClient, OpenAICompatibleModelClient
 from ..runs.store import RunStore
 from ..runtime import Moss, SessionStore
-from ..tools import legal_tool_names
+from ..execution.registry import legal_tool_names
 # 事件名一律走常量：字面量写错不会报错，只会让某个指标悄悄变成 0。
 from ..runs.observability import events as trace_events
 from ..context.repository.workspace import WorkspaceContext

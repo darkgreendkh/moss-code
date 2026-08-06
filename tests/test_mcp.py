@@ -10,15 +10,15 @@ import json
 import pytest
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.mcp.client import McpClient, McpError, flatten_content
-from moss.mcp.registry import (
+from moss.extensions.mcp.client import McpClient, McpError, flatten_content
+from moss.extensions.mcp.registry import (
     McpServerConfig,
     build_mcp_tools,
     fields_from_json_schema,
     load_mcp_config,
     mcp_tool_name,
 )
-from moss.mcp.server import MossMcpServer
+from moss.extensions.mcp.server import MossMcpServer
 from moss.context.prefix import build_prompt_prefix, render_tool_lines
 from moss.context.token_budget import estimate_tokens
 
@@ -194,7 +194,7 @@ def test_mcp_tools_enter_the_agent_registry_and_signature(tmp_path):
     def connect(server):
         return _client()
 
-    from moss.mcp import registry as registrylib
+    from moss.extensions.mcp import registry as registrylib
 
     original = registrylib._connect
     registrylib._connect = connect
@@ -221,7 +221,7 @@ def test_json_schema_becomes_tool_fields():
 
 
 def _fake_tools(count):
-    from moss.tools import ToolField
+    from moss.execution.registry import ToolField
 
     return {
         f"tool_{index:02d}": {

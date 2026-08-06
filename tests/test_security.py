@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from moss.security import (
+from moss.execution.safety.secrets import (
     REDACTED_VALUE,
     detected_secret_env_items,
     looks_sensitive_env_name,

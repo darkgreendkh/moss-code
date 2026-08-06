@@ -1,5 +1,5 @@
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.tool_executor import ToolExecutor, ToolExecutionResult
+from moss.execution.executor import ToolExecutor, ToolExecutionResult
 
 
 def build_agent(tmp_path):
@@ -35,7 +35,7 @@ def test_moss_run_tool_keeps_compatibility_metadata(tmp_path):
     assert agent._last_tool_result_metadata["tool_status"] == "ok"
 
 def test_run_shell_uses_structured_exit_code_when_rendered_text_has_no_exit_code(tmp_path):
-    from moss.tools import ToolRunOutput
+    from moss.execution.registry import ToolRunOutput
 
     agent = build_agent(tmp_path)
     agent.tools["run_shell"]["run"] = lambda args: ToolRunOutput(
@@ -56,7 +56,7 @@ def test_run_shell_uses_structured_exit_code_when_rendered_text_has_no_exit_code
 
 
 def test_run_shell_structured_exit_code_with_workspace_change_is_partial_success(tmp_path):
-    from moss.tools import ToolRunOutput
+    from moss.execution.registry import ToolRunOutput
 
     agent = build_agent(tmp_path)
 

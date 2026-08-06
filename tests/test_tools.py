@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from moss.tool_context import ToolContext
+from moss.execution.protocol import ToolContext
 import pytest
 
-from moss.tools import build_tool_registry, classify_shell_command, native_tool_definitions, tool_delegate, tool_read_file, validate_tool
+from moss.execution.registry import build_tool_registry, classify_shell_command, native_tool_definitions, tool_delegate, tool_read_file, validate_tool
 
 
 def test_tool_context_supports_file_tools_without_full_moss(tmp_path):
@@ -56,7 +56,7 @@ def test_build_tool_registry_binds_runners_to_tool_context(tmp_path):
     assert "delegate" not in tools
 
 def test_write_and_edit_file_leave_no_temp_files(tmp_path):
-    from moss.tools import tool_edit_file, tool_write_file, write_text_atomic
+    from moss.execution.registry import tool_edit_file, tool_write_file, write_text_atomic
 
     context = ToolContext(
         root=tmp_path,
@@ -77,7 +77,7 @@ def test_write_and_edit_file_leave_no_temp_files(tmp_path):
 
 
 def test_tool_schema_fields_are_executable_contract_objects(tmp_path):
-    from moss.tools import ToolField
+    from moss.execution.registry import ToolField
 
     context = ToolContext(
         root=tmp_path,

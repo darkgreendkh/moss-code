@@ -7,8 +7,8 @@
 import json
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss import tools as toolkit
-from moss.tool_executor import ARTIFACT_THRESHOLD
+from moss.execution import registry as toolkit
+from moss.execution.executor import ARTIFACT_THRESHOLD
 
 
 def build_agent(tmp_path, outputs, **kwargs):

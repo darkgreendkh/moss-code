@@ -30,8 +30,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from . import atomic_io
-from .context.token_budget import clip, estimate_tokens
+from .. import atomic_io
+from ..context.token_budget import clip, estimate_tokens
 
 SKILLS_SUBDIR = ".moss/skills"
 

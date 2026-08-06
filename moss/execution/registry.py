@@ -14,10 +14,10 @@ import time
 from dataclasses import dataclass
 from functools import partial
 
-from . import atomic_io
-from . import sandbox
-from . import shell_policy
-from .context.repository.workspace import IGNORED_PATH_NAMES
+from .. import atomic_io
+from ..context.repository.workspace import IGNORED_PATH_NAMES
+from .safety import sandbox
+from .safety import shell as shell_policy
 
 
 @dataclass(frozen=True)
@@ -66,10 +66,10 @@ def write_text_atomic(path, content):
 
 
 def classify_shell_command(command):
-    """shell 风险分级。实现下沉到 moss/shell_policy.py。
+    """shell 风险分级。实现下沉到 execution/safety/shell.py。
 
-    留在这里只是为了保持 `from .tools import classify_shell_command` 这个
-    既有调用点不变；真正的分级逻辑是基于 shlex 的结构化解析，
+    注册表保留这个薄入口，避免调用方了解安全策略模块的内部布局；
+    真正的分级逻辑是基于 shlex 的结构化解析，
     见 shell_policy 模块头的说明。
     """
     return shell_policy.classify_shell_command(command)
@@ -281,7 +281,7 @@ def _context_mcp_tools(context):
 
 
 def _context_catalog_threshold(context):
-    from .context.prefix import TOOL_CATALOG_THRESHOLD
+    from ..context.prefix import TOOL_CATALOG_THRESHOLD
 
     return int(getattr(context, "catalog_threshold", TOOL_CATALOG_THRESHOLD) or TOOL_CATALOG_THRESHOLD)
 
@@ -582,7 +582,7 @@ def validate_tool(context, name, args):
         return
 
     if name == "run_orchestration":
-        from . import code_mode
+        from ..extensions import code_mode
 
         # 校验期就跑 AST 白名单：一段逃逸脚本该在审批摘要出现之前就被拒掉，
         # 不该让用户对着它按一次 y。
@@ -874,7 +874,7 @@ def tool_use_skill(context, args):
 
 def tool_run_orchestration(context, args):
     """跑一段受限编排脚本。每次工具 API 调用仍然逐条走 ToolExecutor。"""
-    from . import code_mode
+    from ..extensions import code_mode
 
     emitted, calls = code_mode.run_script(args.get("script", ""), context.run_guarded_tool)
     return code_mode.render_result(emitted, calls)
@@ -889,7 +889,7 @@ def tool_describe_tool(context, args):
     tool = (getattr(context, "tool_registry", lambda: {})() or {}).get(name)
     if tool is None:
         raise ValueError(f"unknown tool: {name}")
-    from .context.prefix import render_tool_schema
+    from ..context.prefix import render_tool_schema
 
     risk = "approval required" if tool["risky"] else "safe"
     return "\n".join(

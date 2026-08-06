@@ -9,8 +9,8 @@ from unittest.mock import patch
 import pytest
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
-from moss.sandbox import SandboxPlan, detect, wrap_command
-from moss.shell_policy import extract_hosts, host_allowed
+from moss.execution.safety.sandbox import SandboxPlan, detect, wrap_command
+from moss.execution.safety.shell import extract_hosts, host_allowed
 
 
 def test_off_is_not_reported_as_degraded():
@@ -83,7 +83,7 @@ def test_no_sandbox_means_the_command_is_untouched():
 
 
 def test_degradation_is_announced_on_stderr(capsys):
-    from moss.sandbox import announce
+    from moss.execution.safety.sandbox import announce
 
     announce(SandboxPlan(mode="none", requested="bwrap", degraded=True, reason="bwrap not found"))
 

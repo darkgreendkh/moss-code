@@ -13,9 +13,9 @@ import re
 from pathlib import Path
 
 from ..clock import now
-from .. import security as securitylib
-from .. import injection as injectionlib
-from ..security import REDACTED_VALUE
+from ..execution.safety import injection as injectionlib
+from ..execution.safety import secrets as securitylib
+from ..execution.safety.secrets import REDACTED_VALUE
 from ..context.token_budget import clip, estimate_tokens
 # 直接导常量而不是导模块：本文件里有同名的 trace_events 形参。
 from ..runs.observability.events import MEMORY_POISONING_BLOCKED, TOOL_EXECUTED

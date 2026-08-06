@@ -10,7 +10,7 @@ from moss.evaluation.metrics import (
     run_context_ablation_v2,
 )
 from moss.providers.capabilities import PROVIDER_CAPABILITIES
-from moss.tools import legal_tool_names
+from moss.execution.registry import legal_tool_names
 
 
 def test_evaluation_workspace_guard_rejects_real_checkout_and_accepts_pytest_scratch(tmp_path):

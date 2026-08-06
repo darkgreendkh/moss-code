@@ -10,7 +10,7 @@ from .clock import now
 from .runs.lease import LeaseHeartbeat
 from .output_parser import parse_model_actions, truncate_after_final
 from .providers.capabilities import probe
-from . import hooks as hookslib
+from .extensions import hooks as hookslib
 from .runs.observability import events as trace_events
 from .task_state import STATUS_RUNNING, TaskState
 from .context.token_budget import clip, estimate_tokens

@@ -4,8 +4,8 @@ import pytest
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
 from moss import cli
-from moss.tool_context import ToolContext
-from moss.tools import BASE_TOOL_SPECS, build_tool_registry, validate_tool
+from moss.execution.protocol import ToolContext
+from moss.execution.registry import BASE_TOOL_SPECS, build_tool_registry, validate_tool
 
 
 def _context(tmp_path, calls):

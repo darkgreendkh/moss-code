@@ -10,7 +10,7 @@ import stat
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
 from moss.runs.observability import events as trace_events
-from moss.hooks import HOOK_POINTS, HookOutcome, find_hook, run_hook
+from moss.extensions.hooks import HOOK_POINTS, HookOutcome, find_hook, run_hook
 
 
 def _write_hook(root, point, script, *, executable=True, suffix=""):

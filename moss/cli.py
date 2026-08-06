@@ -21,8 +21,8 @@ from .config import load_project_env, provider_env
 from .memory.service import reject_memory_reason
 from .memory.records import SourceRef, make_record
 from .memory.store import MemoryStore, project_scope_key
-from . import injection as injectionlib
-from .mcp.server import DEFAULT_EXPORTED_TOOLS, MossMcpServer
+from .execution.safety import injection as injectionlib
+from .extensions.mcp.server import DEFAULT_EXPORTED_TOOLS, MossMcpServer
 from .runs.observability.otel import trace_to_otlp
 from .context.prefix import PROMPT_VERSION
 from .providers.clients import (
@@ -38,8 +38,8 @@ from .runs.store import RunStore
 from .runtime import Moss, SessionStore
 from .context.token_budget import middle
 from .runs.observability.html import render_run_html
-from . import policy as policylib
-from . import sandbox as sandboxlib
+from .execution.safety import policy as policylib
+from .execution.safety import sandbox as sandboxlib
 from .context.repository.workspace import WorkspaceContext
 
 DEFAULT_SECRET_ENV_NAMES = (
