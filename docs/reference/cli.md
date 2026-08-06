@@ -177,7 +177,7 @@ server 侧走 `Moss.execute(ActionRequest)` 这个唯一入口——
 | 工具 | risky | 参数 |
 | --- | --- | --- |
 | `list_files` | | `path=.` |
-| `read_file` | | `path`, `start=1`, `end=800` |
+| `read_file` | | `path`, `start=1`, `end=300`（输出头报 `(lines x-y of N)`） |
 | `search_text` | | `pattern`, `path=.` |
 | `read_artifact` | | `path`, `start=1`, `end=200`（scope 限本 run 目录） |
 | `update_plan` | | `steps`（`{id, title, status}` 列表） |

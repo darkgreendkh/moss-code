@@ -6,6 +6,7 @@ import subprocess
 
 from ... import atomic_io
 from ...context.repository.workspace import IGNORED_PATH_NAMES
+from ..specs import apply_defaults
 
 NOFOLLOW_SUPPORTED = hasattr(os, "O_NOFOLLOW")
 
@@ -36,11 +37,12 @@ def tool_list_files(context, args):
 
 
 def tool_read_file(context, args):
+    args = apply_defaults("read_file", args)
     path = context.path(args["path"])
     if not path.is_file():
         raise ValueError("path is not a file")
-    start = int(args.get("start", 1))
-    end = int(args.get("end", 200))
+    start = int(args["start"])
+    end = int(args["end"])
     if start < 1 or end < start:
         raise ValueError("invalid line range")
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -49,7 +51,10 @@ def tool_read_file(context, args):
     if start > len(lines):
         raise ValueError(f"start is past the end of the file ({len(lines)} lines)")
     body = "\n".join(f"{number:>4}: {line}" for number, line in enumerate(lines[start - 1:end], start=start))
-    return f"# {path.relative_to(context.root)}\n{body}"
+    # 头部必须报出总行数（和 read_artifact 一致）：只给路径的话，模型读完一段
+    # 既不知道文件还有多长、也不知道自己读到哪了，只能靠猜下一个区间再来一次——
+    # 这是同一个文件被反复读的直接来源。
+    return f"# {path.relative_to(context.root)} (lines {start}-{min(end, len(lines))} of {len(lines)})\n{body}"
 
 
 def tool_read_artifact(context, args):
@@ -58,11 +63,12 @@ def tool_read_artifact(context, args):
     存在的意义是让"截断"从有损变成可逆：prompt 里只放摘要 + 指针，
     模型真的需要那 1800 行时还能自己拿回来，而不是永远丢了。
     """
+    args = apply_defaults("read_artifact", args)
     path = context.run_path(args["path"])
     if not path.is_file():
         raise ValueError("path is not an artifact file")
-    start = int(args.get("start", 1))
-    end = int(args.get("end", 200))
+    start = int(args["start"])
+    end = int(args["end"])
     if start < 1 or end < start:
         raise ValueError("invalid line range")
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()

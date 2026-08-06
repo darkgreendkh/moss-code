@@ -4,7 +4,7 @@
   "model": "fake",
   "prompt_version": "p1",
   "provider": "fake",
-  "recorded_at": "2026-08-06T07:07:48.650228+00:00",
+  "recorded_at": "2026-08-06T13:01:52.955102+00:00",
   "redaction": "responses and request digests pass through redact_artifact before landing on disk",
   "schema_version": 1,
   "source": "scripted-bootstrap",

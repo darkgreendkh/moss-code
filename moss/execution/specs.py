@@ -44,11 +44,14 @@ BASE_TOOL_SPECS = {
         fields={
             "path": ToolField("str"),
             "start": ToolField("int", required=False, default=1, minimum=1),
-            "end": ToolField("int", required=False, default=800, minimum=1),
+            # 300 行是"渲染完还稳稳低于 ARTIFACT_THRESHOLD(16000 字符)"的量级：
+            # 本仓库 111 个 py 文件里，前 300 行没有一个会触发卸载，前 400 行有 12 个会。
+            # 默认值一旦超过那道阈值，模型的一次 read_file 就变成 read + read_artifact 两步。
+            "end": ToolField("int", required=False, default=300, minimum=1),
         },
         risky=False,
         capabilities=frozenset({"fs_read"}),
-        description="Read a UTF-8 file by line range.",
+        description="Read a UTF-8 file by line range. The header reports the file's total line count.",
     ),
     "write_file": ToolSpec(
         name="write_file",
@@ -223,6 +226,26 @@ def tool_example(name):
 def tool_spec(name):
     """按名字取 ToolSpec。策略层要用它读能力标签。"""
     return _tool_spec(name)
+
+
+def apply_defaults(name, args):
+    """把 ToolSpec 里声明的默认值填进 args，返回新字典。
+
+    handler 里不要再写第二份 `args.get("end", 200)`——那份字面量和 schema 广告给
+    模型的 default 是两个事实源，历史上它们漂成过 200 vs 800：模型按 schema 以为
+    一次能读 800 行，实际只拿回 200 行，于是同一个文件被反复读。
+    校验层（`_validate_schema`）刻意不回填，它只判合法性；填默认值是执行层的事。
+    """
+    spec = _tool_spec(name)
+    if spec is None:
+        return dict(args or {})
+    filled = {
+        field_name: field.default
+        for field_name, field in spec.fields.items()
+        if not field.required and field.default is not None
+    }
+    filled.update(args or {})
+    return filled
 
 
 def _tool_spec(name):

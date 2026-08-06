@@ -2,7 +2,7 @@ import hashlib
 
 import moss.context.prefix as prompt_module
 from moss.context.prefix import build_prompt_prefix, tool_signature
-from moss.execution.registry import ToolField, build_tool_registry
+from moss.execution.registry import BASE_TOOL_SPECS, ToolField, build_tool_registry
 from moss.context.repository.workspace import WorkspaceContext
 
 
@@ -90,7 +90,9 @@ def test_prompt_prefix_renders_executable_schema_fields_as_concise_text(tmp_path
     prefix = build_prompt_prefix(workspace=workspace, tools=tools)
 
     assert isinstance(tools["read_file"]["schema"]["start"], ToolField)
-    assert "- read_file(path: str, start: int=1, end: int=800)" in prefix.text
+    # 默认值从 ToolSpec 取：这里抄一份字面量就等于给 schema 的默认值开第二个事实源。
+    end_default = BASE_TOOL_SPECS["read_file"].fields["end"].default
+    assert f"- read_file(path: str, start: int=1, end: int={end_default})" in prefix.text
     assert "- run_shell(command: str, timeout: int=60)" in prefix.text
     assert "ToolField(" not in prefix.text
 
