@@ -381,7 +381,9 @@ class ToolExecutor:
         这样并发也不会改变记录顺序。
         """
         agent = self.agent
-        if agent.allowed_tools is not None and name not in agent.allowed_tools:
+        # run 级 allowlist 叠加当前 skill 的 allowed-tools 临时覆盖（spec-09 §9.4）。
+        allowed_tools = agent.effective_allowed_tools()
+        if allowed_tools is not None and name not in allowed_tools:
             return ToolExecutionResult(
                 content=f"error: tool '{name}' is not allowed in this run",
                 metadata=_metadata(

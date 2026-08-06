@@ -779,10 +779,11 @@ def tool_use_skill(context, args):
     skill_name = str(args.get("name", "")).strip()
     if not skill_name:
         raise ValueError("name must not be empty")
-    skill = _context_skills(context).get(skill_name)
-    if not skill:
+    if not _context_skills(context).get(skill_name):
         raise ValueError(f"unknown skill: {skill_name}")
-    return skill.get("body", "") or "(skill has no instructions)"
+    # 点亮 skill 是有状态的（能力临时覆盖 + 供应链确认），所以走 runtime 那条路，
+    # 这里不自己拼正文——两处各拼一份迟早会漂移。
+    return context.activate_skill(skill_name)
 
 
 _TOOL_RUNNERS = {

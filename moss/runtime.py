@@ -212,6 +212,9 @@ class Moss:
             event_callback=self.record_memory_event,
         )
         self.session["memory"] = self.memory.to_dict()
+        # 当前点亮的 skill（use_skill 写入）。它的 allowed-tools 是**临时**覆盖：
+        # 换 skill 或 run 结束即失效。落盘的"永久放开"会变成一个没人记得的后门。
+        self.active_skill = None
         # skill 先于 tool 构建：tool 注册表会根据是否存在 skill 决定要不要暴露 use_skill。
         self.skills = self.build_skills()
         self.tools = self._apply_tool_allowlist(self.build_tools())
@@ -356,6 +359,70 @@ class Moss:
     def build_skills(self):
         return skilllib.build_skill_registry(self.root)
 
+    def skill_trust_store(self):
+        return skilllib.SkillTrustStore(self.root / skilllib.TRUST_FILE)
+
+    def effective_allowed_tools(self):
+        """本次调用真正生效的工具白名单。
+
+        run 级 allowlist 与 skill 的 `allowed-tools` 叠加。skill 只能在
+        run 级名单之内收紧——这层判定在 `activate_skill` 就 fail-closed 做过了，
+        这里只是把结果应用上。
+        """
+        override = (self.active_skill or {}).get("allowed_tools")
+        if override is None:
+            return self.allowed_tools
+        return tuple(sorted(override))
+
+    def activate_skill(self, name):
+        """点亮一个 skill：校验供应链与能力声明，返回要注入的正文。
+
+        能力覆盖在这个 skill 被换掉或本次 run 结束时失效——
+        落盘的"永久放开"会变成一个没人记得的后门。
+        """
+        skill = (self.skills or {}).get(name)
+        if not skill:
+            raise ValueError(f"unknown skill: {name}")
+        trust = self.skill_trust_store()
+        if trust.needs_confirmation(skill):
+            # 第三方 skill 的正文会被原样当指令注入，`allowed-tools` 还能改能力集。
+            # 内容变过就必须由人点一次头，否则"从网上拿来的东西被改了一行"
+            # 和"没被改"在 agent 眼里完全一样。
+            question = (
+                f"skill '{name}' from {skill['source']} changed "
+                f"(sha256 {skill['sha256'][:12]}); allowed-tools: "
+                f"{', '.join(skill['allowed_tools']) or '(none)'}"
+            )
+            if not self._confirm_skill(question):
+                raise ValueError(f"skill {name} was not confirmed after its contents changed")
+            trust.trust(skill)
+        override = skilllib.validate_allowed_tools(
+            skill, self.allowed_tools, toolkit.legal_tool_names()
+        )
+        self.active_skill = {"name": name, "allowed_tools": override, "sha256": skill["sha256"]}
+        body = skill.get("body", "") or "(skill has no instructions)"
+        if skill.get("resources"):
+            # 渐进披露第三级：附件只报路径，模型自己 read_file 取。
+            body += "\n\nResources (read them with read_file if you need them): " + ", ".join(
+                skill["resources"]
+            )
+        return body
+
+    def _confirm_skill(self, question):
+        if self.approval_policy == "never":
+            return False
+        if self.approval_policy == "auto":
+            return True
+        return self._read_approval_answer(f"Trust changed skill? {question} [y/N] ")
+
+    def skill_scope_hint(self):
+        """当前在碰的路径下有哪些 skill 可用。只给一行提示，不注入全文。"""
+        if not self.skills:
+            return ""
+        paths = list(self.memory.to_dict().get("working", {}).get("recent_files", []) or [])
+        paths.extend(self.last_relevant_anchors or [])
+        return skilllib.scope_hints(self.skills, paths)
+
     @staticmethod
     def _normalize_allowed_tools(allowed_tools):
         if allowed_tools is None:
@@ -430,6 +497,8 @@ class Moss:
         self._run_active = False
         self._frozen_registry = None
         self._reported_registry_drifts = set()
+        # skill 的能力覆盖随 run 结束失效。跨 run 保留等于把一次性放开变成常驻。
+        self.active_skill = None
 
     def _detect_registry_drift(self):
         if not self._run_active or not self._frozen_registry:
@@ -1163,6 +1232,7 @@ class Moss:
             max_depth=self.max_depth,
             spawn_delegate=self.spawn_delegate,
             skills_provider=lambda: self.skills,
+            skill_activator=self.activate_skill,
             cancel_token=self.cancel_token,
             plan_writer=self.set_plan,
             memory_writer=self.memory_write_action,

@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 
 from .clock import now
+from .skills import render_skill_lines
 
 PROMPT_VERSION = "p1"
 
@@ -84,7 +85,15 @@ def skill_signature(skills):
     payload = []
     for name in sorted(skills or {}):
         skill = skills[name]
-        payload.append({"name": name, "description": skill.get("description", "")})
+        payload.append(
+            {
+                "name": name,
+                "description": skill.get("description", ""),
+                # sha256 不进 prefix 文本，但它决定 use_skill 会注入什么指令、
+                # 以及那段时间的能力集合。run 中途被换掉必须被 drift 抓到。
+                "sha256": skill.get("sha256", ""),
+            }
+        )
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -96,7 +105,9 @@ def build_prompt_prefix(workspace, tools, skills=None, built_at=None, protocol="
         tool_lines.append(f"- {name}({fields}) [{risk}] {tool['description']}")
     tool_text = "\n".join(tool_lines)
     skills = skills or {}
-    skill_lines = [f"- {name}: {skill.get('description', '')}".rstrip() for name, skill in skills.items()]
+    # 渐进披露第一级：prefix 里只放名字 + 一句话，且整段卡在预算内
+    # （spec-09 §9.4）。稳定前缀每轮都要发，不能随 skill 数量线性膨胀。
+    skill_lines = render_skill_lines(skills)
     # skill 列在 Tools 下面；没有 skill 时整段省略，保证无 skill 时的 prefix 与改动前逐字节一致。
     skills_section = ("\n\nSkills:\n" + "\n".join(skill_lines)) if skill_lines else ""
     examples = "\n".join(

@@ -279,6 +279,12 @@ class ContextManager:
         if failures:
             lines.append("Recent failures (do not repeat them blindly):")
             lines.extend(failures)
+        if hasattr(self.agent, "skill_scope_hint"):
+            # scope 命中只加一行提示（spec-09 §9.4）。自动注入全文会把渐进披露
+            # 撤销掉：一进某个目录就吃掉几千 token，而模型可能根本不打算用它。
+            hint = str(self.agent.skill_scope_hint() or "").strip()
+            if hint:
+                lines.append(hint)
         return "\n".join(lines)
 
     def _recent_failure_lines(self, limit=3):

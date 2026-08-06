@@ -31,6 +31,8 @@ class ToolContext:
     # run 目录内的路径锚定（read_artifact 用）。和 path_resolver 分开是刻意的：
     # 两者的根不同，混用会让"只能读本次运行的工件"这条约束失效。
     run_path_resolver: Callable[[str], Path] = None
+    # 点亮 skill：供应链确认 + 能力临时覆盖都是有状态的，只能由 runtime 做。
+    skill_activator: Callable[[str], str] = None
 
     def path(self, raw_path):
         return self.path_resolver(str(raw_path))
@@ -45,6 +47,11 @@ class ToolContext:
 
     def skills(self):
         return self.skills_provider() or {}
+
+    def activate_skill(self, name):
+        if self.skill_activator is None:
+            raise RuntimeError("use_skill is unavailable")
+        return self.skill_activator(str(name))
 
     def set_plan(self, plan):
         if self.plan_writer is None:
