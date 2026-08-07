@@ -290,8 +290,15 @@ def render_run_summary(summary):
     if changed:
         # 验证只对"改了文件"的运行有意义：纯问答没有可验证的东西。
         parts.append("verified ✓" if summary.get("verified") else "unverified")
-    if str(summary.get("status", "")) == "failed":
-        parts.append(f"failed ({summary.get('stop_reason', 'unknown')})")
+    status = str(summary.get("status", ""))
+    stop_reason = str(summary.get("stop_reason", ""))
+    if status == "failed":
+        parts.append(f"failed ({stop_reason or 'unknown'})")
+    elif status == "stopped" and stop_reason and stop_reason != "final_answer_returned":
+        # 非正常收尾（撞步数/预算上限等）也要如实标一句：答案可能是强制收尾产出的，
+        # 用户得知道它是"完整回答"还是"被截断后的尽力而为"。
+        label = stop_reason.replace("_reached", "").replace("_", " ")
+        parts.append(f"stopped: {label}")
     head = "  · " + " · ".join(parts)
     if not changed:
         return head

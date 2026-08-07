@@ -23,6 +23,13 @@ PARALLEL_MAX_WORKERS = 4
 COMPACTION_UTILIZATION_THRESHOLD = 0.8
 # 历史段连续被削这么多轮就压缩：一次是偶发的大输出，两次是历史装不下了。
 COMPACTION_REDUCTION_STREAK = 2
+# 步数用到这个比例就提醒模型收敛。和预算软阈值同一个数（budget.SOFT_RATIO），
+# 让"快没步数了"和"快没 token 了"给出一致的收尾压力。
+CONVERGE_RATIO = 0.8
+# 步数上限没到这个数就不提醒。理由：收敛提醒是给"预算宽裕、容易漫无目的地逛"
+# 的开放式任务用的（默认 25 步）；预算本身就很紧（比如评测里 2~6 步的任务）时，
+# 上限自己就是收敛压力，再在第 1~2 步插一句"快收尾"纯属噪声，还会扰动确定性回放。
+CONVERGE_MIN_STEPS = 12
 
 
 def _record_instruction_notices(agent, task_state):
@@ -62,6 +69,8 @@ class AgentLoop:
     def __init__(self, agent):
         self.agent = agent
         self._heartbeat = None
+        # 收敛提醒只发一次：重复喊"快收尾"既费 token 又没有新信息。
+        self._converge_notice_sent = False
 
     def run(self, user_message):
         run_started_at = time.monotonic()
@@ -165,6 +174,9 @@ class AgentLoop:
         # 4. 记录：把结果写回 history / task_state / trace / memory
         # 然后进入下一轮，直到停机条件满足
         while tool_steps < agent.max_steps and attempts < max_attempts:
+            # 快没步数了就提醒模型收敛。放在轮首、用当前 tool_steps 判：这样提醒
+            # 进的是这一轮的 prompt，模型下一步就能据此改主意，而不是撞了墙才知道。
+            self._maybe_nudge_convergence(task_state, tool_steps)
             # 步边界续租。后台心跳线程覆盖步内的长动作，这一次是同步兜底：
             # 心跳线程起不来（比如受限环境）时，至少每步还有一次刷新。
             agent.heartbeat_run(task_state)
@@ -432,7 +444,15 @@ class AgentLoop:
             final = "Stopped after too many malformed model responses without a valid tool call or final answer."
             task_state.stop_retry_limit(final)
         else:
-            final = "Stopped after reaching the step limit without a final answer."
+            # 撞步数上限：先给模型一次"用现有信息强制作答"的机会，拿不到再退回
+            # 规则总结。绝不再把 25 步的成果换成一句干巴巴的 "Stopped..."。
+            final = self._synthesize_final_answer(task_state, user_message, budget, run_started_at)
+            if not final:
+                last = f" Last action: {task_state.last_tool}." if task_state.last_tool else ""
+                final = (
+                    f"Stopped after reaching the step limit ({agent.max_steps} steps) before finishing."
+                    f"{last} Rerun with a larger --max-steps, or narrow the request."
+                )
             task_state.stop_step_limit(final)
         agent.record({"role": "assistant", "content": final, "created_at": now()})
         agent.promote_durable_memory(user_message, final)
@@ -694,6 +714,117 @@ class AgentLoop:
         with ThreadPoolExecutor(max_workers=min(PARALLEL_MAX_WORKERS, len(actions))) as pool:
             # map 保序：即使后提交的先跑完，结果也按提交顺序返回。
             return list(pool.map(run_one, actions))
+
+    def _maybe_nudge_convergence(self, task_state, tool_steps):
+        """步数过 80% 时注入一次收敛提醒。
+
+        为什么需要：步数上限只由主循环的 while 条件挡着，从没进过预算的软阈值
+        机制（`RunBudget(max_steps=0)`），所以模型全程不知道自己快到墙了，才会
+        像开放式问题里那样反复重读同一批文件、逛到第 25 步被硬切。这里补上那道
+        本该有的"快收尾"压力，让它自己提前收敛。
+        """
+        agent = self.agent
+        if self._converge_notice_sent or agent.max_steps < CONVERGE_MIN_STEPS:
+            return
+        threshold = max(1, int(agent.max_steps * CONVERGE_RATIO))
+        if tool_steps < threshold:
+            return
+        self._converge_notice_sent = True
+        remaining = max(0, agent.max_steps - tool_steps)
+        agent.emit_trace(
+            task_state,
+            trace_events.CONVERGENCE_NUDGE,
+            {"tool_steps": tool_steps, "max_steps": agent.max_steps, "remaining": remaining},
+        )
+        agent.record(
+            {
+                "role": "system",
+                "content": (
+                    f"Runtime notice: you have used {tool_steps} of {agent.max_steps} tool steps "
+                    f"({remaining} left). Stop exploring and converge now: take only the steps you truly "
+                    "need, then return your <final> answer. Re-reading files you have already seen wastes "
+                    "the remaining budget."
+                ),
+                "created_at": now(),
+            }
+        )
+
+    def _synthesize_final_answer(self, task_state, user_message, budget, run_started_at):
+        """撞到步数上限时，禁用工具再调一次模型，把已收集的信息收成一个真答案。
+
+        为什么值得多花一次调用：步数上限 ≠ 预算耗尽——通常 token/时间/金额都还有
+        余量，而模型往往正好读完了资料、就差把话说出来，却在这一刻被切断。与其扔掉
+        整轮工作、甩给用户一句 "Stopped..."，不如让它用手上的东西给出最好的答案，
+        并说明哪些没做完。这一次不再给工具：目的是收尾，不是继续探索。
+
+        返回收尾答案字符串；预算真的用光、prompt 装不下、后端报错或模型仍不肯作答
+        时返回 None，交给调用方退回规则总结。
+        """
+        agent = self.agent
+        if budget.hard_exceeded():
+            # token/时间/金额真用光了：再发一次正好把它捅穿，收尾本身也要余量。
+            return None
+        agent.record(
+            {
+                "role": "system",
+                "content": (
+                    "Runtime notice: you have reached the step limit and can no longer call tools. "
+                    "Give the user your best complete answer now, using only what you have already "
+                    "gathered. If parts remain uncertain or unfinished, state clearly what you concluded "
+                    "and what is left. Do not ask to run more tools; respond with your final answer."
+                ),
+                "created_at": now(),
+            }
+        )
+        agent.write_task_state(task_state)
+        bundle = self._build_prompt(task_state, user_message)
+        if not bundle.sendable:
+            return None
+        # 收尾这一轮不给工具：强制模型用文字作答，而不是又想调一个工具。
+        request = replace(bundle.request, tools=[])
+        agent.emit_progress("thinking", {"step": agent.max_steps, "max_steps": agent.max_steps})
+        task_state.record_model_turn()
+        model_started_at = time.monotonic()
+        try:
+            if hasattr(agent.model_client, "complete_request"):
+                raw = agent.model_client.complete_request(request)
+            else:
+                raw = agent.model_client.complete(bundle.text, agent.max_new_tokens, tools=[])
+        except Exception:
+            # 收尾调用自己失败：不收敛成 model_error（那会盖掉 step_limit 语义），
+            # 直接退回规则总结。
+            return None
+        completion_metadata = dict(getattr(agent.model_client, "last_completion_metadata", {}) or {})
+        input_tokens, output_tokens, estimated = usage_from_metadata(
+            completion_metadata, prompt=bundle.text, completion=raw, measure=estimate_tokens
+        )
+        budget.consume(
+            steps=1,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            elapsed_s=time.monotonic() - run_started_at,
+            estimated=estimated,
+        )
+        agent.last_run_budget = budget
+        agent.last_completion_metadata = completion_metadata
+        agent.emit_trace(
+            task_state,
+            trace_events.FINAL_SYNTHESIS,
+            {"duration_ms": int((time.monotonic() - model_started_at) * 1000)},
+        )
+        actions, _ = truncate_after_final(parse_model_actions(raw, protocol=request.protocol))
+        final_action = next((action for action in actions if action.kind == "final"), None)
+        if final_action is not None and (final_action.text or "").strip():
+            return final_action.text.strip()
+        # 没规规矩矩用 <final> 包，但只要有自然语言就拿来用——收尾阶段不苛求格式，
+        # 苛求格式的结果是明明有答案却退回 "Stopped..."。
+        retry_action = next(
+            (action for action in actions if action.kind == "retry" and (action.text or "").strip()),
+            None,
+        )
+        if retry_action is not None:
+            return retry_action.text.strip()
+        return None
 
     def _finish_budget_exceeded(self, task_state, user_message, budget, dimension, run_started_at):
         """预算耗尽时的优雅收尾：规则生成总结，不再花模型调用。"""

@@ -42,6 +42,10 @@ VERIFICATION_REQUESTED = "verification_requested"
 BUDGET_SOFT_EXCEEDED = "budget_soft_exceeded"
 BUDGET_EXCEEDED = "budget_exceeded"
 RUN_INTERRUPTED = "run_interrupted"
+# 步数快用完时注入的收敛提醒，以及撞限后强制作答的收尾调用。两者一起把
+# "跑满 25 步却什么都不给"变成"提前收敛、再不行也强制给个真答案"。
+CONVERGENCE_NUDGE = "convergence_nudge"
+FINAL_SYNTHESIS = "final_synthesis"
 
 # 提示词缓存（spec-04 §4.4）
 TOOL_REGISTRY_DRIFT = "tool_registry_drift"
@@ -101,6 +105,8 @@ __all__ = [
     "BUDGET_SOFT_EXCEEDED",
     "BUDGET_EXCEEDED",
     "RUN_INTERRUPTED",
+    "CONVERGENCE_NUDGE",
+    "FINAL_SYNTHESIS",
     "TOOL_REGISTRY_DRIFT",
     "CACHE_CAPABILITY_DETECTED",
     "MEMORY_POISONING_BLOCKED",

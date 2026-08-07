@@ -106,3 +106,29 @@ def test_render_run_summary_flags_failure():
         {"status": "failed", "stop_reason": "model_error", "tool_steps": 0, "changed_files": []}
     )
     assert "failed (model_error)" in text
+
+
+def test_render_run_summary_notes_step_limit_stop():
+    # 撞步数上限收尾：status=stopped，摘要要如实标"这不是正常完整收尾"。
+    text = render_run_summary(
+        {
+            "status": "stopped",
+            "stop_reason": "step_limit_reached",
+            "tool_steps": 25,
+            "changed_files": [],
+        }
+    )
+    assert "stopped: step limit" in text
+    assert "failed" not in text
+
+
+def test_render_run_summary_stays_quiet_on_normal_finish():
+    text = render_run_summary(
+        {
+            "status": "completed",
+            "stop_reason": "final_answer_returned",
+            "tool_steps": 3,
+            "changed_files": [],
+        }
+    )
+    assert "stopped" not in text and "failed" not in text

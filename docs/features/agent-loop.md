@@ -13,7 +13,8 @@
 ## 1. 一步的形状
 
 ```python
-while True:
+while tool_steps < max_steps:
+    maybe_nudge_convergence(tool_steps)  # 快没步数了就提醒收敛（默认 25 步的场景）
     heartbeat()                      # 步边界续租
     if budget.hard_exceeded():       # 硬超限：不再调模型
         return graceful_final()
@@ -28,6 +29,8 @@ while True:
         return payload
     execute_tool_batch(payload)       # 行动
     record(...)                       # 记录
+# 撞到步数上限：禁用工具再调一次模型强制作答，而不是扔掉整轮成果
+return synthesize_final_answer() or rule_summary()
 ```
 
 `agent/loop.py:161` 附近的注释把这四拍写在代码里，因为它是理解全文件的钥匙。
@@ -94,16 +97,30 @@ provider 调用统一走 `providers/clients.py::complete()`。
 | stop_reason | 触发 | 收尾动作 |
 | --- | --- | --- |
 | （正常 final） | 模型给出最终答案且通过自检 | 写 report、释放租约、跑 `post_run` |
-| `budget_exceeded` | 步数/token/时间/金额任一硬阈值 | `graceful_final()` 收敛成一句话，不再调模型 |
+| `step_limit_reached` | 达到 `--max-steps` 仍无最终答案 | **禁用工具再调一次模型强制作答**（`_synthesize_final_answer`）；拿不到才退回信息量足够的规则总结 |
+| `retry_limit_reached` | 连续输出无法解析出工具/最终答案 | 规则总结（模型已经给不出合法输出，再问也是徒劳） |
+| `budget_exceeded` | token/时间/金额任一硬阈值 | `graceful_final()` 收敛成一句话，不再调模型 |
 | `context_overflow` | admission gate 判定装不下 | **不调用 provider**，失败运行，one-shot 非零退出 |
 | `model_error` | 后端异常（网络/超时/5xx） | 收敛为已收尾的失败运行，错误信息脱敏 |
 | `interrupted` | `BaseException`（含 Ctrl-C） | 收尾 + 释放租约，然后**必然重新抛出** |
 | `tool_timeout` | 工具执行超时 | 按普通工具失败处理，交回模型 |
 
+**撞步数上限不等于扔掉成果。** 步数上限只是"不能再调工具了"，通常 token/时间/金额
+都还有余量，而模型往往正好读完资料、就差把话说出来。所以撞限时先给它一次
+**禁用工具的强制收尾调用**（`FINAL_SYNTHESIS`），让它用已收集的信息给出最好的答案
+并说明哪些没做完；只有预算真的也耗尽、prompt 装不下、后端报错或模型仍不肯作答时，
+才退回一句带"怎么继续"的规则总结。**收尾这一轮不给工具**，目的是收尾而不是继续探索。
+
+**快没步数了会提前提醒收敛。** 步数上限过 `CONVERGE_RATIO`（80%）时注入一次
+`CONVERGENCE_NUDGE`：告诉模型别再重读看过的文件、开始收敛。只在 `max_steps ≥
+CONVERGE_MIN_STEPS`（12）时才提醒——预算本来就紧（如评测里 2~6 步的任务）时，
+上限自己就是收敛压力，再插一句只是噪声，还会扰动确定性回放的指纹。
+
 三条设计取舍值得单独说：
 
 - **硬超限不再调模型**。这时候再发一次请求很可能正好把预算捅穿，
   而收尾本身也需要余量。`graceful_final` 用已有信息拼一个诚实的收尾答案。
+  （步数上限是例外：它不是预算耗尽，所以反而**要**再调一次去作答。）
 - **`KeyboardInterrupt` 继承 `BaseException`**，不会被 `except Exception` 捕获。
   外层用 `except BaseException` 只做收尾然后重新抛出：语义不变
   （REPL 里 Ctrl-C 仍然只取消当前轮），但磁盘上不再留下永远停在 `running`、
