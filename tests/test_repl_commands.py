@@ -68,6 +68,36 @@ def test_approval_prompt_puts_diff_on_its_own_lines(tmp_path):
     assert any(line.strip().startswith("-old") for line in lines)
 
 
+def test_read_approval_answer_gives_readline_only_a_short_prompt(tmp_path, monkeypatch):
+    # 回归：多行 + 宽字符(·)的图例整块喂给 input()，GNU readline 会横向滚动把左侧藏掉，
+    # 用户只看到 "d = never · N = no"，误以为只有这两个选项。图例必须当正文打完，
+    # input() 只拿一个极短 ASCII 提示。这里逼走 /dev/tty 分支去验证 input() 那条路。
+    monkeypatch.setattr("builtins.open", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+
+    class _Tty:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr("moss.execution.service.sys.stdin", _Tty())
+    printed = []
+    monkeypatch.setattr("builtins.print", lambda *a, **k: printed.append(a[0] if a else ""))
+    seen = {}
+
+    def fake_input(prompt):
+        seen["prompt"] = prompt
+        return "y"
+
+    monkeypatch.setattr("builtins.input", fake_input)
+
+    agent = build_agent(tmp_path, approval_policy="ask")
+    assert agent._read_approval_answer(agent._approval_prompt("run_shell", {"command": "ls"})) == "y"
+    # 真正的输入提示是两个字符，绝不含换行或宽字符 —— readline 怎么都算不错。
+    assert seen["prompt"] == "> "
+    # 完整图例(含 y/a 两个选项)作为正文打给了用户，一个都没被藏掉。
+    banner = "\n".join(str(p) for p in printed)
+    assert "y = once" in banner and "a = always" in banner
+
+
 def test_approval_prompt_explains_injection_reason(tmp_path):
     agent = build_agent(tmp_path, approval_policy="auto")
     agent.flag_injection_suspected(

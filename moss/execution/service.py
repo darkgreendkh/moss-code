@@ -440,11 +440,21 @@ class ExecutionService:
         为什么不用 input()：一旦有人 `echo task | moss`，stdin 就是管道，
         input() 会把**任务文本**当成审批回答读走——用户的第一行输入变成了 "y"。
         所以优先打开 /dev/tty；打不开就降级为拒绝，保持"读不清 = 不批准"。
+
+        为什么把图例(`question`)当正文整块打完、只留一个极短的 `> ` 作真正的输入
+        提示：`question` 是"原因/摘要/[y=once·a=always·d=never·N=no]"多行块，末行还带
+        宽字符 `·`。直接把它整块喂给 input()，GNU readline 会按**单行**算 prompt 宽度、
+        再横向滚动保证光标可见，把左边一截藏掉——用户只看到 `d = never · N = no`，
+        以为只有这两个选项。/dev/tty 那条路虽不走 readline，但 raw 模式下 `\n` 只下移
+        不回行首会让提示阶梯错位。两条都靠"图例进正文、输入提示只剩两字符"根治：
+        readline 只需管 `> `，raw 模式靠 `\r\n` 强制每行回行首，开头 `\r`+空格清掉进度
+        spinner 用 `\r` 留下的残迹。
         """
         self = self.agent
+        banner = "\r" + " " * 72 + "\r" + question.rstrip("\n ").replace("\n", "\r\n") + "\r\n"
         try:
             with open("/dev/tty", "r+", encoding="utf-8") as tty:
-                tty.write(question)
+                tty.write(banner + "> ")
                 tty.flush()
                 return (tty.readline() or "").strip().lower()
         except (OSError, UnicodeDecodeError):
@@ -452,7 +462,8 @@ class ExecutionService:
         if not sys.stdin or not sys.stdin.isatty():
             return ""
         try:
-            return input(question).strip().lower()
+            print(question.rstrip("\n "), file=sys.stderr, flush=True)
+            return input("> ").strip().lower()
         except (EOFError, UnicodeDecodeError):
             return ""
 
