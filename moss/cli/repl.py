@@ -283,7 +283,7 @@ def render_run_summary(summary):
     out_tok = int(summary.get("output_tokens", 0) or 0)
     if in_tok or out_tok:
         prefix = "~" if summary.get("usage_estimated") else ""
-        parts.append(f"{prefix}{_format_token_count(in_tok)} in / {_format_token_count(out_tok)} out tok")
+        parts.append(f"{prefix}{_format_token_count(in_tok)} in / {_format_token_count(out_tok)} out tokens")
     usd = summary.get("usd")
     if usd is not None:
         parts.append(f"${float(usd):.3f}")
