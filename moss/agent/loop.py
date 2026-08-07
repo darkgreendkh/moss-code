@@ -551,12 +551,18 @@ class AgentLoop:
             agent.update_memory_after_tool(action.name, action.args, content)
             agent.record_process_note_for_tool(action.name, metadata)
             agent.record_tool_outcome(action.name, action.args, metadata)
+            # 进度渲染要能看见工具"干了什么"，不只有失败才吭声：exit code、
+            # 改了几个文件、结果头一行。preview 过脱敏——它要打到用户终端上。
+            first_line = next((line for line in str(content).splitlines() if line.strip()), "")
             agent.emit_progress(
                 "tool_result",
                 {
                     "name": action.name,
                     "status": metadata.get("tool_status", "ok"),
                     "duration_ms": duration_ms,
+                    "exit_code": metadata.get("exit_code"),
+                    "diff_summary": list(metadata.get("diff_summary") or []),
+                    "preview": agent.redact_text(first_line[:160]),
                 },
             )
             entry = {

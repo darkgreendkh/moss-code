@@ -18,10 +18,30 @@ from .repl import (
     HELP_DETAILS,
     _ctype_codeset,
     _scrub_undecodable,
+    apply_approval,
+    apply_model,
+    apply_verify,
     build_welcome,
     enable_line_editing,
     make_progress_printer,
+    render_approvals,
+    render_config,
+    render_missing_key_hint,
+    render_run_summary,
 )
+
+
+def _print_run_summary(agent):
+    """一次 ask() 结束后，把收尾摘要打到 stderr。绝不影响控制流。"""
+    task_state = getattr(agent, "current_task_state", None)
+    if task_state is None:
+        return
+    try:
+        text = render_run_summary(agent.summarize_run(task_state))
+    except Exception:
+        return
+    if text:
+        print(text, file=sys.stderr)
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -49,19 +69,9 @@ def main(argv=None):
     agent.progress_observer = progress
 
     # 首次运行最常见的踩坑：没配 key 就直接调用，拿到一坨 HTTP 报错。
-    # 这里提前给一句人话提示，指出该设哪个环境变量。Ollama 不需要 key，跳过。
+    # 这里提前给一段照着做就能修好的引导。Ollama 不需要 key，跳过。
     if hasattr(agent.model_client, "api_key") and not agent.model_client.api_key:
-        provider = _effective_provider(args)
-        env_hint = {
-            "deepseek": "MOSS_DEEPSEEK_API_KEY (or DEEPSEEK_API_KEY)",
-            "openai": "MOSS_OPENAI_API_KEY (or OPENAI_API_KEY)",
-            "anthropic": "MOSS_ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY)",
-        }.get(provider, "the provider API key")
-        print(
-            f"warning: no API key found for provider '{provider}'. "
-            f"Set {env_hint} in your .env or environment before sending a request.",
-            file=sys.stderr,
-        )
+        print(render_missing_key_hint(_effective_provider(args)), file=sys.stderr)
 
     if args.prompt:
         # one-shot 模式：只跑一次 ask，不进入 REPL 循环。
@@ -80,6 +90,7 @@ def main(argv=None):
                 return 1
             progress.clear()
             print(answer)
+            _print_run_summary(agent)
             # 后端错误现在会被 agent 收敛成一次已收尾的失败运行（而不是抛异常），
             # 但 one-shot / CI 场景需要用退出码反映失败，否则脚本会误以为成功。
             task_state = getattr(agent, "current_task_state", None)
@@ -116,6 +127,23 @@ def main(argv=None):
             return 0
         if user_input == "/help":
             print(HELP_DETAILS)
+            continue
+        # 会话内运行时开关：改完立刻对下一轮生效，不必退出重启。
+        command_word, _, command_arg = user_input.partition(" ")
+        if command_word == "/config":
+            print(render_config(agent))
+            continue
+        if command_word == "/approval":
+            print(apply_approval(agent, command_arg))
+            continue
+        if command_word == "/verify":
+            print(apply_verify(agent, command_arg))
+            continue
+        if command_word == "/model":
+            print(apply_model(agent, command_arg))
+            continue
+        if command_word == "/approvals":
+            print(render_approvals(agent, command_arg))
             continue
         if user_input == "/memory":
             print(agent.memory.render_memory_details())
@@ -156,6 +184,7 @@ def main(argv=None):
             continue
         progress.clear()
         print(answer)
+        _print_run_summary(agent)
 
 __all__ = [
     "build_agent",

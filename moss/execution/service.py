@@ -229,6 +229,7 @@ class ExecutionService:
 
     def record_tool_outcome(self, name, args, metadata):
         self = self.agent
+        verified = is_verification_command(name, args, metadata)
         self._tool_outcomes.append(
             {
                 "name": name,
@@ -237,10 +238,17 @@ class ExecutionService:
                 "tool_error_code": str(
                     (metadata or {}).get("tool_error_code", "") or ""
                 ),
-                "verification": is_verification_command(name, args, metadata),
+                "verification": verified,
             }
         )
         del self._tool_outcomes[:-STALL_EVENT_HISTORY]
+        # 收尾摘要用：affected_paths 会随窗口滚动被 _tool_outcomes 丢掉，所以
+        # 单独按 run 累加一份改动文件集合。验证只要成功跑过一次就置位——
+        # verify 失败（error）不算"验证过"，否则收尾会谎报已验证。
+        for rel_path in (metadata or {}).get("affected_paths", ()) or ():
+            self.run_changed_paths.add(str(rel_path))
+        if verified and str((metadata or {}).get("tool_error_code", "") or "") == "":
+            self.run_verified = True
 
     def detect_stall(self):
         self = self.agent
@@ -448,14 +456,46 @@ class ExecutionService:
         except (EOFError, UnicodeDecodeError):
             return ""
 
+    def _approval_prompt(self, name, args):
+        """把审批提示排成"原因 / 摘要块 / 回答行"三段，别糊成一行。
+
+        为什么改：写文件类摘要是最长 800 字符的多行 diff，过去和 `? [y/N...]`
+        挤在同一行，用户要在一坨 diff 末尾去找那个问号。分行之后 diff 独占
+        一块、回答提示单独落在最后一行，一眼就知道在问什么、按什么。
+        """
+        self = self.agent
+        lines = []
+        if self.injection_suspected and self.injection_findings:
+            # 说清"为什么可疑"：命中的模式名。盲批 vs 知情批的区别就在这一行。
+            pattern = str(getattr(self.injection_findings[-1], "pattern", "") or "").replace("_", " ")
+            reason = f" (matched: {pattern})" if pattern else ""
+            lines.append(f"! prompt-injection suspected in earlier tool output{reason} — review before approving")
+        lines.append(f"approve {name}?")
+        detail = approval_summary(self, name, args)
+        for detail_line in detail.split("\n"):
+            lines.append(f"    {detail_line}" if detail_line else "")
+        lines.append("[y = once · a = always · d = never · N = no] ")
+        return "\n".join(lines)
+
+    def remembered_approvals(self):
+        """本会话里"总是允许/总是拒绝"过的审批类。供 /approvals 查看。"""
+        self = self.agent
+        return dict(self._approval_memory)
+
+    def clear_approval_memory(self):
+        """清空记住的审批决定，返回清掉的条数。误按了 always 时的后悔药。"""
+        self = self.agent
+        count = len(self._approval_memory)
+        self._approval_memory.clear()
+        return count
+
     def _ask_for_approval(self, name, args):
         self = self.agent
         approval_class = self.approval_class(name, args)
         remembered = self._approval_memory.get(approval_class)
         if remembered is not None:
             return remembered
-        prefix = "[injection suspected] " if self.injection_suspected else ""
-        question = f"{prefix}approve {name} {approval_summary(self, name, args)}? [y/N/a=always/d=never] "
+        question = self._approval_prompt(name, args)
         answer = self._read_approval_answer(question)
         if answer in {"a", "always"}:
             self._approval_memory[approval_class] = True

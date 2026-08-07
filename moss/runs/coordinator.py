@@ -98,6 +98,9 @@ class RunCoordinator:
         self.reload_registry()
         self.refresh_prefix(force=True)
         self._run_active = True
+        # 收尾摘要按 run 统计：新一轮开始就清空上一轮的改动集合与验证标记。
+        self.run_changed_paths = set()
+        self.run_verified = False
         self._frozen_registry = {
             "skills": dict(self.skills),
             "tools": dict(self.tools),
@@ -213,6 +216,32 @@ class RunCoordinator:
             "replay": self.replay_summary(),
             "model_routing": self.model_router.summary(),
             "hooks": list(self.hook_outcomes),
+        }
+
+    def summarize_run(self, task_state):
+        """给交互层的一句话收尾：这一轮改了哪些文件、跑了几步、花了多少。
+
+        为什么存在：会动用户代码的 agent 跑完必须交代清楚自己干了什么，否则
+        用户只能自己 `git status` 反查。数据本来齐全地散在 report 里
+        （usage、tool_steps）和 run 级累加器里（改动文件、是否验证过），
+        这里聚成一个稳定的小 dict，渲染留给 CLI 层。
+        """
+        self = self.agent
+        usage = self.last_run_budget.snapshot() if self.last_run_budget else {}
+        changed = sorted(getattr(self, "run_changed_paths", set()) or set())
+        return {
+            "status": task_state.status,
+            "stop_reason": task_state.stop_reason,
+            "tool_steps": task_state.tool_steps,
+            "model_turns": task_state.model_turns,
+            "changed_files": changed,
+            "verified": bool(getattr(self, "run_verified", False)),
+            "input_tokens": int(usage.get("input_tokens", 0) or 0),
+            "output_tokens": int(usage.get("output_tokens", 0) or 0),
+            "wall_clock_s": float(usage.get("wall_clock_s", 0.0) or 0.0),
+            # usd=None 表示"不知道价格"，绝不能当成 0——渲染层据此决定显不显示。
+            "usd": usage.get("usd"),
+            "usage_estimated": bool(usage.get("usage_estimated", False)),
         }
 
     def replay_summary(self):

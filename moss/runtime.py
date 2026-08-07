@@ -188,6 +188,11 @@ class Moss:
         # 行为与加预算前完全一致。
         self.run_budget_limits = dict(run_budget_limits or {})
         self.last_run_budget = None
+        # 一次 ask() 里被改动过的文件集合 + 是否跑过验证。收尾摘要要回答
+        # "这一轮到底动了哪些文件、验证了没有"——数据本来散在每次工具的
+        # metadata 里，这里按 run 攒一份，begin_run() 清空。
+        self.run_changed_paths = set()
+        self.run_verified = False
         # 当前计划（update_plan 写入）。它同时进 task_state 和 prompt 尾部。
         self.current_plan = []
         self._plan_step_started_at = 0
@@ -658,6 +663,9 @@ class Moss:
     def build_report(self, task_state):
         return self.run_coordinator.build_report(task_state)
 
+    def summarize_run(self, task_state):
+        return self.run_coordinator.summarize_run(task_state)
+
     def replay_summary(self):
         return self.run_coordinator.replay_summary()
 
@@ -756,6 +764,15 @@ class Moss:
 
     def approval_class(self, name, args):
         return self.execution_service.approval_class(name, args)
+
+    def remembered_approvals(self):
+        return self.execution_service.remembered_approvals()
+
+    def clear_approval_memory(self):
+        return self.execution_service.clear_approval_memory()
+
+    def _approval_prompt(self, name, args):
+        return self.execution_service._approval_prompt(name, args)
 
     def _read_approval_answer(self, question):
         return self.execution_service._read_approval_answer(question)
