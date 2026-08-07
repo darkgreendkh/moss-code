@@ -193,9 +193,9 @@ server 侧走 `Moss.execute(ActionRequest)` 这个唯一入口——
 | 工具 | risky | 参数 |
 | --- | --- | --- |
 | `list_files` | | `path=.` |
-| `read_file` | | `path`, `start=1`, `end=300`（输出头报 `(lines x-y of N)`） |
+| `read_file` | | `path`, `start=1`, `end=300`（输出头报 `(lines x-y of N)`；未显式给 `end` 时按字符预算自适应收窄，装不下就报 `more available; continue with read_file(start=…)`，不被卸载成 artifact） |
 | `search_text` | | `pattern`, `path=.` |
-| `read_artifact` | | `path`, `start=1`, `end=200`（scope 限本 run 目录） |
+| `read_artifact` | | `path`, `start=1`, `end=200`（scope 限本 run 目录；同样自适应收窄默认区间） |
 | `update_plan` | | `steps`（`{id, title, status}` 列表） |
 | `write_file` | ✅ | `path`, `content` |
 | `edit_file` | ✅ | `path`, `old_text`, `new_text` |

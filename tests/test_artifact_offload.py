@@ -80,6 +80,47 @@ def test_output_that_still_fits_keeps_its_content_instead_of_a_pointer(tmp_path)
     assert "line 199 " in agent.context_manager.render_history_text()
 
 
+def test_default_read_of_a_dense_file_fits_in_one_step(tmp_path):
+    """默认区间读密排文件时自适应收窄，不被卸载成 artifact。
+
+    回归：中文文档 300 行约 3 万字符，远超卸载阈值。一次默认读被卸载成 artifact 后，
+    模型要再花一步 read_artifact 才能看到自己刚读的内容——一次 read 变两步。
+    模型没显式给 end（用默认区间）时应收窄到装得下，并如实报出续读位置。
+    """
+    body = "\n".join(f"这是第 {index} 行内容" + "占" * 40 for index in range(300))
+    (tmp_path / "dense.md").write_text(body, encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        ['<tool>{"name":"read_file","args":{"path":"dense.md"}}</tool>', "<final>done</final>"],
+    )
+
+    agent.ask("read the dense doc")
+
+    tool_entry = next(item for item in agent.session["history"] if item.get("role") == "tool")
+    assert "artifact" not in tool_entry
+    assert "read_artifact(" not in tool_entry["content"]
+    assert len(tool_entry["content"]) <= ARTIFACT_THRESHOLD
+    # 如实报出"还有更多、从哪续读"，而不是让模型以为读全了。
+    assert "more available; continue with read_file(start=" in tool_entry["content"]
+
+
+def test_explicit_large_range_still_offloads(tmp_path):
+    """自适应收窄只针对默认区间：模型显式要了一大段就照给（超阈值再卸载）。"""
+    _big_file(tmp_path, lines=900)
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"read_file","args":{"path":"big.txt","start":1,"end":900}}</tool>',
+            "<final>done</final>",
+        ],
+    )
+
+    agent.ask("read the big file")
+
+    tool_entry = next(item for item in agent.session["history"] if item.get("role") == "tool")
+    assert tool_entry["artifact"].startswith("artifacts/")
+
+
 def test_read_artifact_rejects_a_start_past_the_end_instead_of_returning_nothing(tmp_path):
     _big_file(tmp_path)
     agent = build_agent(

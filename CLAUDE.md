@@ -210,10 +210,15 @@ cli/ (装配/REPL/进度渲染)
     静默的空结果模型没法解释，只会换个区间再来一次。
     **区间读的输出头必须报 `(lines x-y of N)`**：不报总行数，模型读完一段既不知道文件还有多长、
     也不知道自己读到哪了，只能靠猜下一个区间反复读同一个文件。
-    默认区间（`read_file` 300 行）取的是"渲染完仍低于 `ARTIFACT_THRESHOLD`"的量级——
-    默认值超过那道阈值，一次 read 就必然变成 read + `read_artifact` 两步。
+    **模型没显式给 `end`（用默认区间）时，`read_file`/`read_artifact` 按字符预算自适应收窄**
+    （`builtins/files.py::_render_line_range`），保证渲染结果稳稳低于 `ARTIFACT_THRESHOLD`、不走通用卸载，
+    头部如实报 `more available; continue with read_file(start=…)`。这是因为按"行数"标定的默认值
+    （300 行）对密排中文文档会撞破字符阈值——300 行中文约 3 万字符，是阈值的两倍，一次默认读
+    必然变成 read + `read_artifact` 两步。**显式给了 `end` 的大区间不收窄**，超阈值照旧卸载成 artifact
+    （那是模型自己要的整块，contract 测试 `test_explicit_large_range_still_offloads` 守着）。
     handler 里**不许**再写一份 `args.get("end", ...)` 字面量，默认值只从 `ToolSpec`
-    经 `apply_defaults()` 取（schema 广告 800、handler 实际用 200 的漂移已经发生过一次）。
+    经 `apply_defaults()` 取（`registry.py` 的参数校验也走 `apply_defaults`，不自带默认值；
+    schema 广告 800、handler 实际用 200 的漂移已经发生过一次）。
 12. **副作用要有账**：risky 工具执行前后各落一条 `action_intent` / `action_receipt`（`runs/ledger.py`）。
     恢复时"有 intent 无 receipt"的动作，非幂等工具（`run_shell`）**一律不自动重放**——宁可多问一次。
     同一次执行还会把旧内容存进 `.moss/runs/<id>/undo/<action_id>/` 供 `/rewind` 用，

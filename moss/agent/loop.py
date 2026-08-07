@@ -32,6 +32,26 @@ CONVERGE_RATIO = 0.8
 CONVERGE_MIN_STEPS = 12
 
 
+def _result_preview(name, content):
+    """把工具结果压成一行进度预览。
+
+    多数工具的结果头一行正好是最想瞄一眼的东西（read_file 的 `# path (lines…)`、
+    search_text 的第一条匹配）。但 list_files 的头一行只是**第一个条目**——一个目录
+    列了十几项，只显示 `[D] docs/decisions` 会被读成"只找到这一个"。所以目录列表
+    给条数摘要，其余退回头一非空行。
+    """
+    text = str(content)
+    if name == "list_files":
+        stripped = text.strip()
+        if not stripped or stripped == "(empty)":
+            return "(empty)"
+        dirs = sum(1 for line in text.splitlines() if line.startswith("[D]"))
+        files = sum(1 for line in text.splitlines() if line.startswith("[F]"))
+        return f"{dirs + files} entries ({dirs} dirs, {files} files)"
+    first_line = next((line for line in text.splitlines() if line.strip()), "")
+    return first_line[:160]
+
+
 def _record_instruction_notices(agent, task_state):
     """把就近指令文档作为 runtime notice 追加进 history，并落 trace。
 
@@ -573,7 +593,6 @@ class AgentLoop:
             agent.record_tool_outcome(action.name, action.args, metadata)
             # 进度渲染要能看见工具"干了什么"，不只有失败才吭声：exit code、
             # 改了几个文件、结果头一行。preview 过脱敏——它要打到用户终端上。
-            first_line = next((line for line in str(content).splitlines() if line.strip()), "")
             agent.emit_progress(
                 "tool_result",
                 {
@@ -582,7 +601,7 @@ class AgentLoop:
                     "duration_ms": duration_ms,
                     "exit_code": metadata.get("exit_code"),
                     "diff_summary": list(metadata.get("diff_summary") or []),
-                    "preview": agent.redact_text(first_line[:160]),
+                    "preview": agent.redact_text(_result_preview(action.name, content)),
                 },
             )
             entry = {

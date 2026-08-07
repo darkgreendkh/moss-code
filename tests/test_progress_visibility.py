@@ -1,6 +1,7 @@
 """过程可见性：成功的工具也向进度渲染器交代它看见/改动了什么。"""
 
 from moss import FakeModelClient, Moss, SessionStore, WorkspaceContext
+from moss.agent.loop import _result_preview
 from moss.cli.repl import format_tool_result
 
 
@@ -73,3 +74,12 @@ def test_tool_result_events_carry_visible_detail(tmp_path):
     assert "+1 new" in format_tool_result(write_result) or "~1 changed" in format_tool_result(write_result)
     # 读文件带上了结果头一行（含总行数）。
     assert "of 1" in read_result["preview"]
+
+
+def test_list_files_preview_is_a_count_not_the_first_entry():
+    # 回归：list_files 的头一行只是第一个条目，`[D] docs/decisions` 会被读成
+    # "只找到这一个"。目录列表给条数摘要，其余工具仍取头一非空行。
+    listing = "[D] docs/decisions\n[D] docs/features\n[F] README.md"
+    assert _result_preview("list_files", listing) == "3 entries (2 dirs, 1 files)"
+    assert _result_preview("list_files", "(empty)") == "(empty)"
+    assert _result_preview("read_file", "# a.py (lines 1-3 of 3)\n   1: x").startswith("# a.py")

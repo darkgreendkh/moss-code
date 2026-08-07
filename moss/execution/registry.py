@@ -40,6 +40,7 @@ from .specs import (
     ToolRunOutput,
     ToolSpec,
     _tool_spec,
+    apply_defaults,
     legal_tool_names,
     tool_example,
     tool_spec,
@@ -208,9 +209,10 @@ def validate_tool(context, name, args):
         path = context.path(args["path"])
         if not path.is_file():
             raise ValueError("path is not a file")
-        start = int(args.get("start", 1))
-        end = int(args.get("end", 200))
-        if start < 1 or end < start:
+        # 默认值只从 ToolSpec 取（apply_defaults），不在这里再写一份字面量——两份默认值
+        # 是两个事实源，历史上它们漂成过 200 vs 300（不变量 #11）。
+        resolved = apply_defaults("read_file", args)
+        if int(resolved["start"]) < 1 or int(resolved["end"]) < int(resolved["start"]):
             raise ValueError("invalid line range")
         return
 
@@ -218,9 +220,8 @@ def validate_tool(context, name, args):
         path = context.run_path(args["path"])
         if not path.is_file():
             raise ValueError("path is not an artifact file")
-        start = int(args.get("start", 1))
-        end = int(args.get("end", 200))
-        if start < 1 or end < start:
+        resolved = apply_defaults("read_artifact", args)
+        if int(resolved["start"]) < 1 or int(resolved["end"]) < int(resolved["start"]):
             raise ValueError("invalid line range")
         return
 

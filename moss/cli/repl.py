@@ -362,7 +362,7 @@ def make_progress_printer(stream):
     工具循环跑完。这个渲染器让每一步（在想什么、调了哪个工具、结果如何）
     都实时可见。它只写 stderr，所以 stdout 里仍然只有最终答案，方便管道使用。
     """
-    state = {"pending": False}
+    state = {"pending": False, "last": None}
 
     def clear():
         if state["pending"]:
@@ -383,14 +383,20 @@ def make_progress_printer(stream):
             state["pending"] = True
         elif event == "tool":
             clear()
+            # 一个 batch 是"先列全部调用、再列全部结果"。上一条打印的是某个结果、这条
+            # 又是一次调用，说明新的一批开始了——空一行把两批隔开，否则几批会糊成一坨。
+            if state["last"] == "tool_result":
+                stream.write("\n")
             stream.write(_format_tool_line(payload.get("name", ""), payload.get("args")) + "\n")
             stream.flush()
+            state["last"] = "tool"
         elif event == "tool_result":
             line = format_tool_result(payload)
             if line:
                 clear()
                 stream.write(line + "\n")
                 stream.flush()
+                state["last"] = "tool_result"
         elif event == "error":
             # 收敛成"失败但已收尾"的运行时，stdout 上只有一句最终答案；
             # 具体原因（模型后端报错、prompt 装不下）要在 stderr 上说清楚。

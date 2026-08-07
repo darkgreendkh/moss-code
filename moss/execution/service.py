@@ -476,16 +476,33 @@ class ExecutionService:
         """
         self = self.agent
         lines = []
-        if self.injection_suspected and self.injection_findings:
-            # 说清"为什么可疑"：命中的模式名。盲批 vs 知情批的区别就在这一行。
-            pattern = str(getattr(self.injection_findings[-1], "pattern", "") or "").replace("_", " ")
+        injection = self.injection_suspected and self.injection_findings
+        if injection:
+            # 说清"为什么可疑"：命中的模式名 + 原文 + 来源。只给模式名的话，用户没法
+            # 判断这是"读到了自己项目文档里的示例字符串"这种误报，还是真有一段外部
+            # 文本在指挥 agent——两者的正确处置完全相反。
+            finding = self.injection_findings[-1]
+            pattern = str(getattr(finding, "pattern", "") or "").replace("_", " ")
             reason = f" (matched: {pattern})" if pattern else ""
             lines.append(f"! prompt-injection suspected in earlier tool output{reason} — review before approving")
+            source = str(getattr(finding, "source", "") or "").strip()
+            if source:
+                lines.append(f"    source: {source}")
+            excerpt = str(getattr(finding, "excerpt", "") or "").strip()
+            if excerpt:
+                # excerpt 是不可信原文，打到终端前必须脱敏。
+                lines.append(f"    matched text: {self.redact_text(excerpt)}")
         lines.append(f"approve {name}?")
         detail = approval_summary(self, name, args)
         for detail_line in detail.split("\n"):
             lines.append(f"    {detail_line}" if detail_line else "")
-        lines.append("[y = once · a = always · d = never · N = no] ")
+        if injection:
+            # 注入嫌疑下的审批是针对"这次可疑输出"的一次性判断，不提供 always/never：
+            # 把一个临时安全信号变成对整个工具类的持久决定，只会误伤（用户看着"疑似
+            # 注入"按下的 never 会把这类命令在本会话里永久禁掉）。
+            lines.append("[y = once · N = no] ")
+        else:
+            lines.append("[y = once · a = always · d = never · N = no] ")
         return "\n".join(lines)
 
     def remembered_approvals(self):
@@ -502,17 +519,25 @@ class ExecutionService:
 
     def _ask_for_approval(self, name, args):
         self = self.agent
+        # 注入嫌疑期间：既不读也不写审批记忆，每次都重新问。理由是这时的批准/拒绝是
+        # 针对"这次可疑输出"的一次性判断，不是对整个工具类的持久决定——若读记忆，之前
+        # 记过的 always 会让可疑动作直接跳过审批（等于注入警戒形同虚设）；若写记忆，
+        # 用户被"疑似注入"吓到按下的 never 会把这类命令在本会话里永久禁掉。两个方向都错。
+        injection = self.injection_suspected
         approval_class = self.approval_class(name, args)
-        remembered = self._approval_memory.get(approval_class)
-        if remembered is not None:
-            return remembered
+        if not injection:
+            remembered = self._approval_memory.get(approval_class)
+            if remembered is not None:
+                return remembered
         question = self._approval_prompt(name, args)
         answer = self._read_approval_answer(question)
         if answer in {"a", "always"}:
-            self._approval_memory[approval_class] = True
+            if not injection:
+                self._approval_memory[approval_class] = True
             return True
         if answer in {"d", "never"}:
-            self._approval_memory[approval_class] = False
+            if not injection:
+                self._approval_memory[approval_class] = False
             return False
         return answer in {"y", "yes"}
 
