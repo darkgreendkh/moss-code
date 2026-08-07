@@ -344,8 +344,15 @@ def format_tool_result(payload):
     if status != "ok":
         parts.append(f"({status})")
     if not parts:
+        # 纯无副作用、无输出的工具（update_plan 等）不强行占一行。
         return ""
-    return "      → " + "  ".join(parts)
+    # 结果行标上工具名：一个 batch 是"先列全部调用、再列全部结果"（并发执行的必然
+    # 顺序），结果和它的调用并不相邻。不标名时 `→ # CLAUDE.md (lines…)` 恰好紧贴在
+    # `> list_files docs` 下面，会被读成"list_files 打印了行号范围"——其实那是上面
+    # read_file 的结果。标上工具名就能一眼把每条结果归回它的调用。
+    name = str(payload.get("name", ""))
+    body = "  ".join(parts)
+    return f"      → {name}  {body}" if name else f"      → {body}"
 
 
 def make_progress_printer(stream):

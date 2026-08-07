@@ -18,7 +18,8 @@ def build_agent(tmp_path, outputs):
 
 
 def test_format_tool_result_shapes():
-    assert format_tool_result({"name": "run_shell", "status": "ok", "exit_code": 0}) == "      → exit 0"
+    # 结果行带上工具名，方便和上面的调用行归位。
+    assert format_tool_result({"name": "run_shell", "status": "ok", "exit_code": 0}) == "      → run_shell  exit 0"
     assert "(error)" in format_tool_result({"name": "run_shell", "status": "error", "exit_code": 1})
     assert "+1 new" in format_tool_result(
         {"name": "write_file", "status": "ok", "diff_summary": ["created:a.py"]}
@@ -32,6 +33,22 @@ def test_format_tool_result_shapes():
     )
     # 纯无副作用、无输出的工具不强行占一行。
     assert format_tool_result({"name": "update_plan", "status": "ok"}) == ""
+
+
+def test_result_lines_name_their_tool_so_grouped_batches_dont_confuse():
+    # 回归：一个 batch 里 read_file 的结果和 list_files 的结果被分组打在一起时，
+    # 每条结果都必须标明是哪个工具产出的——否则 `# CLAUDE.md (lines…)` 会被误读成
+    # list_files 打印了行号范围。list_files 自己从不带行号范围。
+    read_line = format_tool_result(
+        {"name": "read_file", "status": "ok", "preview": "# CLAUDE.md (lines 1-298 of 298)"}
+    )
+    list_line = format_tool_result(
+        {"name": "list_files", "status": "ok", "preview": "[D] docs/decisions"}
+    )
+    assert read_line.startswith("      → read_file  ")
+    assert "lines 1-298 of 298" in read_line
+    assert list_line.startswith("      → list_files  ")
+    assert "lines" not in list_line  # 列目录不带行号范围
 
 
 def test_tool_result_events_carry_visible_detail(tmp_path):
