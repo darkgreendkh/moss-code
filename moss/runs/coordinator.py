@@ -269,3 +269,26 @@ class RunCoordinator:
             event_callback=self.record_memory_event,
         )
         self.session_store.save(self.session)
+
+    def resume(self, session_id):
+        """把某个已保存会话的历史 + 记忆 + checkpoint 恢复进当前 agent（REPL /resume 用）。
+
+        为什么就地改 self.session 而不是换一个新 dict：其它子系统（context/run
+        coordinator 等）持有的是同一个 session dict 的引用，reset() 也是这么就地
+        改的——换对象会让那些引用指向旧数据。刻意不重放有副作用的动作：交互式
+        便捷恢复宁可保守，要重放走启动期的 --resume。未知 id 由 store.load 抛
+        FileNotFoundError，向上透出让调用方给用户一句人话。
+        """
+        self = self.agent
+        loaded = self.session_store.load(session_id)
+        self.session.clear()
+        self.session.update(loaded)
+        self._ensure_session_shape()
+        self.memory = memorylib.LayeredMemory(
+            self.session["memory"],
+            workspace_root=self.root,
+            session_id=self.session["id"],
+            event_callback=self.record_memory_event,
+        )
+        self.session_path = self.session_store.save(self.session)
+        return self.session["id"]

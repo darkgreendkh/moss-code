@@ -259,13 +259,23 @@ class SessionStore:
         legacy.replace(Path(str(legacy) + LEGACY_BACKUP_SUFFIX))
         return True
 
-    def latest(self):
-        """按 mtime 最新的一个会话 id。v1 与 v2 布局同时识别。"""
+    def _candidates(self):
+        """(mtime, session_id) 全集。v1 与 v2 布局同时识别。"""
         candidates = []
         for meta in self.root.glob(f"*/{META_FILENAME}"):
             candidates.append((meta.stat().st_mtime, meta.parent.name))
         for legacy in self.root.glob("*.json"):
             candidates.append((legacy.stat().st_mtime, legacy.stem))
+        return candidates
+
+    def latest(self):
+        """按 mtime 最新的一个会话 id。v1 与 v2 布局同时识别。"""
+        candidates = self._candidates()
         if not candidates:
             return None
         return max(candidates)[1]
+
+    def list_recent(self, limit=10):
+        """最近 limit 个会话，按 mtime 倒序返回 (mtime, session_id)。供 /sessions 用。"""
+        candidates = sorted(self._candidates(), reverse=True)
+        return candidates[:limit] if limit else candidates

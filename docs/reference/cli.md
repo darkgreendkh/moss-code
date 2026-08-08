@@ -159,13 +159,15 @@ server 侧走 `Moss.execute(ActionRequest)` 这个唯一入口——
 | 命令 | 作用 |
 | --- | --- |
 | `/help` | 帮助（含 one-shot / 审批用法示例） |
-| `/config` | 显示当前生效的运行时设置（model / provider / approval / verify / …） |
+| `/config` | 显示当前生效的运行时设置（model / provider / approval / verify / sandbox / network / injection / budget / …） |
 | `/approval [ask\|auto\|never]` | 查看或**会话内切换**审批策略，立即对下一轮生效 |
 | `/verify [on\|off]` | 查看或切换收尾前的验证自检 |
 | `/model [name]` | 查看或切换本会话使用的模型（只改 `model_client.model`，不重建连接） |
-| `/approvals [clear]` | 查看本会话记住的"总是允许/拒绝"决定；`clear` 全部清空 |
+| `/approvals [clear]` | 查看记住的"总是允许/拒绝"决定；`clear` 同时清内存与磁盘 |
 | `/memory` | 显示蒸馏出来的 working memory |
 | `/session` | 显示当前会话目录路径 |
+| `/sessions` | 列出本工作区最近保存过的会话（当前会话标 `*`） |
+| `/resume <id>\|latest` | 把某个会话的历史 + 记忆恢复进当前 agent（不重放有副作用的动作） |
 | `/reload` | 从磁盘重新加载工具与技能 |
 | `/rewind [n]` | 回退最近 n 个改文件的步骤（**文件 + history + memory 一起**） |
 | `/rewind!` | 强制回退，越过"用户自己动过这些文件"的保护 |
@@ -173,8 +175,13 @@ server 侧走 `Moss.execute(ActionRequest)` 这个唯一入口——
 | `/exit` | 退出 |
 
 `/approval`、`/verify`、`/model` 改的都是主循环每轮实时读取的字段，所以就地改就能
-立刻生效，不必退出重启丢掉会话上下文。`/approvals` 对应的"总是允许/拒绝"只存在内存，
-会话结束即失效。
+立刻生效，不必退出重启丢掉会话上下文。`/approvals` 对应的"总是允许/拒绝"低风险
+读类会跨会话持久化（见 [tool-safety.md](../features/tool-safety.md)），`clear` 一并清掉磁盘。
+
+打错的斜杠命令（`/foo`）不会被当任务发给模型，而是提示"未知命令"——省掉一次
+误触发的真实调用。输入支持多行：行尾 `\` 续行，或单独一行 `"""` 开块、再一行 `"""`
+收口。REPL 输入历史跨会话保存在 `<workspace>/.moss/repl_history`（上箭头可调回），
+`Tab` 补全斜杠命令。
 
 `Ctrl-C` 取消当前任务并回到提示符（`KeyboardInterrupt` 继承 `BaseException`，
 不会被错误处理吞掉；run 工件仍然完整落盘）。

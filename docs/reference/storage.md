@@ -41,7 +41,9 @@
 ├── skills/*.md                      技能
 ├── hooks/<point>                    用户钩子（需可执行位）
 ├── prompts/system.md                覆盖内置 p1 system head
-└── config.json                      结构化配置
+├── config.json                      结构化配置
+├── approvals.json                   跨会话审批记忆（只存低风险读类 allow + 所有 deny）
+└── repl_history                     REPL 输入历史（上箭头 / Tab 补全用）
 
 ~/.moss/memory/                      全局 durable 记忆（同上结构）
 <workspace>/.env                     本地密钥（仓库只保留 .env.example）

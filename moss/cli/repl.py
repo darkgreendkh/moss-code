@@ -1,8 +1,12 @@
 """Terminal rendering and input helpers for the interactive CLI."""
 
+import atexit
 import locale
+import os
 import shutil
 import textwrap
+import threading
+import time
 
 from ..context.token_budget import middle
 
@@ -23,6 +27,26 @@ WELCOME_STATUS = "small loop, real tools"
 
 WELCOME_HINT = "/help for commands   ·   ctrl-c cancels the current task"
 
+# REPL 里可用的斜杠命令。两处共用它：Tab 补全从这里取候选，未知命令的兜底也
+# 靠它判断"这确实是想敲个命令、只是打错了"，而不是把 /foo 当任务发给模型白花钱。
+REPL_COMMANDS = (
+    "/help",
+    "/config",
+    "/approval",
+    "/verify",
+    "/model",
+    "/approvals",
+    "/memory",
+    "/session",
+    "/sessions",
+    "/resume",
+    "/reload",
+    "/rewind",
+    "/reset",
+    "/exit",
+    "/quit",
+)
+
 HELP_DETAILS = textwrap.dedent(
     """\
     Commands:
@@ -34,6 +58,8 @@ HELP_DETAILS = textwrap.dedent(
     /approvals Show remembered approve/deny decisions; /approvals clear resets them.
     /memory    Show the agent's distilled working memory.
     /session   Show the path to the saved session directory.
+    /sessions  List recent saved sessions in this workspace.
+    /resume    Restore a saved session's history + memory: /resume <id>|latest.
     /reload    Reload tools and skills from disk.
     /rewind    Undo the last N file-changing steps (files + history + memory).
                /rewind 2 undoes two steps; /rewind! forces past your own edits.
@@ -47,6 +73,10 @@ HELP_DETAILS = textwrap.dedent(
 
     During a task: each step (thinking / tool / result) streams to stderr;
     the final answer goes to stdout. Press Ctrl-C to cancel and return to the prompt.
+
+    Multi-line input: end a line with \\ to continue on the next line, or type
+    a lone \"\"\" to open a block and another \"\"\" to close it. Up-arrow recalls
+    earlier prompts; Tab completes slash commands.
     """
 ).strip()
 
@@ -152,8 +182,40 @@ def render_approvals(agent, argument=""):
     return "\n".join(lines)
 
 
+def _render_sandbox(agent):
+    plan = getattr(agent, "sandbox_plan", None)
+    mode = getattr(plan, "mode", "?")
+    return f"{mode} (degraded)" if getattr(plan, "degraded", False) else str(mode)
+
+
+def _render_network(agent):
+    hosts = getattr(agent, "allowed_network_hosts", ()) or ()
+    return ", ".join(hosts) if hosts else "unrestricted"
+
+
+def _render_budget(agent):
+    limits = getattr(agent, "run_budget_limits", None) or {}
+    labels = (
+        ("max_usd", "$", ""),
+        ("max_wall_clock_s", "", "s"),
+        ("max_input_tokens", "", " in-tok"),
+        ("max_output_tokens", "", " out-tok"),
+    )
+    parts = [
+        f"{prefix}{limits[key]}{suffix}"
+        for key, prefix, suffix in labels
+        if limits.get(key) is not None
+    ]
+    return " · ".join(parts) if parts else "none"
+
+
 def render_config(agent):
-    """/config：把当前生效的运行时设置列出来，省得靠记忆猜。"""
+    """/config：把当前生效的运行时设置列出来，省得靠记忆猜。
+
+    除了 model/approval 这些高频项，安全姿态（沙箱层、网络白名单、注入扫描、
+    预算上限）同样该一眼可见——会动用户代码的 agent，"现在锁得多紧"是启动时
+    定死、之后最容易忘的一组开关，翻 trace 反查比直接列出来贵得多。
+    """
     client = getattr(agent, "model_client", None)
     workspace = getattr(agent, "workspace", None)
     rows = [
@@ -162,6 +224,10 @@ def render_config(agent):
         ("approval", agent.approval_policy),
         ("verify", "on" if getattr(agent, "verify_before_final", True) else "off"),
         ("max_steps", getattr(agent, "max_steps", "?")),
+        ("sandbox", _render_sandbox(agent)),
+        ("network", _render_network(agent)),
+        ("injection", "on" if getattr(agent, "injection_scan", True) else "off"),
+        ("budget", _render_budget(agent)),
         ("workspace", getattr(workspace, "cwd", "?")),
         ("branch", getattr(workspace, "branch", "?")),
         ("session", agent.session.get("id", "?") if getattr(agent, "session", None) else "?"),
@@ -216,6 +282,145 @@ def enable_line_editing():
         import readline  # noqa: F401  仅为副作用导入：让 input() 走行编辑器
     except ImportError:
         pass
+
+
+def _repl_completer(commands):
+    """只补全斜杠命令：行首是 `/` 且还没打到空格时，从命令表里挑前缀匹配的。
+
+    刻意不接管文件名补全——一旦设了自定义 completer 就会顶掉 readline 自带的
+    路径补全，重新实现一份纯属给"便宜轻量"添依赖。命令补全是最高频的诉求，
+    非命令输入直接返回 None，把补全让回给什么都不做（安全、零惊吓）。
+    """
+    import readline
+
+    def complete(text, state):
+        buffer = readline.get_line_buffer()
+        if not buffer.lstrip().startswith("/") or " " in buffer.strip():
+            return None
+        matches = [command + " " for command in commands if command.startswith(text)]
+        return matches[state] if state < len(matches) else None
+
+    return complete
+
+
+def configure_readline(agent):
+    """给 REPL 挂上跨会话历史 + 斜杠命令 Tab 补全。全程静默降级。
+
+    为什么存在：`enable_line_editing` 只是把 readline 导进来吃行编辑的副作用，
+    上箭头调不出上次会话敲过的 prompt、Tab 也不补命令——REPL 最基本的肌肉记忆
+    全缺。历史落在 `<workspace>/.moss/repl_history`（本就 gitignored），退出时写回。
+    macOS 默认的是 libedit 而非 GNU readline，两者的 Tab 绑定语法不同，分别处理。
+    """
+    try:
+        import readline
+    except ImportError:
+        return
+    history_path = os.path.join(str(agent.root), ".moss", "repl_history")
+    try:
+        os.makedirs(os.path.dirname(history_path), exist_ok=True)
+    except OSError:
+        pass
+    try:
+        readline.read_history_file(history_path)
+    except (OSError, ValueError):
+        # 文件不存在（首次运行）或格式坏掉都不该拦住启动。
+        pass
+    try:
+        readline.set_history_length(1000)
+    except (OSError, ValueError, AttributeError):
+        pass
+    atexit.register(_save_history, history_path)
+    try:
+        # 让 `/` 留在补全 token 里（默认 delims 含 `/`，会把 `/help` 从斜杠处切开）。
+        readline.set_completer_delims(" \t\n")
+        readline.set_completer(_repl_completer(REPL_COMMANDS))
+        if "libedit" in (getattr(readline, "__doc__", "") or ""):
+            readline.parse_and_bind("bind ^I rl_complete")
+        else:
+            readline.parse_and_bind("tab: complete")
+    except Exception:
+        # 补全是锦上添花，任何后端差异都不该影响能不能用 REPL。
+        pass
+
+
+def _save_history(history_path):
+    try:
+        import readline
+
+        readline.write_history_file(history_path)
+    except (ImportError, OSError, ValueError):
+        pass
+
+
+def read_user_input(prompt, scrub):
+    """读一条用户输入，支持两种多行写法。返回拼好的整块文本。
+
+    为什么存在：单行 input() 让"粘一段报错栈/写一小段代码作为任务"很别扭。
+    两种续行都刻意保持 stdlib、零状态：行尾 `\\` 续到下一行；或单独一行 `\"\"\"`
+    开块、再一行 `\"\"\"` 收口。EOF / 中断照旧向上抛，交给主循环统一处理。
+    """
+    line = scrub(input(prompt))
+    if line.strip() == '"""':
+        collected = []
+        while True:
+            part = scrub(input("..... "))
+            if part.strip() == '"""':
+                break
+            collected.append(part)
+        return "\n".join(collected)
+    # 行尾单个反斜杠 = 续行；把它去掉再接下一行，直到某行不以反斜杠结尾。
+    while line.rstrip().endswith("\\"):
+        line = line.rstrip()[:-1]
+        line = line + "\n" + scrub(input("..... "))
+    return line
+
+
+def render_sessions(agent, limit=10):
+    """/sessions：列出本工作区最近保存过的会话，供 /resume 挑一个接着干。
+
+    为什么存在：过去要恢复只能靠启动参数 `--resume <id>` 或另一个子命令，
+    交互中想"接着昨天那个任务"得先退出。这里只读、按 mtime 倒序，当前会话
+    标个 `*`，让恢复不必离开 REPL。
+    """
+    store = getattr(agent, "session_store", None)
+    if store is None:
+        return "no session store"
+    recent = store.list_recent(limit)
+    if not recent:
+        return "no saved sessions in this workspace"
+    current = agent.session.get("id") if getattr(agent, "session", None) else None
+    lines = ["recent sessions (newest first):"]
+    for mtime, session_id in recent:
+        marker = "*" if session_id == current else " "
+        stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
+        lines.append(f"  {marker} {session_id}   {stamp}")
+    lines.append("  (/resume <id>|latest restores history + memory)")
+    return "\n".join(lines)
+
+
+def apply_resume(agent, argument):
+    """/resume <id>|latest：把某个会话的历史 + 记忆恢复进当前 agent。
+
+    只恢复历史与记忆（等价于 --resume 的默认部分），刻意**不重放有副作用的
+    动作**——交互式便捷恢复宁可保守。未知 id 如实报错，不静默吞。
+    """
+    argument = (argument or "").strip()
+    if not argument:
+        return "usage: /resume <id>|latest"
+    store = getattr(agent, "session_store", None)
+    if store is None:
+        return "no session store"
+    if argument == "latest":
+        argument = store.latest()
+        if not argument:
+            return "no saved sessions to resume"
+    try:
+        resumed = agent.resume(argument)
+    except FileNotFoundError:
+        return f"no such session: {argument}"
+    except Exception as exc:
+        return f"could not resume {argument}: {exc}"
+    return f"resumed session {resumed}"
 
 
 def _scrub_undecodable(text):
@@ -361,10 +566,33 @@ def make_progress_printer(stream):
     交互式 coding agent 最劝退的一点，就是敲完请求后要盯着空屏幕等一整个
     工具循环跑完。这个渲染器让每一步（在想什么、调了哪个工具、结果如何）
     都实时可见。它只写 stderr，所以 stdout 里仍然只有最终答案，方便管道使用。
+
+    "thinking" 那一步会阻塞在模型调用上，慢模型（本地 ollama、首个大请求）
+    可能几十秒没动静，用户分不清"在跑"还是"卡死"。所以起一个后台守护线程，
+    每秒把 spinner 重绘成带耗时的 `... thinking (3/25 · 18s)`——耗时只在这段
+    阻塞窗口里跳，正是焦虑发生的地方。线程的写入全部 try/except 包住，绝不
+    影响控制流；下一个事件到来时主线程先停表再落笔，两边不会同时写 stderr。
     """
     state = {"pending": False, "last": None}
+    ticker = {"thread": None, "stop": None}
+
+    def _stop_ticker():
+        thread = ticker["thread"]
+        if thread is not None:
+            ticker["stop"].set()
+            thread.join(timeout=0.5)
+            ticker["thread"] = None
+
+    def _paint_thinking(step, max_steps, started):
+        elapsed = int(time.monotonic() - started)
+        try:
+            stream.write(f"\r  ... thinking ({step}/{max_steps} · {elapsed}s)")
+            stream.flush()
+        except Exception:
+            pass
 
     def clear():
+        _stop_ticker()
         if state["pending"]:
             try:
                 stream.write("\r" + " " * 72 + "\r")
@@ -378,9 +606,19 @@ def make_progress_printer(stream):
             clear()
             step = payload.get("step")
             max_steps = payload.get("max_steps")
-            stream.write(f"\r  ... thinking ({step}/{max_steps})")
-            stream.flush()
+            started = time.monotonic()
+            _paint_thinking(step, max_steps, started)
             state["pending"] = True
+            stop = threading.Event()
+
+            def _tick():
+                while not stop.wait(1.0):
+                    _paint_thinking(step, max_steps, started)
+
+            thread = threading.Thread(target=_tick, daemon=True)
+            ticker["stop"] = stop
+            ticker["thread"] = thread
+            thread.start()
         elif event == "tool":
             clear()
             # 一个 batch 是"先列全部调用、再列全部结果"。上一条打印的是某个结果、这条

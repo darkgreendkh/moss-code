@@ -1,9 +1,11 @@
 """Tool execution, approval, planning and artifact operations."""
 
+import json
 import os
 import sys
 from pathlib import Path
 
+from moss import atomic_io
 from moss.agent import budget as budgetlib
 from moss.agent import stall as stalllib
 from moss.agent.verification import is_verification_command
@@ -54,6 +56,72 @@ DEFAULT_FEATURE_FLAGS = {
     "context_reduction": True,
     "prompt_cache": True,
 }
+
+# 跨会话持久化的审批记忆落在这里（.moss/ 本就 gitignored）。
+APPROVALS_FILENAME = "approvals.json"
+# 允许类决定只在"低风险读类"上跨会话记住：run_shell 的 read_only/test 档，
+# 以及非 risky 工具（archival 意义不大，但无害）。写/网络/高危一律不持久——
+# 把 "always allow git status" 记住是便利，把 "always allow rm -rf" 记住是灾难。
+_PERSISTABLE_ALLOW_RISKS = frozenset({"read_only", "test", "low"})
+
+
+def _approvals_path(root):
+    return Path(root) / ".moss" / APPROVALS_FILENAME
+
+
+def _approval_persistable(approval_class, allowed):
+    """能不能把这条决定写进磁盘。拒绝(deny)一律可持久（保守，永远是收紧）；
+    允许(allow)只有低风险读类才行。"""
+    _name, risk, _bucket = approval_class
+    if not allowed:
+        return True
+    return risk in _PERSISTABLE_ALLOW_RISKS
+
+
+def load_persisted_approvals(root):
+    """从磁盘读回跨会话的审批决定。文件缺失/损坏/被篡改都退回空表——
+    读不出的持久许可绝不能变成"默默放行"。加载时**重新按风险校验**一遍，
+    防止有人手改文件把一条高危 allow 塞进来。"""
+    memory = {}
+    try:
+        data = json.loads(_approvals_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return memory
+    for entry in (data or {}).get("decisions", []):
+        try:
+            key = (str(entry["name"]), str(entry["risk"]), str(entry.get("bucket", "")))
+            allowed = bool(entry["allowed"])
+        except (KeyError, TypeError):
+            continue
+        if _approval_persistable(key, allowed):
+            memory[key] = allowed
+    return memory
+
+
+def save_persisted_approvals(root, memory):
+    """把当前会话里够格持久化的决定原子写回磁盘。写失败静默——审批记忆
+    是加速项，落不了盘顶多下次再问一遍，绝不能因此拦住工具执行。"""
+    decisions = [
+        {"name": name, "risk": risk, "bucket": bucket, "allowed": allowed}
+        for (name, risk, bucket), allowed in memory.items()
+        if _approval_persistable((name, risk, bucket), allowed)
+    ]
+    path = _approvals_path(root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_io.write_atomic(
+            str(path), json.dumps({"decisions": decisions}, ensure_ascii=False, indent=2)
+        )
+    except OSError:
+        pass
+
+
+def clear_persisted_approvals(root):
+    """删掉持久化文件（/approvals clear 的一部分）。"""
+    try:
+        _approvals_path(root).unlink()
+    except OSError:
+        pass
 
 
 class ExecutionService:
@@ -511,10 +579,15 @@ class ExecutionService:
         return dict(self._approval_memory)
 
     def clear_approval_memory(self):
-        """清空记住的审批决定，返回清掉的条数。误按了 always 时的后悔药。"""
+        """清空记住的审批决定，返回清掉的条数。误按了 always 时的后悔药。
+
+        持久化文件也一并删掉——否则清完内存，下次启动又从磁盘把它读回来，
+        "后悔药"就失效了。
+        """
         self = self.agent
         count = len(self._approval_memory)
         self._approval_memory.clear()
+        clear_persisted_approvals(self.root)
         return count
 
     def _ask_for_approval(self, name, args):
@@ -534,10 +607,12 @@ class ExecutionService:
         if answer in {"a", "always"}:
             if not injection:
                 self._approval_memory[approval_class] = True
+                save_persisted_approvals(self.root, self._approval_memory)
             return True
         if answer in {"d", "never"}:
             if not injection:
                 self._approval_memory[approval_class] = False
+                save_persisted_approvals(self.root, self._approval_memory)
             return False
         return answer in {"y", "yes"}
 

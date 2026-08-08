@@ -28,7 +28,7 @@ from .execution.safety import policy as policylib
 from .execution.safety import sandbox as sandboxlib
 from .runs.observability import events as trace_events
 from .context.service import ContextService
-from .execution.service import ExecutionService
+from .execution.service import ExecutionService, load_persisted_approvals
 from .extensions.manager import ExtensionManager
 from .runs.coordinator import RunCoordinator
 
@@ -175,9 +175,12 @@ class Moss:
         # 而是历史本身已经装不下了 —— 那是该压缩而不是继续削的信号。
         self.history_reduction_streak = 0
         self.sandbox_plan = sandboxlib.announce(sandboxlib.detect(sandbox))
-        # 审批决定的记忆：{(工具, 风险, 路径桶): 是否允许}。刻意只存在内存里，
-        # 会话结束即失效——落盘的"上次批过"会变成永久后门。
-        self._approval_memory = {}
+        # 审批决定的记忆：{(工具, 风险, 路径桶): 是否允许}。启动时从磁盘读回上次
+        # "总是允许/总是拒绝"过的决定——但只有低风险读类的 allow 才会被持久化
+        # (写/网络/高危永不落盘，见 execution/service.py)，所以这里读回来的不会是
+        # 后门；拒绝(deny)一律持久，因为它永远是收紧。加载时再按风险校验一遍，
+        # 防篡改。/approvals clear 会同时清掉内存与磁盘。
+        self._approval_memory = load_persisted_approvals(self.root)
         # 能力/路径策略。read_only 也归它管，这样"只读"不再是散落在多处的特判。
         self.policy = (
             policy
@@ -782,6 +785,9 @@ class Moss:
 
     def reset(self):
         return self.run_coordinator.reset()
+
+    def resume(self, session_id):
+        return self.run_coordinator.resume(session_id)
 
     def path(self, raw_path):
         return self.execution_service.path(raw_path)

@@ -49,7 +49,7 @@ def build_arg_parser():
     connection.add_argument(
         "--model",
         default=None,
-        help="Model name override. Defaults to qwen3.5:4b for Ollama, MOSS_OPENAI_MODEL for openai, MOSS_ANTHROPIC_MODEL for anthropic, and MOSS_DEEPSEEK_MODEL for deepseek when set.",
+        help="Model name override. Defaults to qwen3:8b for Ollama, MOSS_OPENAI_MODEL for openai, MOSS_ANTHROPIC_MODEL for anthropic, and MOSS_DEEPSEEK_MODEL for deepseek when set.",
     )
     connection.add_argument("--host", default=DEFAULT_OLLAMA_HOST, help="Ollama server URL.")
     connection.add_argument("--base-url", default=None, help="Provider API base URL for deepseek, openai, or anthropic.")

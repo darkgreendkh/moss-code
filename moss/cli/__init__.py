@@ -16,18 +16,23 @@ from .factory import (
 from .parser import build_arg_parser
 from .repl import (
     HELP_DETAILS,
+    REPL_COMMANDS,
     _ctype_codeset,
     _scrub_undecodable,
     apply_approval,
     apply_model,
+    apply_resume,
     apply_verify,
     build_welcome,
+    configure_readline,
     enable_line_editing,
     make_progress_printer,
+    read_user_input,
     render_approvals,
     render_config,
     render_missing_key_hint,
     render_run_summary,
+    render_sessions,
 )
 
 
@@ -62,7 +67,6 @@ def main(argv=None):
 
     model = getattr(agent.model_client, "model", getattr(args, "model", DEFAULT_OLLAMA_MODEL))
     host = getattr(agent.model_client, "host", getattr(agent.model_client, "base_url", getattr(args, "host", DEFAULT_OLLAMA_HOST)))
-    print(build_welcome(agent, model=model, host=host))
 
     # 装上实时进度渲染器，让工具循环里的每一步都对用户可见。
     progress = make_progress_printer(sys.stderr)
@@ -74,10 +78,12 @@ def main(argv=None):
         print(render_missing_key_hint(_effective_provider(args)), file=sys.stderr)
 
     if args.prompt:
-        # one-shot 模式：只跑一次 ask，不进入 REPL 循环。
+        # one-shot 模式：只跑一次 ask，不进入 REPL 循环。刻意不打欢迎屏——
+        # 它是给交互用户的元信息，one-shot 下既是噪音，又绝不能混进 stdout：
+        # `moss "..." > out.txt` / `| pbcopy` 的产出只应是最终答案（不变量 #2）。
         prompt = " ".join(args.prompt).strip()
         if prompt:
-            print()
+            print(file=sys.stderr)  # 进度前留一行空白；走 stderr 让 stdout 只剩答案
             try:
                 answer = agent.ask(prompt)
             except KeyboardInterrupt:
@@ -98,7 +104,10 @@ def main(argv=None):
                 return 1
         return 0
 
+    # 交互模式才打欢迎屏，且走 stderr —— stdout 只留给可管道的最终答案。
+    print(build_welcome(agent, model=model, host=host), file=sys.stderr)
     enable_line_editing()
+    configure_readline(agent)
 
     while True:
         # 交互模式：每次读取一条用户输入，交给同一个 agent，
@@ -107,7 +116,7 @@ def main(argv=None):
         # prompt 里带 \n 会让它的列计数错位，宽字符重绘就跟着花屏。
         print()
         try:
-            user_input = _scrub_undecodable(input("moss> ")).strip()
+            user_input = read_user_input("moss> ", _scrub_undecodable).strip()
         except (EOFError, KeyboardInterrupt):
             print("")
             return 0
@@ -151,6 +160,12 @@ def main(argv=None):
         if user_input == "/session":
             print(agent.session_path)
             continue
+        if user_input == "/sessions":
+            print(render_sessions(agent))
+            continue
+        if command_word == "/resume":
+            print(apply_resume(agent, command_arg))
+            continue
         if user_input == "/reload":
             result = agent.reload_registry()
             changed = result["added"] + result["removed"] + result["tools_added"] + result["tools_removed"]
@@ -168,6 +183,16 @@ def main(argv=None):
         if user_input == "/reset":
             agent.reset()
             print("session reset")
+            continue
+        # 打错的斜杠命令别当任务发给模型（那是一次真金白银的调用）。只在"看起来
+        # 确实是想敲命令"时拦：命令词里不含 `/`，才不会误伤把绝对路径 `/Users/..`
+        # 当任务输入的情况。已知命令在上面都 continue 掉了，走到这里的必是未知。
+        if "\n" not in user_input and command_word.startswith("/") and "/" not in command_word[1:]:
+            hint = ""
+            near = [c for c in REPL_COMMANDS if c.startswith(command_word)]
+            if near:
+                hint = f"  did you mean {near[0]}?"
+            print(f"unknown command: {command_word}{hint}  (/help lists commands)", file=sys.stderr)
             continue
 
         print()

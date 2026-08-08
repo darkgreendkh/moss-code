@@ -150,6 +150,25 @@ read_only < test < write < network < high < denied
 用户批的是当时那份 diff，不是现在这份内容。
 同一步还会检查目标是否被换成了软链。
 
+### 审批记忆（`a=always` / `d=never`）
+
+审批类是 `(工具, 风险等级, 路径桶)`——shell 额外按 `argv[0]` 归类。粒度太粗
+（只按工具名）会让"允许一次 `git status`"变成"允许所有 shell"；太细（按完整参数）
+则等于没有记忆。
+
+这份记忆**跨会话持久化**到 `<workspace>/.moss/approvals.json`，但落盘的口径刻意保守
+（`execution/service.py::save_persisted_approvals`）：
+
+- **allow 只在低风险读类才持久**：shell 的 `read_only` / `test` 档、以及非 risky 工具。
+  写 / 网络 / 高危的 allow **永不落盘**——把 "always allow `git status`" 记住是便利，
+  把 "always allow `rm -rf`" 记住是灾难。
+- **deny 一律持久**：拒绝永远是收紧，记住它只会更安全。
+- **加载时按风险重新校验一遍**：有人手改文件塞进一条高危 allow，读回时会被丢掉，
+  绝不因为"文件里写了"就默默放行。
+
+`/approvals clear` 同时清内存与磁盘。注入嫌疑期间的审批**不读也不写**这份记忆
+（见 §8）。
+
 ---
 
 ## 7. 沙箱
